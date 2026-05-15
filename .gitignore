@@ -1,0 +1,18 @@
+# Editor runtime directories
+/output/
+/backups/
+/cache/
+/mm9_data/
+/lomm_data/
+
+# Python cache folders
+__pycache__/
+
+# Temporary files created during extraction/serialization
+.tmp_rez_extract.dat
+.tmp_world_serialise.dat
+.mm9w_*
+
+# Catalog files with all objects from MM9 and LoMM
+catalog.json
+catalog_lomm.json

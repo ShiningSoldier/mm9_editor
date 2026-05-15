@@ -1,0 +1,69 @@
+# Example mod for BOOTCAMP — the very first MM9 location.
+#
+# StartPoint1 is at (10144, 552, -2624). We drop the test additions next to it
+# so they're impossible to miss when you spawn into the tutorial.
+#
+# Run with (dev layout — loose extracted WORLDS folder):
+#   cd mm9_patcher
+#   python mm9_patch.py apply examples/bootcamp_add_peasant_and_crate.yaml
+#
+# Or using the REZ archive directly (standard install, no extraction needed):
+#   python mm9_patch.py apply examples/bootcamp_add_peasant_and_crate.yaml
+#   (change target: below to data/WORLDS.REZ::WORLDS/BOOTCAMP.DAT)
+#
+# NOTE: The paths below assume a dev layout where WORLDS/ has been extracted
+# alongside mm9_patcher/. For a standard install adjust target:/from: to use
+# the REZ::entry syntax, e.g.:
+#   target: ../data/WORLDS.REZ::WORLDS/BOOTCAMP.DAT
+
+target: ../mm9_data/WORLDS/BOOTCAMP.DAT
+output: ../mm9_data/WORLDS/BOOTCAMP_modded.DAT
+backup: false
+
+add:
+  # ---------------------------------------------------------------
+  # 1. A second peasant with its own RUDE dialogue.
+  #
+  # NPCs are identified for dialogue by NPCNbr. Setting NPCNbr=0 produces
+  # "Invalid NPC Name!" errors unless a custom .scr handles dialogue.
+  # The clean path: pick an unused NPCNbr and register it in the RUDE
+  # files (use rude_add_npc.py for this — it adds entries to NPCNAME.RUDE
+  # and TOPBLURB.RUDE and creates NPC{N}.RUDE).
+  #
+  # Shipped MM9 uses NPCNbrs up to 436 (plus 997-999 for world milestones).
+  # 437+ is free. NPCNbr is stored as IEEE-754 float bits inside a LongInt
+  # slot, so use the !float_bits YAML tag.
+  # ---------------------------------------------------------------
+  - clone:
+      class: CommonerHuman2MaleA
+      instance: CommonerHuman2MaleA0
+    overrides:
+      Name: TestPeasant1
+      Pos: [10000, 552, -2624]
+      Rotation: [0, 1.5708, 0, 0]
+      ScriptName: ""
+      ScriptParams: ""
+      GreetingSound: ""
+      NPCNbr: !float_bits 437      # registered via rude_add_npc.py
+      NPCProps: 0
+      WanderON: 0
+      MoveToFloor: 1
+      ShouldRepopulate: 0
+      ShouldMiniSave: 0
+
+  # ---------------------------------------------------------------
+  # 2. A wooden crate.
+  # ---------------------------------------------------------------
+  - clone:
+      class: Prop
+      instance: Boat0
+    overrides:
+      Name: TestCrate1
+      Pos: [10300, 552, -2624]
+      Rotation: [0, 0, 0, 0]
+      Filename: "models\\props\\crate.abc"
+      Skin: "skins\\props\\crate.dtx"
+      Solid: 1
+      Gravity: 1
+      MoveToFloor: 1
+      Shadow: 1
