@@ -41,6 +41,7 @@ class DoorSubmodelClone:
     source_pivot: Vec3 = (0.0, 0.0, 0.0)
     target_pivot: Vec3 = (0.0, 0.0, 0.0)
     yaw_radians: float = 0.0
+    scale: Vec3 = (1.0, 1.0, 1.0)
     info_flags_override: Optional[int] = None
 
 
@@ -78,15 +79,23 @@ def _add_vec3(value: object, delta: Vec3, prop_name: str) -> Vec3:
     return (x + dx, y + dy, z + dz)
 
 
-def transform_point(point: object, source_pivot: Vec3, target_pivot: Vec3, yaw_radians: float) -> Vec3:
+def transform_point(
+    point: object,
+    source_pivot: Vec3,
+    target_pivot: Vec3,
+    yaw_radians: float,
+    scale: Vec3 = (1.0, 1.0, 1.0),
+) -> Vec3:
     x, y, z = _as_vec3(point, "point")
     sx, sy, sz = source_pivot
     tx, ty, tz = target_pivot
-    dx = x - sx
-    dz = z - sz
+    scx, scy, scz = _as_vec3(scale, "scale")
+    dx = (x - sx) * scx
+    dy = (y - sy) * scy
+    dz = (z - sz) * scz
     c = math.cos(float(yaw_radians))
     s = math.sin(float(yaw_radians))
-    return (tx + dx * c + dz * s, ty + (y - sy), tz - dx * s + dz * c)
+    return (tx + dx * c + dz * s, ty + dy, tz - dx * s + dz * c)
 
 
 def rotate_vector_y(vector: object, yaw_radians: float) -> Vec3:
@@ -96,9 +105,33 @@ def rotate_vector_y(vector: object, yaw_radians: float) -> Vec3:
     return (x * c + z * s, y, -x * s + z * c)
 
 
-def transform_bounds(min_box: Vec3, max_box: Vec3, source_pivot: Vec3, target_pivot: Vec3, yaw_radians: float) -> Tuple[Vec3, Vec3]:
+def transform_projection_vector(vector: object, yaw_radians: float, scale: Vec3 = (1.0, 1.0, 1.0)) -> Vec3:
+    x, y, z = _as_vec3(vector, "vector")
+    sx, sy, sz = _as_vec3(scale, "scale")
+    sx = sx if abs(sx) > 1.0e-6 else 1.0
+    sy = sy if abs(sy) > 1.0e-6 else 1.0
+    sz = sz if abs(sz) > 1.0e-6 else 1.0
+    return rotate_vector_y((x / sx, y / sy, z / sz), yaw_radians)
+
+
+def transform_normal_vector(vector: object, yaw_radians: float, scale: Vec3 = (1.0, 1.0, 1.0)) -> Vec3:
+    x, y, z = transform_projection_vector(vector, yaw_radians, scale)
+    length = math.sqrt(x * x + y * y + z * z)
+    if length <= 1.0e-6:
+        return (x, y, z)
+    return (x / length, y / length, z / length)
+
+
+def transform_bounds(
+    min_box: Vec3,
+    max_box: Vec3,
+    source_pivot: Vec3,
+    target_pivot: Vec3,
+    yaw_radians: float,
+    scale: Vec3 = (1.0, 1.0, 1.0),
+) -> Tuple[Vec3, Vec3]:
     corners = [
-        transform_point((x, y, z), source_pivot, target_pivot, yaw_radians)
+        transform_point((x, y, z), source_pivot, target_pivot, yaw_radians, scale=scale)
         for x in (float(min_box[0]), float(max_box[0]))
         for y in (float(min_box[1]), float(max_box[1]))
         for z in (float(min_box[2]), float(max_box[2]))
@@ -267,15 +300,23 @@ def translated_model_clone(submodel: DoorSubmodelClone) -> bsp.WorldModelMesh:
         submodel.source_pivot,
         submodel.target_pivot,
         submodel.yaw_radians,
+        scale=submodel.scale,
     )
     model.translation = transform_point(
         model.translation,
         submodel.source_pivot,
         submodel.target_pivot,
         submodel.yaw_radians,
+        scale=submodel.scale,
     )
     model.points = [
-        transform_point(point, submodel.source_pivot, submodel.target_pivot, submodel.yaw_radians)
+        transform_point(
+            point,
+            submodel.source_pivot,
+            submodel.target_pivot,
+            submodel.yaw_radians,
+            scale=submodel.scale,
+        )
         for point in model.points
     ]
     for surface in model.surfaces:
@@ -284,9 +325,10 @@ def translated_model_clone(submodel: DoorSubmodelClone) -> bsp.WorldModelMesh:
             submodel.source_pivot,
             submodel.target_pivot,
             submodel.yaw_radians,
+            scale=submodel.scale,
         )
-        surface.uv_p = rotate_vector_y(surface.uv_p, submodel.yaw_radians)
-        surface.uv_q = rotate_vector_y(surface.uv_q, submodel.yaw_radians)
+        surface.uv_p = transform_projection_vector(surface.uv_p, submodel.yaw_radians, submodel.scale)
+        surface.uv_q = transform_projection_vector(surface.uv_q, submodel.yaw_radians, submodel.scale)
     model.raw_start = None
     model.raw_end = None
     model.next_world_item = None
@@ -300,11 +342,23 @@ def build_preview_bsp(
     clone_plans: Sequence[DoorClonePlan],
 ) -> bsp.BspWorld:
     """Return a BSP world with pending cloned door submodels appended."""
-    preview = copy.deepcopy(bsp_world)
+    preview = _shallow_bsp_with_original_models(bsp_world)
     for plan in clone_plans or []:
         for submodel in plan.submodels:
             preview.world_models.append(translated_model_clone(submodel))
     return preview
+
+
+def _shallow_bsp_with_original_models(bsp_world: bsp.BspWorld) -> bsp.BspWorld:
+    return bsp.BspWorld(
+        version=bsp_world.version,
+        world_info=bsp_world.world_info,
+        obj_pos=bsp_world.obj_pos,
+        ren_pos=bsp_world.ren_pos,
+        world_model_table_start=bsp_world.world_model_table_start,
+        world_models=list(bsp_world.world_models),
+        parse_warnings=list(getattr(bsp_world, "parse_warnings", []) or []),
+    )
 
 
 def _clone_controller(source_obj: object, new_name: str, source_pivot: Vec3, target_pivot: Vec3, yaw_radians: float) -> object:

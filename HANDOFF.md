@@ -508,11 +508,11 @@ Stage 2 backend import is in place in `prefab_import.py` and
 
 - It imports static BSP records only. It does not yet import prefab
   WorldObjects, scripts, doors, elevators, triggers, or traps.
-- By default it imports `visibility` records when a prefab has them; otherwise
-  it imports normal `geometry`/`controller_geometry` records. It deliberately
-  skips `physics` records by default because many converted prefabs, including
-  `OldWoodFence1.dat`, contain duplicate-looking `PhysicsBSP` and `VisBSP`
-  geometry. Importing both as visible submodels would likely z-fight.
+- By default it imports `PhysicsBSP` when a converted prefab only contains the
+  system records `PhysicsBSP`/`VisBSP`. `VisBSP` can carry leaf/PVS payloads
+  that are not safe to splice into another level; `PhysicsBSP` has the plain
+  polygon data we need, and the writer patches it to normal static-submodel
+  flags before insertion.
 - Imported records are renamed with a collision-free target model name, then
   translated/rotated using the same raw BSP transform machinery as physical
   door clones. Surface UV projection vectors and point normals are transformed
@@ -527,25 +527,81 @@ Stage 2 backend import is in place in `prefab_import.py` and
   mode, and creates an `ImportPrefabBspOp` at the clicked BSP surface. The
   viewport refreshes through `LevelEdit.preview_bsp()` so the imported static
   geometry appears before save.
-- Static prefab imports now create editor-only helper objects while pending.
-  Helpers use type `EditorPrefabBspImport`, appear in the object list and
-  Properties panel, and render as selectable billboards. They are produced by
-  `LevelEdit.editor_materialize()` and are intentionally not returned by
-  `LevelEdit.materialize()`, so they are not serialized into the game DAT.
-- Pending prefab helpers can be selected, dragged/elevated, rotated with
+- Static prefab imports now create a real same-named `WorldObject` controller
+  while pending and on save. This is required for the imported BSP to render in
+  the game.
+- Pending prefab objects can be selected, dragged/elevated, rotated with
   `[`/`]`, edited through Properties `Pos`/`Rotation`, deleted, and undone.
   These edits mutate `ImportPrefabBspOp.target_pos` / `target_yaw` and rebuild
-  the BSP preview. Once saved, the imported BSP is real level geometry, but it
-  no longer has an editor helper until a later stage adds persistent metadata.
+  the BSP preview. The operation remains the source of truth, so the visible
+  object and imported BSP stay together instead of drifting.
 - Stage 4 validation is in place through `prefab_import_validation.py`.
   Save Preview and `manifest.json` now report non-blocking warnings when a
   static import ignores prefab WorldObjects, imports `PhysicsBSP` polygon data
   as a normal visible submodel, uses source models with `Default` texture
   names, creates duplicate/colliding BSP names, has empty/no-polygon source
-  models, or imports `VisBSP`. Current game tests show that the same-named
-  `WorldObject` makes the imported fence render, but collision is still absent;
-  collision probably requires merging/augmenting the level's global
-  `PhysicsBSP`, not merely adding a visible submodel.
+  models, or imports `VisBSP`.
+- Collision investigation found that shipped blocking helper brushes usually
+  use an `InvisibleBrush` controller paired with a same-named normal
+  `info_flags=2` BSP submodel. In `BOOTCAMP.DAT`, six `InvisibleBrush` rows
+  follow the pattern `Visible=0`, `Solid=1`, `RayHit=1`, `BoxPhysics=0`; most
+  are simple 6-polygon boxes. Imported visible `WorldObject`/BSP pairs render
+  in-game but do not collide by themselves.
+- Stage 1 prefab collision experiment is now opt-in in the import UI. When the
+  user enables it, `ImportPrefabBspOp.collision_mode="box_approx"` adds a
+  second hidden controller/BSP pair named `<PrefabName>_Collision`. The
+  controller is cloned from a real target-level `InvisibleBrush` template, not
+  synthesized from `WorldObject`, so class-specific fields such as
+  `DamagerStuff`, `SurfaceType`, and damage flags are preserved. Its `Pos` is
+  set to the generated collision BSP bounds center.
+- `STURMFORDCITY.DAT` has an existing fence/blocker pattern worth mirroring:
+  long, thin 6-polygon `InvisibleBrush` boxes using `Firethrough.dtx`, often
+  only 8 units thick and 56 units tall. The prefab collision helper now thins
+  the shortest horizontal axis to 8 units instead of using the full visual
+  bounding-box depth.
+- The BSP writer now patches scaled clone bounds, points, polygon centers,
+  planes, point normals, and OPQ texture projection vectors. This is needed
+  because collision/render helpers use internal plane/polygon data, not just
+  min/max bounds. Older `collision_mode="invisible_bsp"` remains supported as
+  a diagnostic fallback that duplicates the prefab geometry instead of using
+  the scaled box.
+- The viewport treats `Firethrough.dtx` as a helper material. It still draws
+  the helper BSP geometry for inspection/selection, but it does not bind the
+  repeated red texture; those triangles fall back to the solid editor BSP
+  colour. This is editor-only and does not alter saved DAT texture data.
+- Stage 2 collision controls are in place in the prefab import flow. The old
+  yes/no prompt is now a small options dialog with modes `box_approx`, `none`,
+  and diagnostic `invisible_bsp`; `box_approx` exposes configurable blocker
+  thickness and defaults to the proven 8-unit Sturmford-style thin box. The
+  selected thickness is stored on `ImportPrefabBspOp.collision_thickness` and
+  persisted in `.mm9mod` format version 6.
+- Preview performance pass 1 is in place for cloned doors and imported
+  prefabs. `door_clone.build_preview_bsp()` and
+  `prefab_import.build_preview_bsp()` now wrap the target BSP shallowly, so
+  unchanged base level `WorldModelMesh` objects keep identity across preview
+  rebuilds. `View3D.reload_level_state()` now asks `MeshCache.retain_models()`
+  to prune only stale preview meshes instead of invalidating every uploaded
+  BSP mesh. This keeps static terrain/building meshes cached while a door or
+  prefab preview submodel moves.
+- Stage 3 multi-segment collision is in place for imported prefab
+  `box_approx` helpers. The import options dialog exposes "Max segment length"
+  (default 512 units). If the generated thin collision box is longer than that
+  along its long horizontal axis, it is split into multiple same-template
+  `InvisibleBrush` BSP segments named `<PrefabName>_Collision1`,
+  `<PrefabName>_Collision2`, etc. Each segment gets its own hidden
+  `InvisibleBrush` WorldObject controller, and the segment length is persisted
+  as `ImportPrefabBspOp.collision_segment_length` in `.mm9mod` format version
+  7.
+- Stage 4 helper BSP preview modes are in place in the 3-D toolbar as
+  `Collision BSP: hidden/solid/wireframe/raw`. Helper BSPs are detected by
+  `_Collision` model names or helper textures such as `Firethrough.dtx`.
+  `hidden` skips them, `solid` draws a translucent magenta helper, `wireframe`
+  draws a magenta wire overlay, and `raw` uses normal BSP texture/range
+  handling.
+- Stage 5 save-time validation now warns when a static prefab import has
+  visible geometry but no collision helper, and checks generated
+  `collision_box` helpers for suspicious dimensions: extremely thin brushes,
+  very tall brushes, or extreme aspect ratios.
 
 ### REZ Archives
 

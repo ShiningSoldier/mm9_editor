@@ -63,6 +63,108 @@ OPENGL_AVAILABLE = False
 _view3d_missing: list = []   # packages still needed; populated by _import_gui()
 
 
+def _ask_prefab_collision_options(parent) -> Optional[Dict[str, Any]]:
+    """Return collision import options, or None if the user cancels."""
+    win = tk.Toplevel(parent)
+    win.title("Prefab Collision")
+    win.configure(bg="#11151c")
+    win.resizable(False, False)
+    win.transient(parent)
+    win.grab_set()
+
+    result: Dict[str, Any] = {}
+    mode_var = tk.StringVar(value="box_approx")
+    thickness_var = tk.StringVar(value="8")
+    segment_var = tk.StringVar(value="512")
+
+    outer = tk.Frame(win, bg="#11151c")
+    outer.pack(fill="both", expand=True, padx=14, pady=12)
+
+    tk.Label(
+        outer,
+        text="Collision helper",
+        bg="#11151c",
+        fg="#dde3ea",
+        font=("Segoe UI", 10, "bold"),
+    ).pack(anchor="w")
+
+    options = [
+        ("Thin InvisibleBrush box (recommended)", "box_approx"),
+        ("No collision helper", "none"),
+        ("Duplicate prefab geometry (diagnostic)", "invisible_bsp"),
+    ]
+    for label, value in options:
+        tk.Radiobutton(
+            outer,
+            text=label,
+            value=value,
+            variable=mode_var,
+            bg="#11151c",
+            fg="#dde3ea",
+            selectcolor="#23272d",
+            activebackground="#11151c",
+            activeforeground="#ffffff",
+            anchor="w",
+        ).pack(anchor="w", pady=(8 if value == "box_approx" else 2, 0))
+
+    row = tk.Frame(outer, bg="#11151c")
+    row.pack(fill="x", pady=(12, 0))
+    tk.Label(row, text="Box thickness", bg="#11151c", fg="#aeb7c2").pack(side="left")
+    entry = tk.Entry(row, textvariable=thickness_var, width=8, bg="#1b2028", fg="#dde3ea", insertbackground="#dde3ea")
+    entry.pack(side="left", padx=(10, 4))
+    tk.Label(row, text="units", bg="#11151c", fg="#aeb7c2").pack(side="left")
+
+    segment_row = tk.Frame(outer, bg="#11151c")
+    segment_row.pack(fill="x", pady=(8, 0))
+    tk.Label(segment_row, text="Max segment length", bg="#11151c", fg="#aeb7c2").pack(side="left")
+    segment_entry = tk.Entry(segment_row, textvariable=segment_var, width=8, bg="#1b2028", fg="#dde3ea", insertbackground="#dde3ea")
+    segment_entry.pack(side="left", padx=(10, 4))
+    tk.Label(segment_row, text="units", bg="#11151c", fg="#aeb7c2").pack(side="left")
+
+    def _sync_state(*_args) -> None:
+        state = "normal" if mode_var.get() == "box_approx" else "disabled"
+        entry.configure(state=state)
+        segment_entry.configure(state=state)
+
+    mode_var.trace_add("write", _sync_state)
+    _sync_state()
+
+    buttons = tk.Frame(outer, bg="#11151c")
+    buttons.pack(fill="x", pady=(14, 0))
+
+    def _ok() -> None:
+        try:
+            thickness = float(thickness_var.get())
+        except ValueError:
+            messagebox.showerror("Prefab collision", "Box thickness must be a number.", parent=win)
+            return
+        try:
+            segment_length = float(segment_var.get())
+        except ValueError:
+            messagebox.showerror("Prefab collision", "Max segment length must be a number.", parent=win)
+            return
+        if thickness < 1.0 or thickness > 512.0:
+            messagebox.showerror("Prefab collision", "Box thickness must be between 1 and 512.", parent=win)
+            return
+        if segment_length < 64.0 or segment_length > 8192.0:
+            messagebox.showerror("Prefab collision", "Max segment length must be between 64 and 8192.", parent=win)
+            return
+        result["collision_mode"] = mode_var.get()
+        result["collision_thickness"] = thickness
+        result["collision_segment_length"] = segment_length
+        win.destroy()
+
+    def _cancel() -> None:
+        win.destroy()
+
+    tk.Button(buttons, text="Cancel", command=_cancel).pack(side="right", padx=(8, 0))
+    tk.Button(buttons, text="OK", command=_ok).pack(side="right")
+
+    win.protocol("WM_DELETE_WINDOW", _cancel)
+    parent.wait_window(win)
+    return result or None
+
+
 def _import_gui():
     """Import all the GUI-dependent modules. Called only after config
     validation passes, so console errors don't get masked by missing-Tk."""
@@ -812,19 +914,56 @@ class EditorApp:
             messagebox.showerror("Prefab import failed", str(e))
             return
 
+        collision_options = _ask_prefab_collision_options(self.root)
+        if collision_options is None:
+            return
+        collision_mode = str(collision_options.get("collision_mode", "none"))
+        collision_thickness = float(collision_options.get("collision_thickness", 8.0))
+        collision_segment_length = float(collision_options.get("collision_segment_length", 512.0))
+        if collision_mode in {"box_approx", "invisible_bsp"}:
+            try:
+                prefab_import.build_static_import_plan(
+                    L.preview_bsp() or bsp_world,
+                    path,
+                    new_name=name,
+                    target_pos=(0.0, 0.0, 0.0),
+                    collision_mode=collision_mode,
+                    collision_thickness=collision_thickness,
+                    collision_segment_length=collision_segment_length,
+                    target_dat_bytes=L.source_bytes(),
+                )
+            except Exception as e:
+                messagebox.showerror("Prefab collision failed", str(e))
+                return
+
         self._pending_template = None
         self._pending_kind = "import_prefab_bsp"
         self._pending_prefab_path = path
         self._pending_prefab_name = name
         self._pending_prefab_roles = None
+        self._pending_prefab_collision_mode = collision_mode
+        self._pending_prefab_collision_thickness = collision_thickness
+        self._pending_prefab_collision_segment_length = collision_segment_length
         if self.view3d is not None:
             self.view3d.set_place_mode(True)
         model_roles = ", ".join(f"{k}={v}" for k, v in sorted(info.model_roles.items()))
+        collision_text = (
+            (
+                f"Hidden box collision helper will also be imported "
+                f"(thickness {collision_thickness:g}, max segment {collision_segment_length:g})."
+            )
+            if collision_mode == "box_approx"
+            else (
+                "Diagnostic duplicate-geometry collision helper will also be imported."
+                if collision_mode == "invisible_bsp"
+                else "No collision helper will be imported."
+            )
+        )
         messagebox.showinfo(
             "Place prefab",
             f"Click a surface in the 3-D view to place {name!r}.\n\n"
             f"Prefab models: {info.model_count}; roles: {model_roles or 'unknown'}.\n"
-            "This stage imports static visual BSP geometry only.",
+            f"{collision_text}",
         )
 
     def _show_text_dialog(self, title: str, text: str) -> None:
@@ -964,11 +1103,17 @@ class EditorApp:
         prefab_path = getattr(self, "_pending_prefab_path", "")
         new_name = getattr(self, "_pending_prefab_name", "")
         include_roles = getattr(self, "_pending_prefab_roles", None)
+        collision_mode = getattr(self, "_pending_prefab_collision_mode", "none")
+        collision_thickness = float(getattr(self, "_pending_prefab_collision_thickness", 8.0))
+        collision_segment_length = float(getattr(self, "_pending_prefab_collision_segment_length", 512.0))
         op = P.ImportPrefabBspOp(
             prefab_path=prefab_path,
             new_name=new_name,
             target_pos=tuple(float(v) for v in new_pos),
             include_roles=include_roles,
+            collision_mode=collision_mode,
+            collision_thickness=collision_thickness,
+            collision_segment_length=collision_segment_length,
         )
         try:
             # Validate against a preview that includes existing pending prefab
@@ -980,6 +1125,10 @@ class EditorApp:
                 new_name=new_name,
                 target_pos=new_pos,
                 include_roles=include_roles,
+                collision_mode=collision_mode,
+                collision_thickness=collision_thickness,
+                collision_segment_length=collision_segment_length,
+                target_dat_bytes=L.source_bytes(),
             )
         except Exception as e:
             messagebox.showerror("Prefab import failed", str(e))
@@ -995,6 +1144,9 @@ class EditorApp:
         self._pending_prefab_path = ""
         self._pending_prefab_name = ""
         self._pending_prefab_roles = None
+        self._pending_prefab_collision_mode = "none"
+        self._pending_prefab_collision_thickness = 8.0
+        self._pending_prefab_collision_segment_length = 512.0
         self._selected_world_index = helper_index
         if self.view3d is not None:
             self.view3d.set_place_mode(False)

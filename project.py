@@ -200,6 +200,9 @@ class ImportPrefabBspOp:
     target_pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     target_yaw: float = 0.0
     include_roles: Optional[Tuple[str, ...]] = None
+    collision_mode: str = "none"
+    collision_thickness: float = 8.0
+    collision_segment_length: float = 512.0
 
     def build_plan(self, level: "LevelEdit") -> prefab_import.PrefabBspImportPlan:
         bsp_world = level.get_bsp()
@@ -212,40 +215,97 @@ class ImportPrefabBspOp:
             target_pos=self.target_pos,
             target_yaw=self.target_yaw,
             include_roles=self.include_roles,
+            collision_mode=_normalized_prefab_collision_mode(self.collision_mode),
+            collision_thickness=float(self.collision_thickness),
+            collision_segment_length=float(self.collision_segment_length),
+            target_dat_bytes=level.source_bytes(),
         )
 
-    def apply_to(self, world: patcher.World) -> patcher.WorldObject:
-        if any((obj.get("Name") or "").lower() == self.new_name.lower() for obj in world.objects):
-            raise ValueError(f"object named {self.new_name!r} already exists")
+    def object_names(self, level: Optional["LevelEdit"] = None) -> List[str]:
+        names = [self.new_name]
+        if _normalized_prefab_collision_mode(self.collision_mode) in {"invisible_bsp", "box_approx"}:
+            collision_names = self._collision_submodel_names(level)
+            names.extend(collision_names or [f"{self.new_name}_Collision"])
+        return names
+
+    def apply_to(self, world: patcher.World, level: Optional["LevelEdit"] = None) -> List[patcher.WorldObject]:
+        wanted = {name.lower() for name in self.object_names(level)}
+        for obj in world.objects:
+            obj_name = (obj.get("Name") or "").lower()
+            if obj_name in wanted:
+                raise ValueError(f"object named {obj.get('Name')!r} already exists")
         template = _find_static_worldobject_template(world)
-        new_obj = copy.deepcopy(template)
-        _set_prop_if_present(new_obj, "Name", self.new_name)
-        _set_prop_if_present(new_obj, "Pos", tuple(float(v) for v in self.target_pos))
-        _set_prop_if_present(new_obj, "Rotation", (0.0, float(self.target_yaw), 0.0, 0.0))
-        _set_prop_if_present(new_obj, "MoveToFloor", 0)
-        _set_prop_if_present(new_obj, "ScriptName", "")
-        _set_prop_if_present(new_obj, "ScriptParams", "")
-        _set_prop_if_present(new_obj, "Visible", 1)
-        _set_prop_if_present(new_obj, "Solid", 1)
-        _set_prop_if_present(new_obj, "RayHit", 1)
-        # Static BSP WorldObjects commonly use model/brush collision rather
-        # than synthetic box collision.  BoxPhysics=1 can render while giving
-        # no useful collision when the object has no authored box dimensions.
-        _set_prop_if_present(new_obj, "BoxPhysics", 0)
-        _set_prop_if_present(new_obj, "Alpha", 1.0)
-        _set_prop_if_present(new_obj, "NeedsTick", 0)
-        _set_prop_if_present(new_obj, "TouchNotify", 0)
+        new_obj = _make_prefab_worldobject(
+            template,
+            self.new_name,
+            self.target_pos,
+            self.target_yaw,
+            visible=1,
+            type_str="WorldObject",
+        )
+        created = [new_obj]
         world.objects.append(new_obj)
-        return new_obj
+        if _normalized_prefab_collision_mode(self.collision_mode) in {"invisible_bsp", "box_approx"}:
+            collision_template = _find_object_template(world, "InvisibleBrush") or template
+            for collision_name, collision_pos in self._collision_object_specs(level):
+                collision_obj = _make_prefab_worldobject(
+                    collision_template,
+                    collision_name,
+                    collision_pos,
+                    0.0,
+                    visible=0,
+                    type_str="InvisibleBrush",
+                )
+                created.append(collision_obj)
+                world.objects.append(collision_obj)
+        return created
 
     def summary(self) -> str:
         pos = self.target_pos
         roles = "" if not self.include_roles else f" roles={','.join(self.include_roles)}"
         yaw = "" if abs(float(self.target_yaw)) < 1.0e-6 else f" yaw {self.target_yaw:.2f}"
+        collision_mode = _normalized_prefab_collision_mode(self.collision_mode)
+        collision = "" if collision_mode == "none" else f" collision={collision_mode}"
+        thickness = (
+            "" if collision_mode == "none"
+            else f" thickness={float(self.collision_thickness):.1f}"
+        )
+        segment = (
+            "" if collision_mode != "box_approx"
+            else f" segment={float(self.collision_segment_length):.0f}"
+        )
         return (
             f"+ import prefab BSP {os.path.basename(self.prefab_path)} -> {self.new_name}"
-            f" at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}){yaw}{roles}"
-        )
+            f" at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}){yaw}{roles}{collision}{thickness}{segment}"
+            )
+
+    def _collision_submodel_names(self, level: Optional["LevelEdit"]) -> List[str]:
+        if level is None:
+            return []
+        try:
+            return [
+                submodel.new_name
+                for submodel in self.build_plan(level).submodels
+                if "_collision" in submodel.new_name.lower()
+            ]
+        except Exception:
+            return []
+
+    def _collision_object_specs(self, level: Optional["LevelEdit"]) -> List[Tuple[str, Tuple[float, float, float]]]:
+        if level is None:
+            return [(f"{self.new_name}_Collision", tuple(float(v) for v in self.target_pos))]
+        try:
+            plan = self.build_plan(level)
+            specs = []
+            for submodel in plan.submodels:
+                if "_collision" in submodel.new_name.lower():
+                    model = door_clone.translated_model_clone(submodel)
+                    specs.append((submodel.new_name, _bounds_center(model.min_box, model.max_box)))
+            if specs:
+                return specs
+        except Exception:
+            return [(f"{self.new_name}_Collision", tuple(float(v) for v in self.target_pos))]
+        return [(f"{self.new_name}_Collision", tuple(float(v) for v in self.target_pos))]
 
     def helper_object(self) -> patcher.WorldObject:
         return patcher.WorldObject(
@@ -269,6 +329,63 @@ def _find_static_worldobject_template(world: patcher.World) -> patcher.WorldObje
         if obj.type_str == "WorldObject":
             return obj
     raise ValueError("target level has no WorldObject template for static prefab import")
+
+
+def _find_object_template(world: patcher.World, type_str: str) -> Optional[patcher.WorldObject]:
+    for obj in world.objects:
+        if obj.type_str == type_str:
+            return obj
+    return None
+
+
+def _normalized_prefab_collision_mode(value: str) -> str:
+    mode = str(value or "none").lower()
+    if mode in {"none", "off", "false", "0"}:
+        return "none"
+    if mode in {"invisible_bsp", "collision_helper"}:
+        return "invisible_bsp"
+    if mode in {"box", "box_approx"}:
+        return "box_approx"
+    return mode
+
+
+def _make_prefab_worldobject(
+    template: patcher.WorldObject,
+    name: str,
+    pos: Tuple[float, float, float],
+    yaw: float,
+    visible: int,
+    type_str: str,
+) -> patcher.WorldObject:
+    obj = copy.deepcopy(template)
+    obj.type_str = type_str
+    _set_prop_if_present(obj, "Name", name)
+    _set_prop_if_present(obj, "Pos", tuple(float(v) for v in pos))
+    _set_prop_if_present(obj, "Rotation", (0.0, float(yaw), 0.0, 0.0))
+    _set_prop_if_present(obj, "MoveToFloor", 0)
+    _set_prop_if_present(obj, "ScriptName", "")
+    _set_prop_if_present(obj, "ScriptParams", "")
+    _set_prop_if_present(obj, "Visible", int(visible))
+    _set_prop_if_present(obj, "Solid", 1)
+    _set_prop_if_present(obj, "RayHit", 1)
+    # Shipped InvisibleBrushes use the BSP brush itself for blocking and keep
+    # BoxPhysics disabled.  The visible WorldObject follows the same model.
+    _set_prop_if_present(obj, "BoxPhysics", 0)
+    _set_prop_if_present(obj, "Alpha", 1.0)
+    _set_prop_if_present(obj, "NeedsTick", 0)
+    _set_prop_if_present(obj, "TouchNotify", 0)
+    return obj
+
+
+def _bounds_center(
+    min_box: Tuple[float, float, float],
+    max_box: Tuple[float, float, float],
+) -> Tuple[float, float, float]:
+    return (
+        (float(min_box[0]) + float(max_box[0])) * 0.5,
+        (float(min_box[1]) + float(max_box[1])) * 0.5,
+        (float(min_box[2]) + float(max_box[2])) * 0.5,
+    )
 
 
 def _set_prop_if_present(obj: patcher.WorldObject, name: str, value: Any) -> None:
@@ -302,22 +419,20 @@ class LevelEdit:
     bsp:         Optional[Any] = None
 
     def load(self) -> None:
-        if self.world is not None:
+        if self.world is not None and getattr(self, "_raw_bytes", None):
             return
         if self.source_kind == SOURCE_REZ:
             assert self.rez_path and self.rez_vpath
-            # Lazy import to keep mm9_patch core dependency-free
-            import sys
-            here = os.path.dirname(os.path.abspath(__file__))
-            if here not in sys.path: sys.path.insert(0, here)
-            import mm9_rezmgr as rezmgr
-            with rezmgr.RezReader(self.rez_path) as r:
-                data = r.extract_to_bytes(self.rez_vpath)
+            data = self.source_bytes()
             # Detect format: only DAT (version 66) is editable here.
             if len(data) < 4 or struct.unpack_from("<I", data, 0)[0] != 66:
                 raise ValueError(
                     f"{self.rez_vpath} is not a v66 .DAT — the editor can only "
                     f"open compiled level files. (For .ED files use DEdit.)")
+            if self.world is not None:
+                if not self.display_name:
+                    self.display_name = self.rez_vpath
+                return
             # Use a tempfile so mm9_patch.World.load (which only takes a path) works.
             tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                f".tmp_rez_{_timestamp()}.dat")
@@ -333,18 +448,37 @@ class LevelEdit:
         else:
             raise ValueError(f"unknown source_kind {self.source_kind!r}")
 
+    def source_bytes(self) -> bytes:
+        """Return the original level DAT bytes, reloading them if needed."""
+        data = getattr(self, "_raw_bytes", None)
+        if data:
+            return data
+        if self.source_kind == SOURCE_REZ:
+            assert self.rez_path and self.rez_vpath
+            import sys
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path: sys.path.insert(0, here)
+            import mm9_rezmgr as rezmgr
+            with rezmgr.RezReader(self.rez_path) as r:
+                data = r.extract_to_bytes(self.rez_vpath)
+            self._raw_bytes = data
+            return data
+        raise ValueError(f"unknown source_kind {self.source_kind!r}")
+
     def get_bsp(self):
         """Lazily parse the level's BSP geometry; cached after the first call."""
         if self.bsp is not None:
             return self.bsp
-        if not getattr(self, "_raw_bytes", None):
+        try:
+            data = self.source_bytes()
+        except Exception:
             return None
         import sys
         here = os.path.dirname(os.path.abspath(__file__))
         if here not in sys.path: sys.path.insert(0, here)
         import bsp as bsp_mod
         try:
-            self.bsp = bsp_mod.parse(self._raw_bytes)
+            self.bsp = bsp_mod.parse(data)
         except Exception:
             self.bsp = None
         return self.bsp
@@ -360,7 +494,7 @@ class LevelEdit:
             elif isinstance(op, CloneDoorOp):
                 op.apply_to(self, w)
             elif isinstance(op, ImportPrefabBspOp):
-                op.apply_to(w)
+                op.apply_to(w, self)
             else:
                 op.apply_to(w)
         for idx in sorted(deletes, reverse=True):
@@ -390,7 +524,7 @@ class LevelEdit:
                 w.objects.extend(copy.deepcopy(plan.objects))
                 continue
             if isinstance(op, ImportPrefabBspOp):
-                op.apply_to(w)
+                op.apply_to(w, self)
                 continue
             op.apply_to(w)
         for idx in sorted(deletes, reverse=True):
@@ -414,6 +548,10 @@ class LevelEdit:
                 target_pos=op.target_pos,
                 target_yaw=op.target_yaw,
                 include_roles=op.include_roles,
+                collision_mode=_normalized_prefab_collision_mode(op.collision_mode),
+                collision_thickness=float(op.collision_thickness),
+                collision_segment_length=float(op.collision_segment_length),
+                target_dat_bytes=self.source_bytes(),
             )
             plans.append(plan)
             working_bsp = prefab_import.build_preview_bsp(working_bsp, [plan])
@@ -470,8 +608,8 @@ class LevelEdit:
                 counts.append(len(plan.objects))
                 continue
             if isinstance(op, ImportPrefabBspOp):
-                op.apply_to(w)
-                counts.append(1)
+                created = op.apply_to(w, self)
+                counts.append(len(created))
                 continue
             if isinstance(op, AddOp):
                 op.apply_to(w)
@@ -495,7 +633,7 @@ class LevelEdit:
                 op.apply_to(self, w)
                 continue
             if isinstance(op, ImportPrefabBspOp):
-                op.apply_to(w)
+                op.apply_to(w, self)
                 continue
             op.apply_to(w)
         return w.objects

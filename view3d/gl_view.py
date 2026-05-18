@@ -220,6 +220,7 @@ if OPENGL_AVAILABLE:
             # placement clarity more than it helped.
             self._fog_enabled: bool = False
             self._show_helper_billboards: bool = False
+            self._helper_bsp_mode: str = "solid"
 
             # Deferred level load: when set_active_level() is called before
             # initgl() has fired (widget not yet shown), we queue the args
@@ -754,6 +755,7 @@ if OPENGL_AVAILABLE:
                     bsp_world,
                     self._mesh_cache,
                     tex_cache=self._tex_cache,
+                    helper_bsp_mode=self._helper_bsp_mode,
                 )
 
             # Fit camera to the BSP bounding box (ignoring skyboxes)
@@ -800,13 +802,20 @@ if OPENGL_AVAILABLE:
             self._object_model_items = []
             self._bsp_world = bsp_world
 
-            self._mesh_cache.invalidate()
+            if bsp_world is not None:
+                self._mesh_cache.retain_models(
+                    getattr(bsp_world, "world_models", []) or [],
+                    tex_cache=self._tex_cache,
+                )
+            else:
+                self._mesh_cache.invalidate()
             self._bsp_draw_batch = None
             if bsp_world is not None:
                 self._bsp_draw_batch = build_bsp_draw_batch(
                     bsp_world,
                     self._mesh_cache,
                     tex_cache=self._tex_cache,
+                    helper_bsp_mode=self._helper_bsp_mode,
                 )
 
             if objects:
@@ -826,6 +835,19 @@ if OPENGL_AVAILABLE:
             if not self._ready:
                 return
             self._rebuild_sprites()
+            self._request_render()
+
+        def set_helper_bsp_mode(self, mode: str) -> None:
+            self._helper_bsp_mode = str(mode or "solid").lower()
+            if not self._ready:
+                return
+            if self._bsp_world is not None:
+                self._bsp_draw_batch = build_bsp_draw_batch(
+                    self._bsp_world,
+                    self._mesh_cache,
+                    tex_cache=self._tex_cache,
+                    helper_bsp_mode=self._helper_bsp_mode,
+                )
             self._request_render()
 
         def set_selected_index(self, world_index: int) -> None:
@@ -1719,6 +1741,34 @@ class View3D(tk.Frame if _HAS_TK else object):
         )
         self._btn_helpers.pack(side="left", padx=(0, 8), pady=3)
 
+        tk.Label(bar, text="Collision BSP:", bg="#15171b", fg="#aaaaaa",
+                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
+        self._helper_bsp_var = tk.StringVar(value="solid")
+
+        def _set_helper_bsp_mode(_value=None):
+            mode = self._helper_bsp_var.get()
+            self._canvas.set_helper_bsp_mode(mode)
+            self._canvas.focus_for_input()
+
+        self._helper_bsp_menu = tk.OptionMenu(
+            bar,
+            self._helper_bsp_var,
+            "hidden",
+            "solid",
+            "wireframe",
+            "raw",
+            command=_set_helper_bsp_mode,
+        )
+        self._helper_bsp_menu.config(
+            bg="#23272d", fg="#aaaaaa",
+            activebackground="#2c5e8a",
+            activeforeground="white",
+            relief="flat", font=("Segoe UI", 8),
+            highlightthickness=0,
+        )
+        self._helper_bsp_menu["menu"].config(bg="#23272d", fg="#dde3ea")
+        self._helper_bsp_menu.pack(side="left", padx=(0, 8), pady=3)
+
         tk.Label(bar,
                  text="F = fit  ·  arrows = nudge  ·  PgUp/PgDn = height  "
                       "·  [/] = rotate  ·  P = profile",
@@ -1852,6 +1902,13 @@ class View3D(tk.Frame if _HAS_TK else object):
             bg="#2c5e8a" if enabled else "#23272d",
             fg="white"   if enabled else "#aaaaaa",
         )
+
+    def set_helper_bsp_mode(self, mode: str) -> None:
+        """Set collision/helper BSP preview mode."""
+        if not OPENGL_AVAILABLE:
+            return
+        self._helper_bsp_var.set(mode)
+        self._canvas.set_helper_bsp_mode(mode)
 
     def set_camera_mode(self, mode: str) -> None:
         """Switch between 'orbit' and 'fly' programmatically."""

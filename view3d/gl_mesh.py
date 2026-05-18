@@ -59,6 +59,10 @@ _NON_RENDER_TEXTURE_TOKENS = (
     "/SKYBOX/SKYMARKER.DTX",
 )
 
+_HELPER_SOLID_TEXTURE_TOKENS = (
+    "/LEVELTEXTURES/MISC/FIRETHROUGH.DTX",
+)
+
 _WATER_PLACEHOLDER_TEXTURE = "TEXTURES\\LevelTextures\\Terrain\\Ocean.dtx"
 
 
@@ -94,6 +98,22 @@ def _is_non_render_texture(tex_name: str) -> bool:
     if norm.endswith(".SPR"):
         return True
     return any(token in norm for token in _NON_RENDER_TEXTURE_TOKENS)
+
+
+def _is_helper_solid_texture(tex_name: str) -> bool:
+    """True for helper materials that should draw as plain editor geometry."""
+    norm = _normalise_texture_name(tex_name)
+    return any(token in norm for token in _HELPER_SOLID_TEXTURE_TOKENS)
+
+
+def _is_helper_bsp_model(model) -> bool:  # type: ignore[type-arg]
+    name = str(getattr(model, "name", "") or "").lower()
+    if "_collision" in name:
+        return True
+    for tex_name in getattr(model, "texture_names", []) or []:
+        if _is_helper_solid_texture(str(tex_name or "")):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +177,8 @@ class BspDrawItem:
     mesh: GpuMesh
     color: Tuple[float, float, float]
     ranges: List[BspDrawRange] = field(default_factory=list)
+    alpha: float = 1.0
+    wireframe: bool = False
 
 
 @dataclass
@@ -257,6 +279,8 @@ def _triangulate_model(
         tex_name = _render_texture_name(tex_name)
         if _is_non_render_texture(tex_name):
             continue
+        if _is_helper_solid_texture(tex_name):
+            tex_name = ""
 
         # ── per-vertex UV from LithTech OPQ surface projection ─────────
         if surf is not None:
@@ -651,6 +675,7 @@ def build_bsp_draw_batch(
     show_submodels: bool = True,
     show_skybox: bool = False,
     show_terrain: bool = True,
+    helper_bsp_mode: str = "solid",
 ) -> BspDrawBatch:
     """Upload visible static BSP meshes and precompute their draw ranges."""
     if bsp_world is None:
@@ -659,7 +684,11 @@ def build_bsp_draw_batch(
     items: List[BspDrawItem] = []
     tris_drawn = 0
 
+    helper_mode = str(helper_bsp_mode or "solid").lower()
     for model in bsp_world.world_models:
+        is_helper = _is_helper_bsp_model(model)
+        if is_helper and helper_mode == "hidden":
+            continue
         cat = model.category()
         if cat == "skybox" and not show_skybox:
             continue
@@ -673,8 +702,14 @@ def build_bsp_draw_batch(
             continue
 
         color = _MODEL_COLORS.get(gm.category, _MODEL_COLOR_DEFAULT)
+        alpha = 1.0
+        wireframe = False
         ranges: List[BspDrawRange] = []
-        if tex_cache is not None and gm.tex_ranges:
+        if is_helper and helper_mode in {"solid", "wireframe"}:
+            color = (0.95, 0.18, 0.62)
+            alpha = 0.35 if helper_mode == "solid" else 0.85
+            wireframe = helper_mode == "wireframe"
+        elif tex_cache is not None and gm.tex_ranges:
             for tex_name, byte_off, count in gm.tex_ranges:
                 tex_id = tex_cache.get(tex_name) if tex_name else 0
                 ranges.append(BspDrawRange(
@@ -683,7 +718,13 @@ def build_bsp_draw_batch(
                     index_count=int(count),
                 ))
 
-        items.append(BspDrawItem(mesh=gm, color=color, ranges=ranges))
+        items.append(BspDrawItem(
+            mesh=gm,
+            color=color,
+            ranges=ranges,
+            alpha=alpha,
+            wireframe=wireframe,
+        ))
         tris_drawn += gm.triangle_count
 
     return BspDrawBatch(
@@ -719,11 +760,21 @@ def draw_bsp_batch(
 
         for item in batch.items:
             prog.set_vec3("uColor", item.color)
-            if item.ranges:
+            prog.set_float("uAlpha", float(item.alpha))
+            if item.wireframe:
+                from OpenGL import GL  # type: ignore
+                GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_LINE)
+                try:
+                    prog.set_int("uHasTex", 0)
+                    draw_mesh(item.mesh)
+                finally:
+                    GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_FILL)
+            elif item.ranges:
                 _draw_mesh_resolved_ranges(item.mesh, item.ranges, prog)
             else:
                 prog.set_int("uHasTex", 0)
                 draw_mesh(item.mesh)
+            prog.set_float("uAlpha", 1.0)
 
     return batch.models_drawn, batch.triangles_drawn
 
@@ -836,6 +887,21 @@ class MeshCache:
                 except Exception:
                     pass
         self._cache.clear()
+
+    def retain_models(self, meshes, tex_cache=None) -> None:
+        """Drop cached meshes that are not part of the current BSP preview."""
+        tex_id = id(tex_cache) if tex_cache is not None else None
+        keep_model_ids = {id(mesh) for mesh in meshes or []}
+        for key, gm in list(self._cache.items()):
+            model_id, cached_tex_id = key
+            if model_id in keep_model_ids and cached_tex_id == tex_id:
+                continue
+            if gm is not None:
+                try:
+                    delete_mesh(gm)
+                except Exception:
+                    pass
+            del self._cache[key]
 
     @property
     def stats(self) -> dict:

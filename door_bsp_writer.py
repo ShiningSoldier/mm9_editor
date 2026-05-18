@@ -108,7 +108,16 @@ def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int]:
     return uv_o_offset, uv_p_offset, uv_q_offset
 
 
-def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tuple[int, int, int, int, List[Tuple[int, int, int]], List[Tuple[int, int]]]:
+def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tuple[
+    int,
+    int,
+    int,
+    int,
+    List[int],
+    List[Tuple[int, int, int]],
+    List[Tuple[int, int, int]],
+    List[Tuple[int, int]],
+]:
     if source_model.raw_start is None or source_model.world_bsp_start is None:
         raise ValueError(f"BSP model {source_model.name!r} has no raw provenance")
     start = source_model.world_bsp_start - source_model.raw_start
@@ -148,21 +157,29 @@ def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tu
     for _ in range(leaf_count):
         _skip_leaf(cursor)
 
-    cursor.skip(plane_count * 16)
+    plane_offsets: List[int] = []
+    for _ in range(plane_count):
+        plane_offsets.append(cursor.pos)
+        cursor.skip(16)
 
     surface_offsets: List[Tuple[int, int, int]] = []
     for _ in range(surface_count):
         surface_offsets.append(_read_surface_offsets(cursor))
 
+    polygon_offsets: List[Tuple[int, int, int]] = []
     for vert_count in verts_per_poly:
+        center_offset = cursor.pos
         cursor.skip(12)
         cursor.skip(2)
         cursor.skip(2)
         unknown_flag = cursor.u16()
         if unknown_flag > 0:
             cursor.skip(unknown_flag * 4)
+        surface_index_offset = cursor.pos
         cursor.skip(2)
+        plane_index_offset = cursor.pos
         cursor.skip(2)
+        polygon_offsets.append((center_offset, surface_index_offset, plane_index_offset))
         cursor.skip(vert_count * 5)
 
     cursor.skip(node_count * 14)
@@ -184,7 +201,9 @@ def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tu
         min_box_offset,
         min_box_offset + 12,
         min_box_offset + 24,
+        plane_offsets,
         surface_offsets,
+        polygon_offsets,
         point_offsets,
     )
 
@@ -204,7 +223,9 @@ def build_cloned_world_model_record(
         min_box_offset,
         max_box_offset,
         translation_offset,
+        plane_offsets,
         surface_offsets,
+        polygon_offsets,
         point_offsets,
     ) = _world_bsp_patch_offsets(raw, submodel.source_model)
 
@@ -223,6 +244,7 @@ def build_cloned_world_model_record(
         submodel.source_pivot,
         submodel.target_pivot,
         submodel.yaw_radians,
+        scale=submodel.scale,
     )
     struct.pack_into("<3f", raw, adj(min_box_offset), *new_min)
     struct.pack_into("<3f", raw, adj(max_box_offset), *new_max)
@@ -231,6 +253,7 @@ def build_cloned_world_model_record(
         submodel.source_pivot,
         submodel.target_pivot,
         submodel.yaw_radians,
+        scale=submodel.scale,
     ))
     for (uv_o_offset, uv_p_offset, uv_q_offset), surface in zip(surface_offsets, submodel.source_model.surfaces):
         struct.pack_into("<3f", raw, adj(uv_o_offset), *door_clone.transform_point(
@@ -238,27 +261,72 @@ def build_cloned_world_model_record(
             submodel.source_pivot,
             submodel.target_pivot,
             submodel.yaw_radians,
+            scale=submodel.scale,
         ))
-        struct.pack_into("<3f", raw, adj(uv_p_offset), *door_clone.rotate_vector_y(
+        struct.pack_into("<3f", raw, adj(uv_p_offset), *door_clone.transform_projection_vector(
             surface.uv_p,
             submodel.yaw_radians,
+            submodel.scale,
         ))
-        struct.pack_into("<3f", raw, adj(uv_q_offset), *door_clone.rotate_vector_y(
+        struct.pack_into("<3f", raw, adj(uv_q_offset), *door_clone.transform_projection_vector(
             surface.uv_q,
             submodel.yaw_radians,
+            submodel.scale,
         ))
 
-    for (point_offset, normal_offset), point in zip(point_offsets, submodel.source_model.points):
-        struct.pack_into("<3f", raw, adj(point_offset), *door_clone.transform_point(
+    transformed_points = [
+        door_clone.transform_point(
             point,
             submodel.source_pivot,
             submodel.target_pivot,
             submodel.yaw_radians,
+            scale=submodel.scale,
+        )
+        for point in submodel.source_model.points
+    ]
+
+    for plane_offset in plane_offsets:
+        normal = struct.unpack_from("<3f", raw, adj(plane_offset))
+        distance = struct.unpack_from("<f", raw, adj(plane_offset + 12))[0]
+        new_normal = door_clone.transform_normal_vector(normal, submodel.yaw_radians, submodel.scale)
+        # Source planes use dot(normal, point) == distance.
+        source_point = (
+            float(normal[0]) * float(distance),
+            float(normal[1]) * float(distance),
+            float(normal[2]) * float(distance),
+        )
+        new_point = door_clone.transform_point(
+            source_point,
+            submodel.source_pivot,
+            submodel.target_pivot,
+            submodel.yaw_radians,
+            scale=submodel.scale,
+        )
+        new_distance = (
+            new_normal[0] * new_point[0]
+            + new_normal[1] * new_point[1]
+            + new_normal[2] * new_point[2]
+        )
+        struct.pack_into("<3f", raw, adj(plane_offset), *new_normal)
+        struct.pack_into("<f", raw, adj(plane_offset + 12), float(new_distance))
+
+    for center_offset, _surface_index_offset, _plane_index_offset in polygon_offsets:
+        center = struct.unpack_from("<3f", raw, adj(center_offset))
+        struct.pack_into("<3f", raw, adj(center_offset), *door_clone.transform_point(
+            center,
+            submodel.source_pivot,
+            submodel.target_pivot,
+            submodel.yaw_radians,
+            scale=submodel.scale,
         ))
+
+    for (point_offset, normal_offset), point in zip(point_offsets, submodel.source_model.points):
+        struct.pack_into("<3f", raw, adj(point_offset), *transformed_points.pop(0))
         normal = struct.unpack_from("<3f", raw, adj(normal_offset))
-        struct.pack_into("<3f", raw, adj(normal_offset), *door_clone.rotate_vector_y(
+        struct.pack_into("<3f", raw, adj(normal_offset), *door_clone.transform_normal_vector(
             normal,
             submodel.yaw_radians,
+            submodel.scale,
         ))
 
     struct.pack_into("<I", raw, 0, next_world_item)

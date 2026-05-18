@@ -146,6 +146,7 @@ class DoorCloneTests(unittest.TestCase):
 
         self.assertIsNotNone(cloned)
         self.assertEqual(len(preview.world_models), len(bsp_world.world_models) + 1)
+        self.assertIs(preview.world_models[0], bsp_world.world_models[0])
         self.assertNotEqual(cloned.points[0], source.points[0])
         self.assertEqual(cloned.name, "Door32Preview")
 

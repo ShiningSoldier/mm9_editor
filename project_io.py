@@ -20,6 +20,9 @@ Format version history
 2  REZ-backed workflow; backup_path is persisted when present
 3  CloneDoorOp pending operations
 4  ImportPrefabBspOp pending operations
+5  Prefab import collision helper mode
+6  Prefab collision helper thickness
+7  Prefab collision helper max segment length
 """
 
 from __future__ import annotations
@@ -142,6 +145,9 @@ def op_to_dict(op: Any) -> Dict[str, Any]:
             "target_pos":    list(op.target_pos),
             "target_yaw":    float(op.target_yaw),
             "include_roles": list(op.include_roles) if op.include_roles is not None else None,
+            "collision_mode": op.collision_mode,
+            "collision_thickness": float(op.collision_thickness),
+            "collision_segment_length": float(op.collision_segment_length),
         }
     raise TypeError(f"Unknown op type: {type(op)}")
 
@@ -197,6 +203,9 @@ def dict_to_op(d: Dict[str, Any]) -> Any:
             target_pos    = tuple(float(x) for x in d.get("target_pos", (0.0, 0.0, 0.0))),
             target_yaw    = float(d.get("target_yaw", 0.0)),
             include_roles = tuple(str(role) for role in roles) if roles is not None else None,
+            collision_mode = str(d.get("collision_mode", "none")),
+            collision_thickness = float(d.get("collision_thickness", 8.0)),
+            collision_segment_length = float(d.get("collision_segment_length", 512.0)),
         )
     raise ValueError(f"Unknown op kind: {kind!r}")
 
@@ -236,8 +245,8 @@ def dict_to_leveledit(d: Dict[str, Any]) -> P.LevelEdit:
 # Project save / load
 # ─────────────────────────────────────────────────────────────────────────────
 
-FORMAT_VERSION = 4
-SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4}
+FORMAT_VERSION = 7
+SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4, 5, 6, 7}
 
 
 def project_to_json(project: P.Project, path: str) -> None:

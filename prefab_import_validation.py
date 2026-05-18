@@ -17,6 +17,7 @@ from typing import List, Sequence
 
 import _path_setup  # noqa: F401
 import bsp
+import door_clone
 import prefab_import
 import prefab_inspector
 
@@ -80,6 +81,8 @@ def _validate_one_plan(plan: prefab_import.PrefabBspImportPlan) -> List[str]:
         return warnings
 
     selected_roles = set(plan.source_model_roles)
+    has_collision_helper = "collision_helper" in selected_roles
+    has_collision_box = "collision_box" in selected_roles
     if "visibility" in selected_roles:
         warnings.append(
             f"{label}: imports VisBSP; visibility records can contain leaf/PVS data and may not load safely"
@@ -95,9 +98,22 @@ def _validate_one_plan(plan: prefab_import.PrefabBspImportPlan) -> List[str]:
         warnings.append(
             f"{label}: imports VisBSP only; collision behavior in-game is not confirmed yet"
         )
+    if has_collision_helper:
+        warnings.append(
+            f"{label}: adds an experimental InvisibleBrush collision helper; "
+            "this matches shipped blocker/controller patterns but needs in-game confirmation"
+        )
+    if has_collision_box:
+        warnings.append(
+            f"{label}: adds an experimental scaled InvisibleBrush box collision helper; "
+            "this matches shipped blocker/controller patterns but needs in-game confirmation"
+        )
+    if not (has_collision_helper or has_collision_box):
+        warnings.append(f"{label}: imports visible geometry without a collision helper")
 
     for submodel in plan.submodels:
         model = submodel.source_model
+        role = _role_for_submodel(plan, submodel)
         if not submodel.raw_bytes:
             warnings.append(f"{label}: source model {submodel.source_name!r} has empty raw bytes")
         if not model.polygons:
@@ -110,5 +126,49 @@ def _validate_one_plan(plan: prefab_import.PrefabBspImportPlan) -> List[str]:
             warnings.append(
                 f"{label}: source model {submodel.source_name!r} is large ({len(model.polygons)} polygons)"
             )
+        if role == "collision_box":
+            warnings.extend(_collision_shape_warnings(label, submodel))
 
+    return warnings
+
+
+def _role_for_submodel(
+    plan: prefab_import.PrefabBspImportPlan,
+    submodel,
+) -> str:
+    for candidate, role in zip(plan.submodels, plan.source_model_roles):
+        if candidate is submodel:
+            return role
+    return ""
+
+
+def _collision_shape_warnings(label: str, submodel) -> List[str]:
+    model = submodel.source_model
+    min_box, max_box = door_clone.transform_bounds(
+        model.min_box,
+        model.max_box,
+        submodel.source_pivot,
+        submodel.target_pivot,
+        submodel.yaw_radians,
+        scale=submodel.scale,
+    )
+    sizes = [
+        abs(float(max_box[0]) - float(min_box[0])),
+        abs(float(max_box[1]) - float(min_box[1])),
+        abs(float(max_box[2]) - float(min_box[2])),
+    ]
+    nonzero = [max(size, 1.0e-6) for size in sizes]
+    shortest = min(nonzero)
+    tallest = sizes[1]
+    longest = max(nonzero)
+    warnings: List[str] = []
+    if shortest < 2.0:
+        warnings.append(f"{label}: collision helper {submodel.new_name!r} is extremely thin ({shortest:.1f} units)")
+    if tallest > 512.0:
+        warnings.append(f"{label}: collision helper {submodel.new_name!r} is very tall ({tallest:.1f} units)")
+    if longest / shortest > 512.0:
+        warnings.append(
+            f"{label}: collision helper {submodel.new_name!r} has an extreme aspect ratio "
+            f"({longest / shortest:.1f}:1)"
+        )
     return warnings
