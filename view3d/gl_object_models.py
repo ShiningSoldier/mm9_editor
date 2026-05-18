@@ -150,6 +150,7 @@ class ObjectModelRenderItem:
     mesh: GpuMesh
     skins: List[str]
     material_ranges: List[Tuple[str, int, int, int]]
+    y_override: Optional[float] = None
 
 
 def _normalise_model_name(filename: str) -> str:
@@ -258,9 +259,11 @@ def _looks_like_civilian_class(text: str) -> bool:
 
 def _civilian_appearance_key(object_type: str = "", object_name: str = "") -> str:
     name = str(object_name or "")
+    typ = str(object_type or "")
+    if "child" in typ.lower() and _looks_like_civilian_class(typ):
+        return f"{typ} {name}" if _looks_like_civilian_class(name) else typ
     if _looks_like_civilian_class(name):
         return name
-    typ = str(object_type or "")
     return typ if _looks_like_civilian_class(typ) else ""
 
 
@@ -333,12 +336,25 @@ def _object_model_filename(obj) -> str:
     filename = str(obj.get("Filename") or "")
     if not filename:
         return ""
-    if not _is_civilian_placeholder_model(filename):
-        return filename
     appearance_key = _civilian_appearance_key(
         str(getattr(obj, "type_str", "") or ""),
         str(obj.get("Name") or ""),
     )
+    filename_key = _skin_base_token(filename)
+    if (
+        appearance_key
+        and (
+            filename_key.startswith("commoner")
+            or filename_key.startswith("town")
+            or filename_key.startswith("shopkeeper")
+            or filename_key.startswith("wealthy")
+            or filename_key.startswith("poor")
+            or filename_key.startswith("prisoner")
+        )
+    ):
+        return _civilian_preview_model(appearance_key) or filename
+    if not _is_civilian_placeholder_model(filename):
+        return filename
     return _civilian_preview_model(appearance_key) or filename
 
 
@@ -357,6 +373,16 @@ def _object_is_visible(obj) -> bool:
         return bool(int(visible))
     except Exception:
         return bool(visible)
+
+
+def _truthy_object_flag(obj, name: str) -> bool:
+    value = obj.get(name)
+    if value is None:
+        return False
+    try:
+        return bool(int(value))
+    except Exception:
+        return bool(value)
 
 
 def _skin_candidate_exists(skin: str, skin_cache=None, tex_cache=None) -> bool:
@@ -866,6 +892,28 @@ def _rotation_y(rot) -> float:
         return 0.0
 
 
+def _model_yaw_offset(filename: str) -> float:
+    """
+    Return a preview-only yaw offset for model families whose authored ABC
+    basis differs from the game object's yaw convention.
+
+    Most props, including BOOTCAMP treasure chests, match the DAT yaw directly.
+    A small set of furniture models observed in STURMFORDCITY are authored
+    ninety degrees off; keep that correction local to those families instead
+    of changing every object mesh.
+    """
+    stem = _skin_base_token(_model_stem(filename))
+    if stem.startswith("cabinet") or stem.startswith("pew"):
+        return -(math.pi * 0.5)
+    return 0.0
+
+
+def _object_yaw(obj) -> float:
+    return _rotation_y(obj.get("Rotation") or (0.0, 0.0, 0.0, 0.0)) + _model_yaw_offset(
+        str(obj.get("Filename") or "")
+    )
+
+
 def _scale_value(scale) -> float:
     try:
         return float(scale)
@@ -873,7 +921,47 @@ def _scale_value(scale) -> float:
         return 1.0
 
 
-def _object_matrix(obj) -> Optional[np.ndarray]:
+def _mesh_min_y(mesh: GpuMesh) -> Optional[float]:
+    try:
+        tri_positions = getattr(mesh, "tri_positions", None)
+        if tri_positions is None or tri_positions.size == 0:
+            return None
+        return float(np.min(tri_positions[:, :, 1]))
+    except Exception:
+        return None
+
+
+def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
+    if bsp_world is None or not _truthy_object_flag(obj, "MoveToFloor"):
+        return None
+    pos = obj.get("Pos")
+    if pos is None:
+        return None
+    try:
+        x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+    except Exception:
+        return None
+    local_min_y = _mesh_min_y(mesh)
+    if local_min_y is None:
+        return None
+    try:
+        import bsp as bsp_mod  # type: ignore
+        floor_y = bsp_mod.raycast_floor_y(
+            bsp_world,
+            x,
+            z,
+            y_hint_min=y - 512.0,
+            y_hint_max=y + 16.0,
+            y_above=y + 16.0,
+        )
+    except Exception:
+        return None
+    if floor_y is None:
+        return None
+    return float(floor_y) - local_min_y * _scale_value(obj.get("Scale") or 1.0)
+
+
+def _object_matrix(obj, y_override: Optional[float] = None) -> Optional[np.ndarray]:
     pos = obj.get("Pos")
     if pos is None:
         return None
@@ -882,7 +970,7 @@ def _object_matrix(obj) -> Optional[np.ndarray]:
     except Exception:
         return None
 
-    yaw = _rotation_y(obj.get("Rotation") or (0.0, 0.0, 0.0, 0.0))
+    yaw = _object_yaw(obj)
     s = _scale_value(obj.get("Scale") or 1.0)
     c = math.cos(yaw)
     sn = math.sin(yaw)
@@ -900,7 +988,7 @@ def _object_matrix(obj) -> Optional[np.ndarray]:
 
     trans = np.eye(4, dtype=np.float32)
     trans[0, 3] = x
-    trans[1, 3] = y
+    trans[1, 3] = float(y_override) if y_override is not None else y
     trans[2, 3] = z
 
     return (trans @ rot @ scale).astype(np.float32)
@@ -1014,6 +1102,7 @@ def build_render_items(
     cache: ObjectModelCache,
     skin_cache=None,
     tex_cache=None,
+    bsp_world=None,
 ) -> List[ObjectModelRenderItem]:
     """
     Build the stable object-to-ABC-mesh mapping for a materialized level.
@@ -1049,6 +1138,7 @@ def build_render_items(
                 skin_cache=skin_cache,
                 tex_cache=tex_cache,
             ),
+            y_override=_floor_y_override(obj, mesh, bsp_world=bsp_world),
         ))
     return items
 
@@ -1089,7 +1179,7 @@ def draw_object_model_items(
         for item in items:
             if only_world_index is not None and item.world_index != only_world_index:
                 continue
-            model = _object_matrix(item.obj)
+            model = _object_matrix(item.obj, y_override=item.y_override)
             if model is None:
                 continue
             prog.set_mat4("uMVP", (view_proj @ model).astype(np.float32))

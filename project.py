@@ -32,6 +32,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
+import door_clone
+import door_bsp_writer
+import door_clone_validation
+import prefab_import
+import prefab_import_validation
 
 
 def _timestamp() -> str:
@@ -105,6 +110,170 @@ class EditOp:
     def summary(self) -> str:
         keys = ", ".join(self.overrides.keys())
         return f"~ edit object[{self.target_index}] ({keys})"
+
+
+@dataclass
+class CloneDoorOp:
+    source_name: str
+    new_name: str
+    target_pos: Optional[Tuple[float, float, float]] = None
+    target_yaw: float = 0.0
+    include_pair: bool = True
+
+    def build_plan(self, level: "LevelEdit", objects) -> door_clone.DoorClonePlan:
+        if not getattr(level, "_raw_bytes", None):
+            raise ValueError("door cloning requires the source DAT bytes")
+        bsp_world = level.get_bsp()
+        if bsp_world is None:
+            raise ValueError("door cloning requires parsed BSP geometry")
+        return door_clone.build_clone_plan(
+            objects,
+            bsp_world,
+            level._raw_bytes,
+            self.source_name,
+            self.new_name,
+            target_pos=self.target_pos,
+            target_yaw=self.target_yaw,
+            include_pair=self.include_pair,
+        )
+
+    def apply_to(self, level: "LevelEdit", world: patcher.World) -> List[patcher.WorldObject]:
+        plan = self.build_plan(level, world.objects)
+        world.objects.extend(copy.deepcopy(plan.objects))
+        return plan.objects
+
+    def pending_object_count(self, level: "LevelEdit", objects) -> int:
+        return len(self.build_plan(level, objects).objects)
+
+    def retarget_from_object(
+        self,
+        level: "LevelEdit",
+        objects,
+        object_offset: int,
+        new_pos: Tuple[float, float, float],
+    ) -> None:
+        plan = self.build_plan(level, objects)
+        if not (0 <= object_offset < len(plan.objects)):
+            return
+        old_pos = plan.objects[object_offset].get("Pos")
+        primary_pos = plan.objects[0].get("Pos")
+        if old_pos is None or primary_pos is None:
+            return
+        delta = (
+            float(new_pos[0]) - float(old_pos[0]),
+            float(new_pos[1]) - float(old_pos[1]),
+            float(new_pos[2]) - float(old_pos[2]),
+        )
+        self.target_pos = (
+            float(primary_pos[0]) + delta[0],
+            float(primary_pos[1]) + delta[1],
+            float(primary_pos[2]) + delta[2],
+        )
+
+    def rerotate_from_object(
+        self,
+        level: "LevelEdit",
+        objects,
+        object_offset: int,
+        new_rot: Tuple[float, float, float, float],
+    ) -> None:
+        plan = self.build_plan(level, objects)
+        if not (0 <= object_offset < len(plan.objects)):
+            return
+        old_rot = plan.objects[object_offset].get("Rotation")
+        if old_rot is None:
+            return
+        self.target_yaw = float(self.target_yaw) + (float(new_rot[1]) - float(old_rot[1]))
+
+    def summary(self) -> str:
+        pos = self.target_pos
+        target = "" if pos is None else f" at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})"
+        pair = " + pair" if self.include_pair else ""
+        yaw = "" if abs(float(self.target_yaw)) < 1.0e-6 else f" yaw {self.target_yaw:.2f}"
+        return f"+ clone door {self.source_name} -> {self.new_name}{pair}{target}{yaw}"
+
+
+@dataclass
+class ImportPrefabBspOp:
+    prefab_path: str
+    new_name: str
+    target_pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    target_yaw: float = 0.0
+    include_roles: Optional[Tuple[str, ...]] = None
+
+    def build_plan(self, level: "LevelEdit") -> prefab_import.PrefabBspImportPlan:
+        bsp_world = level.get_bsp()
+        if bsp_world is None:
+            raise ValueError("prefab BSP import requires parsed target BSP geometry")
+        return prefab_import.build_static_import_plan(
+            bsp_world,
+            self.prefab_path,
+            new_name=self.new_name,
+            target_pos=self.target_pos,
+            target_yaw=self.target_yaw,
+            include_roles=self.include_roles,
+        )
+
+    def apply_to(self, world: patcher.World) -> patcher.WorldObject:
+        if any((obj.get("Name") or "").lower() == self.new_name.lower() for obj in world.objects):
+            raise ValueError(f"object named {self.new_name!r} already exists")
+        template = _find_static_worldobject_template(world)
+        new_obj = copy.deepcopy(template)
+        _set_prop_if_present(new_obj, "Name", self.new_name)
+        _set_prop_if_present(new_obj, "Pos", tuple(float(v) for v in self.target_pos))
+        _set_prop_if_present(new_obj, "Rotation", (0.0, float(self.target_yaw), 0.0, 0.0))
+        _set_prop_if_present(new_obj, "MoveToFloor", 0)
+        _set_prop_if_present(new_obj, "ScriptName", "")
+        _set_prop_if_present(new_obj, "ScriptParams", "")
+        _set_prop_if_present(new_obj, "Visible", 1)
+        _set_prop_if_present(new_obj, "Solid", 1)
+        _set_prop_if_present(new_obj, "RayHit", 1)
+        # Static BSP WorldObjects commonly use model/brush collision rather
+        # than synthetic box collision.  BoxPhysics=1 can render while giving
+        # no useful collision when the object has no authored box dimensions.
+        _set_prop_if_present(new_obj, "BoxPhysics", 0)
+        _set_prop_if_present(new_obj, "Alpha", 1.0)
+        _set_prop_if_present(new_obj, "NeedsTick", 0)
+        _set_prop_if_present(new_obj, "TouchNotify", 0)
+        world.objects.append(new_obj)
+        return new_obj
+
+    def summary(self) -> str:
+        pos = self.target_pos
+        roles = "" if not self.include_roles else f" roles={','.join(self.include_roles)}"
+        yaw = "" if abs(float(self.target_yaw)) < 1.0e-6 else f" yaw {self.target_yaw:.2f}"
+        return (
+            f"+ import prefab BSP {os.path.basename(self.prefab_path)} -> {self.new_name}"
+            f" at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}){yaw}{roles}"
+        )
+
+    def helper_object(self) -> patcher.WorldObject:
+        return patcher.WorldObject(
+            type_str="EditorPrefabBspImport",
+            props=[
+                patcher.Property("Name", 0, 0, self.new_name),
+                patcher.Property("Pos", 1, 0, tuple(float(v) for v in self.target_pos)),
+                patcher.Property("Rotation", 7, 0, (0.0, float(self.target_yaw), 0.0, 0.0)),
+                patcher.Property("PrefabPath", 0, 0, self.prefab_path),
+            ],
+        )
+
+
+def _find_static_worldobject_template(world: patcher.World) -> patcher.WorldObject:
+    for obj in world.objects:
+        if obj.type_str == "WorldObject":
+            names = {p.name for p in obj.props}
+            if {"Name", "Pos", "Rotation", "Visible", "Solid", "RayHit", "BoxPhysics"} <= names:
+                return obj
+    for obj in world.objects:
+        if obj.type_str == "WorldObject":
+            return obj
+    raise ValueError("target level has no WorldObject template for static prefab import")
+
+
+def _set_prop_if_present(obj: patcher.WorldObject, name: str, value: Any) -> None:
+    if any(p.name == name for p in obj.props):
+        obj.set(name, value)
 
 
 # --------------------------------------------------------------------------
@@ -188,11 +357,81 @@ class LevelEdit:
         for op in self.ops:
             if isinstance(op, DeleteOp):
                 deletes.append(op.target_index)
+            elif isinstance(op, CloneDoorOp):
+                op.apply_to(self, w)
+            elif isinstance(op, ImportPrefabBspOp):
+                op.apply_to(w)
             else:
                 op.apply_to(w)
         for idx in sorted(deletes, reverse=True):
             del w.objects[idx]
         return w
+
+    def editor_materialize(self) -> patcher.World:
+        """Return materialized WorldObjects plus editor-only prefab import handles."""
+        return self.materialize()
+
+    def materialized_object_count(self) -> int:
+        return len(self.materialize().objects)
+
+    def door_clone_plans(self) -> List[door_clone.DoorClonePlan]:
+        """Return BSP/controller clone plans for pending CloneDoorOps."""
+        assert self.world is not None
+        w = copy.deepcopy(self.world)
+        deletes = []
+        plans: List[door_clone.DoorClonePlan] = []
+        for op in self.ops:
+            if isinstance(op, DeleteOp):
+                deletes.append(op.target_index)
+                continue
+            if isinstance(op, CloneDoorOp):
+                plan = op.build_plan(self, w.objects)
+                plans.append(plan)
+                w.objects.extend(copy.deepcopy(plan.objects))
+                continue
+            if isinstance(op, ImportPrefabBspOp):
+                op.apply_to(w)
+                continue
+            op.apply_to(w)
+        for idx in sorted(deletes, reverse=True):
+            del w.objects[idx]
+        return plans
+
+    def prefab_import_plans(self) -> List[prefab_import.PrefabBspImportPlan]:
+        """Return BSP import plans for pending static prefab imports."""
+        base = self.get_bsp()
+        if base is None:
+            return []
+        working_bsp = base
+        plans: List[prefab_import.PrefabBspImportPlan] = []
+        for op in self.ops:
+            if not isinstance(op, ImportPrefabBspOp):
+                continue
+            plan = prefab_import.build_static_import_plan(
+                working_bsp,
+                op.prefab_path,
+                new_name=op.new_name,
+                target_pos=op.target_pos,
+                target_yaw=op.target_yaw,
+                include_roles=op.include_roles,
+            )
+            plans.append(plan)
+            working_bsp = prefab_import.build_preview_bsp(working_bsp, [plan])
+        return plans
+
+    def preview_bsp(self):
+        """Return BSP geometry plus pending physical door clone previews."""
+        base = self.get_bsp()
+        if base is None:
+            return None
+        plans = self.door_clone_plans()
+        prefab_plans = self.prefab_import_plans()
+        preview = base
+        if plans:
+            preview = door_clone.build_preview_bsp(preview, plans)
+        if prefab_plans:
+            preview = prefab_import.build_preview_bsp(preview, prefab_plans)
+        return preview
 
     def materialized_existing_indices(self) -> List[int]:
         """Map materialized existing-object rows back to baseline indices."""
@@ -216,11 +455,100 @@ class LevelEdit:
             return indices[world_index]
         return None
 
+    def _pending_add_counts(self) -> List[int]:
+        assert self.world is not None
+        counts: List[int] = []
+        w = copy.deepcopy(self.world)
+        deletes = []
+        for op in self.ops:
+            if isinstance(op, DeleteOp):
+                deletes.append(op.target_index)
+                continue
+            if isinstance(op, CloneDoorOp):
+                plan = op.build_plan(self, w.objects)
+                w.objects.extend(copy.deepcopy(plan.objects))
+                counts.append(len(plan.objects))
+                continue
+            if isinstance(op, ImportPrefabBspOp):
+                op.apply_to(w)
+                counts.append(1)
+                continue
+            if isinstance(op, AddOp):
+                op.apply_to(w)
+                counts.append(1)
+                continue
+            op.apply_to(w)
+        for idx in sorted(deletes, reverse=True):
+            del w.objects[idx]
+        return counts
+
+    def objects_before_op(self, target_op: Any) -> List[patcher.WorldObject]:
+        """Return materialized object state immediately before *target_op*."""
+        assert self.world is not None
+        w = copy.deepcopy(self.world)
+        for op in self.ops:
+            if op is target_op:
+                return w.objects
+            if isinstance(op, DeleteOp):
+                continue
+            if isinstance(op, CloneDoorOp):
+                op.apply_to(self, w)
+                continue
+            if isinstance(op, ImportPrefabBspOp):
+                op.apply_to(w)
+                continue
+            op.apply_to(w)
+        return w.objects
+
+    def pending_add_offset_for_materialized(self, world_index: int) -> Optional[Tuple[Any, int]]:
+        offset = world_index - len(self.materialized_existing_indices())
+        if offset < 0:
+            return None
+        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))]
+        cursor = 0
+        for op, count in zip(add_ops, self._pending_add_counts()):
+            if cursor <= offset < cursor + count:
+                return op, offset - cursor
+            cursor += count
+        return None
+
+    def prefab_import_offset_for_materialized(self, world_index: int) -> Optional[int]:
+        offset = world_index - len(self.materialized_existing_indices())
+        if offset < 0:
+            return None
+        import_index = 0
+        cursor = 0
+        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))]
+        for op, count in zip(add_ops, self._pending_add_counts()):
+            if cursor <= offset < cursor + count:
+                return import_index if isinstance(op, ImportPrefabBspOp) else None
+            if isinstance(op, ImportPrefabBspOp):
+                import_index += 1
+            cursor += count
+        return None
+
+    def prefab_import_for_materialized(self, world_index: int) -> Optional[ImportPrefabBspOp]:
+        offset = self.prefab_import_offset_for_materialized(world_index)
+        if offset is None:
+            return None
+        imports = [op for op in self.ops if isinstance(op, ImportPrefabBspOp)]
+        return imports[offset] if offset < len(imports) else None
+
     def add_offset_for_materialized(self, world_index: int) -> Optional[int]:
         offset = world_index - len(self.materialized_existing_indices())
-        add_count = sum(1 for op in self.ops if isinstance(op, AddOp))
-        if 0 <= offset < add_count:
-            return offset
+        if offset < 0:
+            return None
+        add_index = 0
+        cursor = 0
+        for op, count in zip(
+            [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))],
+            self._pending_add_counts(),
+        ):
+            if cursor <= offset < cursor + count:
+                return add_index if isinstance(op, AddOp) else None
+            if isinstance(op, AddOp):
+                add_index += 1
+            cursor += count
         return None
 
     def append_op(self, op: Any) -> None:
@@ -399,13 +727,38 @@ class Project:
         for L in self.levels:
             if not L.ops:
                 continue
+            materialized = L.materialize()
+            door_clones = L.door_clone_plans()
+            prefab_imports = L.prefab_import_plans()
+            validation_warnings: List[str] = []
+            if door_clones and getattr(L, "_raw_bytes", None):
+                bsp_world = L.get_bsp()
+                if bsp_world is not None:
+                    validation_warnings = door_clone_validation.validate_clone_plans(
+                        L._raw_bytes,
+                        materialized,
+                        bsp_world,
+                        door_clones,
+                    )
+            if prefab_imports:
+                bsp_world = L.get_bsp()
+                if bsp_world is not None:
+                    validation_warnings.extend(
+                        prefab_import_validation.validate_import_plans(
+                            bsp_world,
+                            prefab_imports,
+                        )
+                    )
             plan.dats.append(DatWrite(
                 source_path=L.path,
                 output_path=L.output_path(self.work_dir, batch_id),
                 ops_summary=[op.summary() for op in L.ops],
-                materialized=L.materialize(),
+                materialized=materialized,
                 level_edit=L,
                 backup_path=L.backup_path,
+                door_clones=door_clones,
+                prefab_imports=prefab_imports,
+                validation_warnings=validation_warnings,
             ))
             for op in L.ops:
                 if isinstance(op, AddOp) and op.rude:
@@ -498,7 +851,7 @@ class Project:
                 assert L and L.rez_path and L.rez_vpath
                 if os.path.abspath(L.rez_path) != os.path.abspath(source_rez):
                     raise ValueError("mixed source archives in one REZ write group")
-                data = self._world_to_bytes(d.materialized)
+                data = self._dat_write_to_bytes(d)
                 writer.replace(L.rez_vpath, data)
                 self._write_changed_entry_copy(output, L.rez_vpath, data)
                 log.append(
@@ -519,6 +872,24 @@ class Project:
                 os.remove(tmp)
             except OSError:
                 pass
+
+    def _dat_write_to_bytes(self, d: "DatWrite") -> bytes:
+        bsp_clones = [sub for plan in d.door_clones for sub in plan.submodels]
+        bsp_clones.extend(sub for plan in d.prefab_imports for sub in plan.submodels)
+        if not bsp_clones:
+            return self._world_to_bytes(d.materialized)
+        L = d.level_edit
+        if L is None or not getattr(L, "_raw_bytes", None):
+            raise ValueError("BSP clone save requires source DAT bytes")
+        bsp_world = L.get_bsp()
+        if bsp_world is None:
+            raise ValueError("BSP clone save requires parsed BSP geometry")
+        return door_bsp_writer.serialize_world_with_bsp_clones(
+            L._raw_bytes,
+            d.materialized,
+            bsp_world,
+            bsp_clones,
+        )
 
     def _write_changed_entry_copy(self, archive_output: str,
                                   virtual_path: str,
@@ -574,7 +945,10 @@ class Project:
                         "backup_path": d.backup_path,
                         "output_path": d.output_path,
                         "objects_after": d.stats()["objects_after"],
+                        "door_clones": d.stats()["door_clones"],
+                        "prefab_imports": d.stats()["prefab_imports"],
                         "ops_summary": d.ops_summary,
+                        "validation_warnings": d.validation_warnings,
                     }
                     for d in plan.dats
                 ],
@@ -767,9 +1141,17 @@ class DatWrite:
     materialized: patcher.World
     level_edit: Optional["LevelEdit"] = None
     backup_path: Optional[str] = None
+    door_clones: List[door_clone.DoorClonePlan] = field(default_factory=list)
+    prefab_imports: List[prefab_import.PrefabBspImportPlan] = field(default_factory=list)
+    validation_warnings: List[str] = field(default_factory=list)
 
     def stats(self) -> Dict[str, int]:
-        return {"objects_after": len(self.materialized.objects)}
+        return {
+            "objects_after": len(self.materialized.objects),
+            "door_clones": len(self.door_clones),
+            "prefab_imports": len(self.prefab_imports),
+            "prefab_bsp_models": sum(len(plan.submodels) for plan in self.prefab_imports),
+        }
 
 
 @dataclass

@@ -149,6 +149,11 @@ class WorldModelMesh:
     min_box:       Tuple[float, float, float]
     max_box:       Tuple[float, float, float]
     translation:   Tuple[float, float, float]
+    raw_start:     Optional[int] = None
+    raw_end:       Optional[int] = None
+    next_world_item: Optional[int] = None
+    world_bsp_start: Optional[int] = None
+    world_bsp_end:   Optional[int] = None
     points:        List[Tuple[float, float, float]] = field(default_factory=list)
     polygons:      List[Polygon]                    = field(default_factory=list)
     texture_names: List[str]                        = field(default_factory=list)
@@ -190,6 +195,9 @@ class WorldModelMesh:
 class BspWorld:
     version:      int
     world_info:   str
+    obj_pos:      int = 0
+    ren_pos:      int = 0
+    world_model_table_start: int = 0
     world_models:    List[WorldModelMesh] = field(default_factory=list)
     parse_warnings:  List[str] = field(default_factory=list)
 
@@ -209,6 +217,22 @@ class BspWorld:
                     b = pts[vis[(i + 1) % len(vis)]]
                     out.append(((a[0], a[2]), (b[0], b[2]), mi))
         return out
+
+    def model_by_name(self, name: str) -> Optional[WorldModelMesh]:
+        """Return the first BSP world model whose name matches case-insensitively."""
+        key = str(name or "").lower()
+        for model in self.world_models:
+            if model.name.lower() == key:
+                return model
+        return None
+
+    def raw_model_bytes(self, source_dat: bytes, model: WorldModelMesh) -> Optional[bytes]:
+        """Return the original byte record for *model* when parse provenance is available."""
+        if model.raw_start is None or model.raw_end is None:
+            return None
+        if model.raw_start < 0 or model.raw_end < model.raw_start or model.raw_end > len(source_dat):
+            return None
+        return source_dat[model.raw_start:model.raw_end]
 
 
 # --------------------------------------------------------------------------
@@ -554,15 +578,28 @@ def parse(data: bytes) -> BspWorld:
     _walk_world_tree(s)
 
     # WorldModelHeader: int Count + WorldModel[Count]
+    world_model_table_start = s.pos
     world_model_count = s.u32()
-    bsp = BspWorld(version=version, world_info=world_info)
+    bsp = BspWorld(
+        version=version,
+        world_info=world_info,
+        obj_pos=obj_pos,
+        ren_pos=ren_pos,
+        world_model_table_start=world_model_table_start,
+    )
 
     for mi in range(world_model_count):
         rec_start = s.pos
         next_world_item = s.u32()
         s.skip(32)            # padding
+        world_bsp_start = s.pos
         try:
             mesh = _read_world_bsp(s)
+            mesh.raw_start = rec_start
+            mesh.raw_end = next_world_item if 0 < next_world_item <= len(data) else s.pos
+            mesh.next_world_item = next_world_item
+            mesh.world_bsp_start = world_bsp_start
+            mesh.world_bsp_end = s.pos
             bsp.world_models.append(mesh)
         except Exception as e:
             # Best effort — record what we got, but don't bail out: terrain

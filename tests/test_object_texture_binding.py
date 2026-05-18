@@ -1,14 +1,18 @@
 import os
 import sys
+import math
 import unittest
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from view3d.gl_object_models import (
+    _floor_y_override,
     _object_model_filename,
     _object_skin_names,
     _object_is_visible,
+    _object_yaw,
+    _rotation_y,
     _resolve_skin_for_piece,
     _split_skin_names,
 )
@@ -148,6 +152,110 @@ class ObjectTextureBindingTests(unittest.TestCase):
                 appearance_key="ShopkeeperElfFemaleA2",
             ),
             "PeasantF2A.dtx",
+        )
+
+    def test_missing_commoner_model_uses_civilian_preview_model(self):
+        male = FakeObject(
+            "CommonerElfMaleA",
+            Name="CommonerElfMaleA1",
+            Filename="models\\CommonerElfMaleA.abc",
+        )
+        female = FakeObject(
+            "CommonerHumanFemaleA",
+            Name="CommonerHumanFemaleA2",
+            Filename="models\\CommonerHumanFemaleA.abc",
+        )
+        child = FakeObject(
+            "CommonerChildElfChildA",
+            Name="CommonerElfFemaleA4",
+            Filename="models\\CommonerElfFemaleA.abc",
+        )
+
+        self.assertEqual(_object_model_filename(male), "models\\PeasantMale.abc")
+        self.assertEqual(_object_model_filename(female), "models\\PeasantFemale.abc")
+        self.assertEqual(_object_model_filename(child), "models\\PeasantChildGirl.abc")
+
+    def test_move_to_floor_uses_bsp_floor_for_render_y(self):
+        import bsp
+        import numpy as np
+        from mm9_patcher.mm9_patch import World
+        from view3d.abc_loader import load_abc
+
+        repo_root = os.path.dirname(os.path.dirname(__file__))
+        dat_path = os.path.join(repo_root, "mm9_data", "WORLDS", "STURMFORDCITY.DAT")
+        if not os.path.exists(dat_path):
+            self.skipTest(f"missing test level: {dat_path}")
+
+        def mesh_for(filename, bake=True):
+            rel = filename.replace("/", "\\")
+            if rel.lower().startswith("models\\"):
+                rel = rel[7:]
+            model_path = os.path.join(repo_root, "mm9_data", "MODELS", *rel.split("\\"))
+            model = load_abc(model_path, bake_static_bind_pose=bake)
+            if model is None:
+                self.skipTest(f"missing test model: {model_path}")
+
+            class FakeMesh:
+                pass
+
+            tri_positions = []
+            for piece in model.pieces:
+                for tri in piece.triangles:
+                    tri_positions.append([
+                        piece.vertices[ref.vertex_index].pos for ref in tri.refs
+                    ])
+            mesh = FakeMesh()
+            mesh.tri_positions = np.array(tri_positions, dtype=np.float32)
+            return mesh
+
+        world = World.load(dat_path)
+        bsp_world = bsp.parse_path(dat_path)
+
+        self.assertAlmostEqual(
+            _floor_y_override(
+                next(o for o in world.objects if o.get("Name") == "Pew1"),
+                mesh_for("models\\Props\\pewNS.ABC", bake=False),
+                bsp_world=bsp_world,
+            ),
+            7743.4247837,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            _floor_y_override(
+                next(o for o in world.objects if o.get("Name") == "Magi"),
+                mesh_for("models\\PeasantF6.ABC"),
+                bsp_world=bsp_world,
+            ),
+            7764.3303528,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            _floor_y_override(
+                next(o for o in world.objects if o.get("Name") == "Target1"),
+                mesh_for("models\\Props\\Training_Archery1.ABC", bake=False),
+                bsp_world=bsp_world,
+            ),
+            7722.3741169,
+            places=4,
+        )
+
+    def test_object_model_yaw_uses_game_model_basis(self):
+        self.assertAlmostEqual(_rotation_y((0.0, math.pi, 0.0, 0.0)), math.pi)
+        self.assertAlmostEqual(
+            _object_yaw(FakeObject(
+                "Prop",
+                Filename="models\\Props\\Cabinet05NS.ABC",
+                Rotation=(0.0, math.pi, 0.0, 0.0),
+            )),
+            math.pi * 0.5,
+        )
+        self.assertAlmostEqual(
+            _object_yaw(FakeObject(
+                "Prop",
+                Filename="models\\Props\\Chest1.ABC",
+                Rotation=(0.0, 0.0, 0.0, 0.0),
+            )),
+            0.0,
         )
 
     def test_model_skin_beats_generic_body_piece_skin(self):

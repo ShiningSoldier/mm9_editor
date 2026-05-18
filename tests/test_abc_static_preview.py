@@ -35,7 +35,12 @@ class AbcStaticPreviewTests(unittest.TestCase):
         self.assertLess(extent, 2000.0)
 
     def test_weighted_creature_previews_load(self):
-        for name in ("BANSHEE.ABC", "BIGFOOT.ABC", "COW.ABC", "DRAGON.ABC"):
+        for name in ("BANSHEE.ABC", "BIGFOOT.ABC", "COW.ABC", "DRAGON.ABC", "GOBLIN.ABC"):
+            with self.subTest(name=name):
+                self.assert_sane_preview(name)
+
+    def test_one_animation_civilian_previews_are_baked(self):
+        for name in ("PEASANTF1.ABC", "PEASANTM1D.ABC", "PEASANTMS2.ABC"):
             with self.subTest(name=name):
                 self.assert_sane_preview(name)
 

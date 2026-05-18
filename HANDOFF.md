@@ -57,7 +57,7 @@ the install hint. There is no separate editor mode fallback.
 | Path | Purpose |
 |---|---|
 | `mm9_editor.py` | Main Tk application. Owns menus, toolbar, project state, level panel, `View3D`, properties panel, save dialog, placement callbacks, movement/rotation/elevation commit logic, and preset commands. |
-| `project.py` | In-memory project model. `LevelEdit` owns source level data and pending ops. `AddOp`, `MoveOp`, `EditOp`, and `DeleteOp` materialize pending edits and feed the save plan. |
+| `project.py` | In-memory project model. `LevelEdit` owns source level data and pending ops. `AddOp`, `MoveOp`, `EditOp`, `DeleteOp`, and `CloneDoorOp` materialize pending edits and feed the save plan. |
 | `mm9_patcher/mm9_patch.py` | DAT v66 parser/serializer. Trusted core for `World`, `WorldObject`, and `Property`. |
 | `catalog.py` | Builds/loads `catalog.json`, indexing WorldObject classes and model filenames from shipped levels. |
 | `catalog_panel.py` | Left panel listing level objects and launching the Add Object dialog. |
@@ -68,6 +68,14 @@ the install hint. There is no separate editor mode fallback.
 | `diff_panel.py` | Save/commit dialog for patched REZ output and optional RUDE archive entries. |
 | `project_io.py` | `.mm9mod` save/open support for pending operations. |
 | `bsp.py` | BSP parser plus optional floor raycast utility. The viewport uses parsed BSP geometry for rendering and click placement. |
+| `door_links.py` | Read-only matching between `Door`/`RotatingDoor` world objects and same-named physical BSP submodels. |
+| `door_clone.py` | In-memory physical-door clone planner. Produces cloned controller objects plus copied BSP submodel byte records for later DAT serialization. |
+| `door_clone_dialog.py` | Tk dialog used by the editor's Clone Physical Door command. |
+| `door_clone_validation.py` | Save-plan validation for pending physical-door clones. Emits warnings for portal reuse, mismatched controller/BSP data, and terminal BSP tails. |
+| `door_bsp_writer.py` | Minimal BSP-aware DAT writer for appending renamed and translated cloned door submodels during save. |
+| `prefab_inspector.py` | Read-only inspector for converted DEdit prefab DATs. Summarizes contained WorldObjects, BSP model roles, bounds, polygon counts, and parse warnings before any prefab import work mutates levels. |
+| `prefab_import.py` | Static BSP import planner for converted prefab DATs. Produces renamed/transformed BSP submodel clone records without importing WorldObjects or scripts. |
+| `prefab_import_validation.py` | Save-plan validation for static prefab imports. Emits non-blocking warnings for ignored prefab objects, default texture names, duplicate names, physics-role imports, and unconfirmed collision behavior. |
 | `mm9_rezmgr.py` | REZ reader/writer retained for CLI, legacy projects, and advanced tooling. |
 | `game_resources.py` | REZ-backed resource provider for game-style virtual paths. Reads from detected `data/*.REZ` archives and materializes cached asset trees for existing loaders. |
 
@@ -150,6 +158,14 @@ Orbit mode is the editing mode:
 
 - Click object handle/model: select.
 - Click BSP while placing: create the pending object at the exact hit point.
+- `Tools -> Clone Physical Door...` opens a source-door picker, then the next
+  BSP click places the cloned physical door at that point.
+- `Tools -> Inspect Prefab DAT...` opens a converted prefab `.dat` and shows a
+  read-only report of its objects, BSP model roles, bounds, texture counts, and
+  warnings.
+- `Tools -> Import Static Prefab BSP...` opens a converted prefab `.dat`, asks
+  for a new BSP model name, then the next BSP click places a static prefab
+  import preview.
 - Drag selected object: move X/Z while preserving current Y.
 - Arrow keys: nudge selected object X/Z relative to camera.
 - `PageUp` / `PageDown`, or `E` / `Q`: adjust selected object height.
@@ -178,9 +194,14 @@ Fly mode is for navigation:
 `mm9_editor.py` maps these to project operations:
 
 - New objects become `AddOp(template, overrides={"Pos": [...]})`.
+- Physical door clones become `CloneDoorOp(source_name, new_name,
+  target_pos)`. Placement is one-shot because clone names must stay unique.
 - Existing object movement/elevation coalesces into `MoveOp.new_pos`.
 - Existing yaw rotation coalesces into `MoveOp.new_rot`.
 - Pending added object movement/rotation updates `AddOp.overrides`.
+- Pending cloned door movement/elevation retargets the whole `CloneDoorOp`.
+  Moving either leaf of a paired pending clone preserves the pair spacing.
+- Deleting either pending leaf removes the pending `CloneDoorOp`.
 - Property panel edits use `EditOp` for existing objects and override updates
   for pending added objects.
 
@@ -378,6 +399,153 @@ Useful editor improvements for this workflow:
   trigger volume.
 - A custom-level packaging helper that records the new DAT entry name expected
   by the game, for example `WORLDS/MYDUNGEON`.
+
+### Doors
+
+Door geometry is usually not an ABC prop. In MM9 levels, many visible doors
+are BSP submodels whose names match `Door` or `RotatingDoor` world objects.
+The world object is the controller/logic record; the same-named BSP submodel is
+the visible and colliding geometry that the engine moves. For example, in
+`STURMFORDCITY.DAT` there is both a `Door` object named `Door32` and a BSP
+submodel named `Door32`; likewise `ChurchdoorR` is a `RotatingDoor` object and
+a BSP submodel.
+
+`Door` objects appear to be linear/sliding doors. Their movement is governed by
+fields such as `MoveDir`, `MoveDist`, `Speed`, `ClosingSpeed`, and the usual
+sound/lock fields. `RotatingDoor` objects are hinged doors, using
+`RotationPoint` and `RotationAngles` instead of a linear move vector. Paired
+doors use `DoubleDoorName`, such as `ChurchdoorR` <-> `ChurchdoorL`.
+
+Openable vs. non-openable behavior is mostly data-driven. `ChurchdoorR` is
+openable because it is `Locked=0`, has `RotationAngles=(0, -90, 0)`, and has
+door open/close sounds. `Door32` only knocks because it is `Locked=1`, has
+`JiggleSound=Sounds\Door\knock.wav`, has empty open/close sounds, and has no
+useful movement (`MoveDist=0`). Scripts can still trigger doors with commands
+such as `Trigger hDoor Use`, `Unlock`, or `Open` (see `BASEDOOR.INC` for AI
+door handling), but these two Sturmford examples are explained by their DAT
+properties alone.
+
+Physical-door clone implementation status:
+
+- `bsp.py` preserves source byte ranges for parsed world-model records, so
+  door submodels such as `Door32`, `ChurchdoorR`, and `ChurchdoorL` can be
+  copied from the original DAT bytes.
+- `door_links.py` links door controller objects to same-named BSP submodels
+  and resolves paired rotating doors through `DoubleDoorName`.
+- `door_clone.py` builds an in-memory clone plan from an existing physical
+  door. It deep-copies one or two controller objects, translates `Pos` and
+  `RotationPoint`, updates paired `DoubleDoorName` values, checks name
+  collisions, and carries copied BSP source records with source/new names.
+- `project.py` has `CloneDoorOp`, materialized object support, undo/redo
+  compatibility through the existing op stack, pending-object index mapping,
+  and save-plan `door_clones` metadata. `project_io.py` serializes this op in
+  `.mm9mod` files.
+- `mm9_editor.py` exposes the workflow through `Tools -> Clone Physical
+  Door...` and a toolbar `Clone Door...` button. The dialog lists existing
+  physical door links in the active level and suggests a collision-free clone
+  name. After the user confirms, the next BSP click creates the pending clone.
+- The level object list displays pending clone objects. Pending clone objects
+  can be selected, dragged/elevated, and deleted before save.
+- Pending clone preview is BSP-aware. `LevelEdit.preview_bsp()` appends
+  translated/rotated clones to the viewport BSP so the physical door appears
+  in the editor before save/reopen. `View3D.refresh()` rebuilds the BSP draw
+  batch when pending clone ops change.
+- Pending clone transform edits refresh the preview BSP immediately. This is
+  required after drag, keyboard nudge/elevate/rotate, or Properties-panel
+  `Pos`/`Rotation` edits; otherwise the billboard and physical BSP can drift or
+  snap back to the op's previous transform.
+- The clone dialog updates the suggested new name when the source door changes.
+  Numeric and side-suffix paired doors use pair-friendly names, for example
+  `MonsterDoor1` -> `MonsterDoorClone1`/`MonsterDoorClone2` and
+  `StoreDoorLeft` -> `StoreDoorCloneLeft`/`StoreDoorCloneRight`.
+- The clone dialog also shows source details: door class, paired leaf, portal
+  name, and polygon count. This makes it easier to avoid cloning a control door
+  or unexpected portal-linked door.
+- Save preview includes physical door clone counts plus validation warnings.
+  The manifest records `door_clones` and `validation_warnings` per DAT write.
+- Current warnings include reused `PortalName`, incomplete clone/controller
+  data, BSP/controller name mismatches, and terminal BSP-tail handling.
+- `door_bsp_writer.py` implements the current save path for physical-door
+  clones. It appends copied world-model records before the WorldObject section,
+  increments the world-model count, patches `NextWorldItem`, renames the BSP
+  submodels, transforms `min_box`, `max_box`, `translation`, and point
+  positions by the controller translation/yaw, transforms point normals, and
+  transforms surface UV projection (`uv_o`, `uv_p`, `uv_q`) so textures remain
+  aligned after moved/rotated clones. It then recomputes header object/render
+  offsets.
+- Some DATs, confirmed in `BOOTCAMP.DAT`, have a terminal/dummy world-model
+  record or payload after the last parsed model (`PhysicsBSP`) and before the
+  WorldObject section. Cloned door records must be inserted before this tail,
+  not simply appended at `ObjectDataPos`, and the shifted tail's first
+  `NextWorldItem` must be updated to the new object section. Skipping this tail
+  makes the editor parse the level but can crash the game loader.
+- Current limitation: this writer is intentionally narrow. It supports cloned
+  physical door submodels appended to the BSP list; it is not a general-purpose
+  BSP editor for arbitrary new geometry, deleting submodels, or editing the
+  original BSP tree.
+
+### Converted Prefabs
+
+Converted DEdit prefab `.dat` files are valid DAT v66 mini-worlds, but they do
+not all have the same shape:
+
+- `PreFabs/Doors/A1_Door.dat` contains one `RotatingDoor` object named
+  `Door1`, plus BSP models named `Door1`, `PhysicsBSP`, and `VisBSP`.
+  The same-name `Door1` BSP model is controller geometry, similar to physical
+  doors in shipped levels.
+- `PreFabs/Fences&Gates/OldWoodFence1.dat` contains no WorldObjects. Its
+  geometry is only in system-named BSP records: `PhysicsBSP` and `VisBSP`, each
+  with 345 polygons and matching bounds.
+
+`prefab_inspector.py` is the Stage 1 read-only layer for this work. It parses a
+converted prefab DAT, classifies BSP model roles (`geometry`,
+`controller_geometry`, `physics`, `visibility`, `skybox`), reports object
+classes, bounds, polygon/point/texture counts, and carries BSP parse warnings.
+The editor exposes it through `Tools -> Inspect Prefab DAT...`.
+
+Stage 2 backend import is in place in `prefab_import.py` and
+`project.ImportPrefabBspOp`:
+
+- It imports static BSP records only. It does not yet import prefab
+  WorldObjects, scripts, doors, elevators, triggers, or traps.
+- By default it imports `visibility` records when a prefab has them; otherwise
+  it imports normal `geometry`/`controller_geometry` records. It deliberately
+  skips `physics` records by default because many converted prefabs, including
+  `OldWoodFence1.dat`, contain duplicate-looking `PhysicsBSP` and `VisBSP`
+  geometry. Importing both as visible submodels would likely z-fight.
+- Imported records are renamed with a collision-free target model name, then
+  translated/rotated using the same raw BSP transform machinery as physical
+  door clones. Surface UV projection vectors and point normals are transformed
+  too.
+- `LevelEdit.preview_bsp()` includes pending prefab imports, and saving writes
+  them through the generalized `door_bsp_writer.serialize_world_with_bsp_clones`
+  path. Save preview and `manifest.json` record `prefab_imports` and imported
+  BSP model counts.
+- Stage 3 placement UI is in place through `Tools -> Import Static Prefab
+  BSP...` and the toolbar `Import Prefab...` button. The command validates the
+  converted prefab, asks for a target BSP model name, enters one-shot place
+  mode, and creates an `ImportPrefabBspOp` at the clicked BSP surface. The
+  viewport refreshes through `LevelEdit.preview_bsp()` so the imported static
+  geometry appears before save.
+- Static prefab imports now create editor-only helper objects while pending.
+  Helpers use type `EditorPrefabBspImport`, appear in the object list and
+  Properties panel, and render as selectable billboards. They are produced by
+  `LevelEdit.editor_materialize()` and are intentionally not returned by
+  `LevelEdit.materialize()`, so they are not serialized into the game DAT.
+- Pending prefab helpers can be selected, dragged/elevated, rotated with
+  `[`/`]`, edited through Properties `Pos`/`Rotation`, deleted, and undone.
+  These edits mutate `ImportPrefabBspOp.target_pos` / `target_yaw` and rebuild
+  the BSP preview. Once saved, the imported BSP is real level geometry, but it
+  no longer has an editor helper until a later stage adds persistent metadata.
+- Stage 4 validation is in place through `prefab_import_validation.py`.
+  Save Preview and `manifest.json` now report non-blocking warnings when a
+  static import ignores prefab WorldObjects, imports `PhysicsBSP` polygon data
+  as a normal visible submodel, uses source models with `Default` texture
+  names, creates duplicate/colliding BSP names, has empty/no-polygon source
+  models, or imports `VisBSP`. Current game tests show that the same-named
+  `WorldObject` makes the imported fence render, but collision is still absent;
+  collision probably requires merging/augmenting the level's global
+  `PhysicsBSP`, not merely adding a visible submodel.
 
 ### REZ Archives
 
@@ -626,31 +794,28 @@ distinct `Skin` values. Resolving them against MM9's `MODELS.REZ`
 The level references no custom `ScriptName` values, so no
 `SCRIPTS.REZ` patching is needed for the level to load.
 
-### Goblin ABC Preview Limitation
+### Goblin ABC Preview Notes
 
 `Goblin.abc` (`MODELS/GOBLIN`, 985,190 bytes, 17 parent animations,
 68 nodes, 3 pieces, `nVerts = 602`, `nVertWeights = 1863`) is a valid
-LithTech ABC, but the editor's static-pose preview renders it as an
-imploded shard cluster. Cause: `view3d/abc_loader.py` walks vertex
-records at a fixed 48-byte stride that assumes single-weight skinning.
-LoMM's Goblin has ~3 weights per vertex on average, so the stride
-desyncs after the first multi-weight vertex and subsequent
-"bone_index" reads return garbage values. `_bake_with_node_matrices()`
-short-circuits the moment any vertex's bone index is missing from the
-node pose dict, so no baking happens and vertices stay in their
-bone-local coordinates.
+LithTech ABC. LoMM's Goblin uses true multi-weight vertex records, so
+the editor must not walk its vertex array at the older fixed 48-byte
+stride. The observed vertex record layout is:
 
-Shipped MM9 characters parse cleanly because their
-`nVertWeights / nVerts` ratio is between 1.05 and 1.15 (Bjarni,
-EvilSorcerer, Ghoul, Dagrell, Cow): the fixed-stride read happens
-to align well enough for the static bake to succeed.
+- `uint16 n_weights`
+- `uint16 weight_set_index_or_flags`
+- `n_weights` entries of `uint32 bone_index`, `float x`, `float y`,
+  `float z`, `float weight`
+- `float x`, `float y`, `float z` saved model-space vertex position
+- `float nx`, `float ny`, `float nz` saved model-space normal
 
-The MM9 game executable has the engine's full weighted-skinning
-pipeline and renders the Goblin correctly at runtime — the imploded
-appearance is a preview-only artifact of the editor's conservative
-ABC parser. A fix would change `_parse_lod_geometry` to consume
-`4 + 8 * n_weights + 12 + 28 = 44 + 8 * n_weights` bytes per vertex
-and use the first weight's bone for the static bake.
+Total record size is therefore `28 + 20 * n_weights`; single-weight
+records remain 48 bytes. For static editor previews, multi-weight
+characters should use the saved model-space position and normal instead
+of reconstructing bind pose from the weight list. The weight list is
+still useful for future animated/skinned preview work, but reconstructing
+from the current node matrices is slightly wrong on Goblin and visibly
+flattens details such as the head.
 
 ### Level Connectivity
 
@@ -713,6 +878,5 @@ across LoMM levels.
  - Levels are mirrored between the editor and the game. Example: added an ExitTrigger
    to the left side of the peasant in the BOOTCAMP, but in the game it appears to the right side
  - DragonKing in DRAGONSTADIUM is rendered without textures
- - Children models either not rendered at all or appear imploded.
-   Example: DRANGHEIM, CommonerChildElfChildA
- - STURMFORTCITY level: most NPCs aren't rendered at all, other are imploded
+ - In order to see the changes in the game, a new game hass to be started. It looks like the
+   saved game files store the level data state. Requires investigation.

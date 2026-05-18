@@ -54,8 +54,17 @@ class SaveDialog(tk.Toplevel):
                 f"=== {self._source_label(d)}  →  {d.output_path} ===\n")
             dat_text.insert("end",
                 f"  objects after save: {d.stats()['objects_after']}\n")
+            if d.stats().get("door_clones", 0):
+                dat_text.insert("end",
+                    f"  physical door clones: {d.stats()['door_clones']}\n")
+            if d.stats().get("prefab_imports", 0):
+                dat_text.insert("end",
+                    f"  prefab BSP imports: {d.stats()['prefab_imports']} "
+                    f"({d.stats()['prefab_bsp_models']} BSP model(s))\n")
             for line in d.ops_summary:
                 dat_text.insert("end", f"  {line}\n")
+            for warning in d.validation_warnings:
+                dat_text.insert("end", f"  [warn] {warning}\n")
             dat_text.insert("end", "\n")
         archive_only = [
             p for p in plan.archive_patches

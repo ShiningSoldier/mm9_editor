@@ -18,6 +18,8 @@ Format version history
 ----------------------
 1  initial (this implementation)
 2  REZ-backed workflow; backup_path is persisted when present
+3  CloneDoorOp pending operations
+4  ImportPrefabBspOp pending operations
 """
 
 from __future__ import annotations
@@ -123,6 +125,24 @@ def op_to_dict(op: Any) -> Dict[str, Any]:
             "target_index": op.target_index,
             "overrides":    _overrides_to_json(op.overrides),
         }
+    if isinstance(op, P.CloneDoorOp):
+        return {
+            "op":           "clone_door",
+            "source_name":  op.source_name,
+            "new_name":     op.new_name,
+            "target_pos":   list(op.target_pos) if op.target_pos is not None else None,
+            "target_yaw":   float(op.target_yaw),
+            "include_pair": bool(op.include_pair),
+        }
+    if isinstance(op, P.ImportPrefabBspOp):
+        return {
+            "op":            "import_prefab_bsp",
+            "prefab_path":   op.prefab_path,
+            "new_name":      op.new_name,
+            "target_pos":    list(op.target_pos),
+            "target_yaw":    float(op.target_yaw),
+            "include_roles": list(op.include_roles) if op.include_roles is not None else None,
+        }
     raise TypeError(f"Unknown op type: {type(op)}")
 
 
@@ -159,6 +179,24 @@ def dict_to_op(d: Dict[str, Any]) -> Any:
         return P.EditOp(
             target_index = int(d["target_index"]),
             overrides    = d.get("overrides", {}),
+        )
+    if kind == "clone_door":
+        target_pos = d.get("target_pos")
+        return P.CloneDoorOp(
+            source_name  = str(d["source_name"]),
+            new_name     = str(d["new_name"]),
+            target_pos   = tuple(float(x) for x in target_pos) if target_pos is not None else None,
+            target_yaw   = float(d.get("target_yaw", 0.0)),
+            include_pair = bool(d.get("include_pair", True)),
+        )
+    if kind == "import_prefab_bsp":
+        roles = d.get("include_roles")
+        return P.ImportPrefabBspOp(
+            prefab_path   = str(d["prefab_path"]),
+            new_name      = str(d["new_name"]),
+            target_pos    = tuple(float(x) for x in d.get("target_pos", (0.0, 0.0, 0.0))),
+            target_yaw    = float(d.get("target_yaw", 0.0)),
+            include_roles = tuple(str(role) for role in roles) if roles is not None else None,
         )
     raise ValueError(f"Unknown op kind: {kind!r}")
 
@@ -198,8 +236,8 @@ def dict_to_leveledit(d: Dict[str, Any]) -> P.LevelEdit:
 # Project save / load
 # ─────────────────────────────────────────────────────────────────────────────
 
-FORMAT_VERSION = 2
-SUPPORTED_FORMAT_VERSIONS = {1, 2}
+FORMAT_VERSION = 4
+SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4}
 
 
 def project_to_json(project: P.Project, path: str) -> None:

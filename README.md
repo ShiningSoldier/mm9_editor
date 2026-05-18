@@ -153,6 +153,9 @@ the patched archives in the game `data` folder.
 containing pending operations. **File -> Open Project...** (`Ctrl+Shift+O`)
 reloads the source REZ entries and reapplies those operations.
 
+## Changes in the game
+Start a new game to see the changes - currently they're not displayed in previously saved games.
+
 ## Object Rendering
 
 The view renders BSP geometry with DTX textures when `TEXTURES.REZ` is available.
@@ -273,57 +276,11 @@ Property `code` values match the LithTech v66 DAT type codes:
 
 #### Experimental: porting LoMM enemies to MM9
 
-Pass `--experimental` to enable the `experimental_convert` block in
-the YAML. Each rule there clones an MM9 host class instance (which
+Each rule there clones an MM9 host class instance (which
 brings MM9-compatible stats, AI, sound table, and animation state
-machine) and forces its `Filename` (and optionally `Skin`) to point at
-the LoMM model you want it to look like. The MM9 game engine renders
-whatever ABC the `Filename` points to literally, while the host class
-governs behaviour - so you get, for example, a goblin-shaped LizardOrc
-that fights with LizardOrc stats.
-
-```sh
-python lomm_to_mm9.py CHATEAUESCAPE.DAT --experimental \
-    --lomm-data lomm_data
-```
-
-The default rule set covers Orc, Goblin, LizardMan, LizardWarrior,
+machine). The default rule set covers Orc, Goblin, LizardMan, LizardWarrior,
 Dwarf, Soldier, Mummy, Wight, EvilEye, and EvilEyeTerror. Add your own
-rules under `experimental_convert:` in the YAML; each rule may use:
-
-- `template` and `new_type` - which MM9 host class to clone.
-- `preserve` - source fields to copy onto the clone.
-- `overrides` - update existing template fields with absolute values
-  (the prop code is auto-detected from the template; if the field
-  isn't on the template it's added as a string).
-- `add_props` - add new fields not on the template, with explicit
-  `code` and `value`.
-
-#### Asset audit
-
-After conversion, the script walks every remaining object's
-`Filename` (`.abc`/`.lta`/`.ltb`) and `Skin` (`.dtx`) and reports a
-three-way classification:
-
-- **in MM9** - resolves inside `mm9_data/MODELS.REZ` /
-  `mm9_data/SKINS.REZ`. Nothing to do.
-- **in LoMM only** - found inside the `--lomm-data` folder
-  (default: `lomm_data/`) but not in the MM9 archives. These are the
-  files you need to add to MM9's REZ archives before the level
-  renders correctly.
-- **missing** - not found in MM9 or in `lomm_data`. Either provide
-  the file or substitute a different model/skin in the YAML.
-
-The audit prints the punch list under the conversion summary every
-run; pass `--dry-run` to preview without writing the output DAT.
-
-The editor's static-pose ABC preview assumes single-weight skinning,
-so heavily multi-weighted LoMM characters such as `Goblin.abc` render
-as imploded shards in the viewport even though the game executable
-displays them correctly at runtime. See `HANDOFF.md` for details.
- Orc, Goblin, LizardMan, LizardWarrior,
-Dwarf, Soldier, Mummy, Wight, EvilEye, and EvilEyeTerror. Add your own
-rules under `experimental_convert:` in the YAML; each rule may use:
+rules in the YAML; each rule may use:
 
 - `template` and `new_type` - which MM9 host class to clone.
 - `preserve` - source fields to copy onto the clone.

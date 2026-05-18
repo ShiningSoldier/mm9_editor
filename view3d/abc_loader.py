@@ -45,11 +45,15 @@ Pieces block layout  (this module only)
                     float32  V  (texture coord)
                     uint16   vertex_index
             uint32          nVerts
-            nVerts_lod × 48 bytes  vertex data:
-                uint32  n_weights  (always 1 in known rigid files)
-                uint32  bone_index (stored 1-based in known files)
-                float32 x, y, z    (position in model space)
-                float32 × 7        (normals / tangents / unknown — parsed but not used here)
+            nVerts_lod × variable-length vertex data:
+                uint16  n_weights
+                uint16  weight_index / flags
+                n_weights ×:
+                    uint32  bone_index
+                    float32 x, y, z    (position for this weighted copy)
+                    float32 weight
+                float32 x, y, z    (saved model-space vertex position)
+                float32 nx, ny, nz  (saved model-space normal)
         [0-47 trailing bytes before next piece in some files]
 
 IMPORTANT LIMITATIONS
@@ -99,10 +103,17 @@ class AbcVertex:
     Single vertex from an ABC piece.
     ``bone_index`` is the 0-based node index.  Known rigid prop files store
     this as 1-based; top-level animated character files store it as 0-based.
-    ``pos`` is (x, y, z) in model space.
+    ``pos`` is the currently selected draw position. For ordinary props this is
+    the first bone-local weight position; for static character previews it can
+    be replaced by ``saved_pos``. ``weights`` preserve the bone-local source
+    records for future animation/skinning work.
     """
     bone_index: int
     pos:        Tuple[float, float, float]   # (x, y, z)
+    weights:    Tuple[Tuple[int, Tuple[float, float, float], float], ...] = ()
+    normal:     Optional[Tuple[float, float, float]] = None
+    saved_pos:  Optional[Tuple[float, float, float]] = None
+    saved_normal: Optional[Tuple[float, float, float]] = None
 
 
 @dataclass
@@ -463,7 +474,7 @@ def _bake_with_node_matrices(
     pieces: List[AbcPiece],
     matrices_by_node: dict,
 ) -> Optional[List[AbcPiece]]:
-    """Return pieces whose single-bone vertices are transformed by node matrices."""
+    """Return pieces whose bone-local vertices are transformed by node matrices."""
     if not pieces or not matrices_by_node:
         return None
 
@@ -471,13 +482,33 @@ def _bake_with_node_matrices(
     for piece in pieces:
         verts: List[AbcVertex] = []
         for vert in piece.vertices:
-            matrix = matrices_by_node.get(vert.bone_index)
-            if matrix is None:
-                return None
-            verts.append(AbcVertex(
-                bone_index=vert.bone_index,
-                pos=_mat_transform_point_colvec(matrix, vert.pos),
-            ))
+            if vert.weights:
+                total = 0.0
+                acc = [0.0, 0.0, 0.0]
+                for bone_index, pos, weight in vert.weights:
+                    matrix = matrices_by_node.get(bone_index)
+                    if matrix is None:
+                        return None
+                    x, y, z = _mat_transform_point_colvec(matrix, pos)
+                    acc[0] += x * weight
+                    acc[1] += y * weight
+                    acc[2] += z * weight
+                    total += weight
+                if abs(total) <= 1e-6:
+                    return None
+                baked_pos = (acc[0] / total, acc[1] / total, acc[2] / total)
+                verts.append(AbcVertex(
+                    bone_index=vert.bone_index,
+                    pos=baked_pos,
+                ))
+            else:
+                matrix = matrices_by_node.get(vert.bone_index)
+                if matrix is None:
+                    return None
+                verts.append(AbcVertex(
+                    bone_index=vert.bone_index,
+                    pos=_mat_transform_point_colvec(matrix, vert.pos),
+                ))
         out.append(AbcPiece(
             name=piece.name,
             vertices=verts,
@@ -493,6 +524,44 @@ def _bake_bind_pose(pieces: List[AbcPiece], nodes: List[AbcNode]) -> Optional[Li
     if not pieces or not nodes:
         return None
     return _bake_with_node_matrices(pieces, {node.index: node.matrix for node in nodes})
+
+
+def _pieces_have_saved_model_positions(pieces: List[AbcPiece]) -> bool:
+    return bool(pieces) and all(
+        vert.saved_pos is not None
+        for piece in pieces
+        for vert in piece.vertices
+    )
+
+
+def _pieces_have_multi_weight_vertices(pieces: List[AbcPiece]) -> bool:
+    return any(
+        len(vert.weights) > 1
+        for piece in pieces
+        for vert in piece.vertices
+    )
+
+
+def _use_saved_model_positions(pieces: List[AbcPiece]) -> List[AbcPiece]:
+    out: List[AbcPiece] = []
+    for piece in pieces:
+        verts = []
+        for vert in piece.vertices:
+            verts.append(AbcVertex(
+                bone_index=vert.bone_index,
+                pos=vert.saved_pos if vert.saved_pos is not None else vert.pos,
+                weights=vert.weights,
+                normal=vert.saved_normal,
+                saved_pos=vert.saved_pos,
+                saved_normal=vert.saved_normal,
+            ))
+        out.append(AbcPiece(
+            name=piece.name,
+            vertices=verts,
+            triangles=piece.triangles,
+            texture_name=piece.texture_name,
+        ))
+    return out
 
 
 def _parse_old_static_animation_pose(
@@ -602,15 +671,16 @@ def _should_bake_static_bind_pose(
     """
     True for character/creature-style ABCs, false for ordinary props.
 
-    Props commonly have 1 parent animation and a tiny node tree.  NPCs and
-    creatures have multiple parent animations and many nodes; baking those
-    vertices gives a useful frozen bind-pose preview without entering the much
-    larger animation/skinning problem.
+    Props commonly have a tiny node tree.  NPCs and creatures have many nodes;
+    some static civilian variants only advertise one parent animation but still
+    store their vertices in bone-local coordinates.  Baking those vertices gives
+    a useful frozen preview without entering the larger animation/skinning
+    problem.
     """
     return (
         _is_top_level_model_path(source_path)
-        and allocs.get('nParentAnims', 0) > 1
         and allocs.get('nNodes', 0) > 4
+        and allocs.get('nPieces', 0) > 0
         and len(nodes) == allocs.get('nNodes', 0)
     )
 
@@ -636,7 +706,6 @@ def _looks_like_cache_fingerprint(value: str) -> bool:
 def _allow_relaxed_static_preview(allocs: dict, source_path: str = "") -> bool:
     return (
         _is_top_level_model_path(source_path)
-        and allocs.get('nParentAnims', 0) > 1
         and allocs.get('nNodes', 0) > 4
         and allocs.get('nPieces', 0) > 0
     )
@@ -806,6 +875,51 @@ def _triangle_refs_in_range(piece: AbcPiece) -> bool:
     return True
 
 
+def _vertex_weight_count(pdata: bytes, off: int) -> Optional[int]:
+    if off + 4 > len(pdata):
+        return None
+    count = struct.unpack_from('<H', pdata, off)[0]
+    # The upper 16 bits are not part of the count.  In weighted character
+    # meshes they often carry a per-vertex weight-set index.
+    if count <= 0 or count > 64:
+        return None
+    return count
+
+
+def _vertex_record_size(pdata: bytes, off: int) -> Optional[int]:
+    n_weights = _vertex_weight_count(pdata, off)
+    if n_weights is None:
+        return None
+    # Single-weight records are 48 bytes, matching the older rigid parser:
+    # 4-byte header + one 20-byte weighted copy + 24 bytes of normal/tangent
+    # data.  LoMM's Goblin.abc uses 2-4 weighted copies on many vertices.
+    return 28 + 20 * n_weights
+
+
+def _vertex_records_end(
+    pdata: bytes,
+    vert_start: int,
+    vert_count: int,
+    limit: Optional[int] = None,
+) -> Optional[int]:
+    end_limit = len(pdata) if limit is None else min(limit, len(pdata))
+    off = vert_start
+    for _ in range(vert_count):
+        rec_size = _vertex_record_size(pdata, off)
+        if rec_size is None:
+            return None
+        off += rec_size
+        if off > end_limit:
+            return None
+    return off
+
+
+def _normalise_bone_index(bone_raw: int, bone_index_base: int, n_nodes: int) -> int:
+    if 0 <= bone_raw - bone_index_base < max(n_nodes, 1):
+        return bone_raw - bone_index_base
+    return max(0, bone_raw - 1)
+
+
 def _parse_piece_lods(
     pdata: bytes,
     piece_start: int,
@@ -859,8 +973,13 @@ def _parse_piece_lods(
         if vert_count <= 0 or vert_count > max_verts:
             return None
 
-        lod_data_end = vert_start + vert_count * 48
-        if lod_data_end > piece_end:
+        lod_data_end = _vertex_records_end(
+            pdata,
+            vert_start=vert_start,
+            vert_count=vert_count,
+            limit=piece_end,
+        )
+        if lod_data_end is None:
             return None
 
         trailing = 0
@@ -941,7 +1060,7 @@ def _lod_header_score(
     vert_count = struct.unpack_from('<I', pdata, vert_count_pos)[0]
     if vert_count <= 0 or vert_count > max_verts:
         return None
-    if vert_count_pos + 4 + vert_count * 48 > n:
+    if _vertex_records_end(pdata, vert_count_pos + 4, vert_count) is None:
         return None
 
     ok = 0
@@ -991,17 +1110,34 @@ def _parse_lod_geometry(
         triangles.append(AbcTriangle(refs=tuple(refs)))  # type: ignore[arg-type]
 
     vertices: List[AbcVertex] = []
-    for v_idx in range(vert_count):
-        vbase = vert_start + v_idx * 48
-        if vbase + 48 > n:
+    vbase = vert_start
+    for _v_idx in range(vert_count):
+        n_weights = _vertex_weight_count(pdata, vbase)
+        rec_size = _vertex_record_size(pdata, vbase)
+        if n_weights is None or rec_size is None or vbase + rec_size > n:
             break
-        bone_raw = struct.unpack_from('<I', pdata, vbase + 4)[0]
-        if 0 <= bone_raw - bone_index_base < max(n_nodes, 1):
-            bone_idx = bone_raw - bone_index_base
-        else:
-            bone_idx = max(0, bone_raw - 1)
+        weights = []
+        for w_idx in range(n_weights):
+            wbase = vbase + 4 + w_idx * 20
+            bone_raw = struct.unpack_from('<I', pdata, wbase)[0]
+            bone_idx = _normalise_bone_index(bone_raw, bone_index_base, n_nodes)
+            wx, wy, wz, weight = struct.unpack_from('<ffff', pdata, wbase + 4)
+            weights.append((bone_idx, (wx, wy, wz), weight))
+        bone_idx = weights[0][0]
         x, y, z = struct.unpack_from('<fff', pdata, vbase + 8)
-        vertices.append(AbcVertex(bone_index=bone_idx, pos=(x, y, z)))
+        tail_start = vbase + 4 + n_weights * 20
+        sx, sy, sz = struct.unpack_from('<fff', pdata, tail_start)
+        nx, ny, nz = struct.unpack_from('<fff', pdata, tail_start + 12)
+        normal_len_sq = nx * nx + ny * ny + nz * nz
+        saved_normal = (nx, ny, nz) if normal_len_sq > 1.0e-12 else None
+        vertices.append(AbcVertex(
+            bone_index=bone_idx,
+            pos=(x, y, z),
+            weights=tuple(weights),
+            saved_pos=(sx, sy, sz),
+            saved_normal=saved_normal,
+        ))
+        vbase += rec_size
 
     return AbcPiece(name=piece_name, vertices=vertices, triangles=triangles)
 
@@ -1061,12 +1197,12 @@ def load_abc(path: str, bake_static_bind_pose: bool = False) -> Optional[AbcMode
     pds, pde = block_map['Pieces']
     pdata = raw[pds:pde]
 
-    # Rigid prop payloads observed so far store bone indices as 1-based
-    # values. Animated top-level characters/NPCs store the node index directly;
-    # subtracting one assigns every vertex to the previous bone and collapses
-    # the static skeleton preview into a tight shard cluster.
+    # Rigid prop payloads observed so far store bone indices as 1-based values.
+    # Top-level character/NPC meshes store the node index directly, including
+    # several one-animation civilian variants; subtracting one assigns every
+    # vertex to the previous bone and collapses the static preview into shards.
     bone_index_base = 0 if (
-        allocs.get('nParentAnims', 0) > 1 and allocs.get('nNodes', 0) > 4
+        _is_top_level_model_path(path) and allocs.get('nNodes', 0) > 4
     ) else 1
 
     pieces = _parse_pieces(
@@ -1095,17 +1231,24 @@ def load_abc(path: str, bake_static_bind_pose: bool = False) -> Optional[AbcMode
 
     baked_bind_pose = False
     if bake_static_bind_pose and _should_bake_static_bind_pose(allocs, nodes, path):
-        baked = None
-        if 'Animation' in block_map:
-            ads, ade = block_map['Animation']
-            pose = _parse_old_static_animation_pose(raw[ads:ade], nodes)
-            if pose is not None:
-                baked = _bake_with_node_matrices(pieces, pose)
-        if baked is None:
-            baked = _bake_bind_pose(pieces, nodes)
-        if baked is not None:
-            pieces = baked
+        if (
+            _pieces_have_multi_weight_vertices(pieces)
+            and _pieces_have_saved_model_positions(pieces)
+        ):
+            pieces = _use_saved_model_positions(pieces)
             baked_bind_pose = True
+        else:
+            baked = None
+            if 'Animation' in block_map:
+                ads, ade = block_map['Animation']
+                pose = _parse_old_static_animation_pose(raw[ads:ade], nodes)
+                if pose is not None:
+                    baked = _bake_with_node_matrices(pieces, pose)
+            if baked is None:
+                baked = _bake_bind_pose(pieces, nodes)
+            if baked is not None:
+                pieces = baked
+                baked_bind_pose = True
 
     import os
     model_name = os.path.splitext(os.path.basename(path))[0]
@@ -1185,14 +1328,21 @@ def upload_abc_model(
 
             e1 = pts[1] - pts[0]
             e2 = pts[2] - pts[0]
-            n_vec = np.cross(e1, e2)
-            n_len = float(np.linalg.norm(n_vec))
-            if n_len < _AREA_EPS:
+            face_normal = np.cross(e1, e2)
+            face_normal_len = float(np.linalg.norm(face_normal))
+            if face_normal_len < _AREA_EPS:
                 continue  # degenerate triangle
-            n_unit = (n_vec / n_len).astype(np.float32)
+            face_normal_unit = (face_normal / face_normal_len).astype(np.float32)
 
             for k, ref in enumerate(refs):
                 p = pts[k].astype(np.float32)
+                v_normal = verts[idxs[k]].normal
+                if v_normal is not None:
+                    n_arr = np.array(v_normal, dtype=np.float32)
+                    n_len = float(np.linalg.norm(n_arr))
+                    n_unit = n_arr / n_len if n_len >= _AREA_EPS else face_normal_unit
+                else:
+                    n_unit = face_normal_unit
                 vert_rows.append([
                     p[0], p[1], p[2],
                     n_unit[0], n_unit[1], n_unit[2],

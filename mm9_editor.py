@@ -49,6 +49,10 @@ import autodetect
 import mm9_patch as patcher
 import project as P
 import project_io
+import door_clone
+import door_links
+import prefab_inspector
+import prefab_import
 from catalog import build_catalog_from_rez, load_catalog
 from preset_manager import PresetStore
 
@@ -63,17 +67,17 @@ def _import_gui():
     """Import all the GUI-dependent modules. Called only after config
     validation passes, so console errors don't get masked by missing-Tk."""
     global tk, CatalogPanel, PropertiesPanel, SaveDialog
-    global filedialog, messagebox, ttk
+    global filedialog, messagebox, simpledialog, ttk
     global EditPresetDialog, ManagePresetsDialog
     global View3D, OPENGL_AVAILABLE, _view3d_missing
     import tkinter as _tk
-    from tkinter import filedialog as _fd, messagebox as _mb, ttk as _ttk
+    from tkinter import filedialog as _fd, messagebox as _mb, simpledialog as _sd, ttk as _ttk
     from catalog_panel import CatalogPanel as _CP
     from properties_panel import PropertiesPanel as _PP
     from diff_panel import SaveDialog as _SD
     from preset_dialog import EditPresetDialog as _EPD, ManagePresetsDialog as _MPD
     tk = _tk
-    filedialog = _fd; messagebox = _mb; ttk = _ttk
+    filedialog = _fd; messagebox = _mb; simpledialog = _sd; ttk = _ttk
     CatalogPanel = _CP; PropertiesPanel = _PP; SaveDialog = _SD
     EditPresetDialog = _EPD; ManagePresetsDialog = _MPD
     try:
@@ -159,6 +163,15 @@ class EditorApp:
         self._edit_menu.add_command(label="Redo", accelerator="Ctrl+Y",
                                     command=self.cmd_redo, state="disabled")
 
+        m_tools = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Tools", menu=m_tools)
+        m_tools.add_command(label="Clone Physical Door...",
+                            command=self.cmd_clone_physical_door)
+        m_tools.add_command(label="Import Static Prefab BSP...",
+                            command=self.cmd_import_static_prefab_bsp)
+        m_tools.add_command(label="Inspect Prefab DAT...",
+                            command=self.cmd_inspect_prefab_dat)
+
         m_presets = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Presets", menu=m_presets)
         m_presets.add_command(label="New Preset…",
@@ -179,6 +192,12 @@ class EditorApp:
         tk.Button(bar, text="Save…", bg="#2c5e8a", fg="white",
                   activebackground="#3a78ad",
                   relief="flat", command=self.cmd_save).pack(side="left", padx=4, pady=4)
+        tk.Button(bar, text="Clone Door…", bg="#30343b", fg="white",
+                  activebackground="#3a4660",
+                  relief="flat", command=self.cmd_clone_physical_door).pack(side="left", padx=4, pady=4)
+        tk.Button(bar, text="Import Prefab…", bg="#30343b", fg="white",
+                  activebackground="#3a4660",
+                  relief="flat", command=self.cmd_import_static_prefab_bsp).pack(side="left", padx=4, pady=4)
 
         tk.Label(bar, text="Level:", bg="#1a1d22", fg="#cccccc",
                  font=("Segoe UI", 9)).pack(side="left", padx=(16, 4))
@@ -268,7 +287,7 @@ class EditorApp:
         L = getattr(self, "active", None)
         if not L:
             return
-        mat = L.materialize()
+        mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
         obj = mat.objects[world_index] if 0 <= world_index < len(mat.objects) else None
         self._on_object_selected(world_index, obj)
 
@@ -305,7 +324,7 @@ class EditorApp:
         if world_index is None:
             self.props_panel.show(None)
             return
-        mat = L.materialize()
+        mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
         if 0 <= world_index < len(mat.objects):
             self._selected_world_index = world_index
             self.props_panel.show(mat.objects[world_index])
@@ -644,6 +663,198 @@ class EditorApp:
         if self.view3d is not None:
             self.view3d.set_place_mode(True)
 
+    def cmd_clone_physical_door(self) -> None:
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        L = self.active
+        bsp_world = L.get_bsp()
+        if bsp_world is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+        links = door_links.build_physical_door_links(L.world.objects, bsp_world)
+        if not links:
+            messagebox.showinfo(
+                "No physical doors",
+                "No Door or RotatingDoor objects with matching BSP submodels were found in this level.",
+            )
+            return
+
+        selected = ""
+        selected_idx = getattr(self, "_selected_world_index", None)
+        if selected_idx is not None:
+            mat = L.materialize()
+            if 0 <= selected_idx < len(mat.objects):
+                obj = mat.objects[selected_idx]
+                if door_links.find_physical_door_link(L.world.objects, bsp_world, obj.get("Name") or ""):
+                    selected = obj.get("Name") or ""
+        if not selected:
+            selected = links[0].name
+
+        links_by_name = {link.name.lower(): link for link in links}
+        def _suggest_door_name(name: str) -> str:
+            link = links_by_name.get(str(name or "").lower())
+            return door_clone.suggest_clone_name(
+                L.materialize().objects,
+                bsp_world,
+                name,
+                pair_name=link.pair_name if link else "",
+            )
+
+        def _describe_door_source(name: str) -> str:
+            link = links_by_name.get(str(name or "").lower())
+            if link is None:
+                return ""
+            parts = [link.class_name]
+            if link.pair_name:
+                if link.is_paired:
+                    parts.append(f"paired with {link.pair_name}")
+                else:
+                    parts.append(f"references missing pair {link.pair_name}")
+            portal = ""
+            try:
+                portal = str(link.obj.get("PortalName") or "")
+            except Exception:
+                portal = ""
+            if portal:
+                parts.append(f"PortalName={portal}")
+            parts.append(f"{len(link.model.polygons)} polys")
+            return " · ".join(parts)
+
+        default_name = _suggest_door_name(selected)
+        from door_clone_dialog import DoorCloneDialog
+        result = DoorCloneDialog.ask(
+            self.root,
+            [link.name for link in links],
+            default_source=selected,
+            default_new_name=default_name,
+            default_include_pair=True,
+            suggest_name=_suggest_door_name,
+            describe_source=_describe_door_source,
+        )
+        if result is None:
+            return
+
+        self._pending_template = None
+        self._pending_kind = "clone_door"
+        self._pending_door_source = result.source_name
+        self._pending_door_name = result.new_name
+        self._pending_door_include_pair = result.include_pair
+        if self.view3d is not None:
+            self.view3d.set_place_mode(True)
+
+    def cmd_inspect_prefab_dat(self) -> None:
+        editor_dir = getattr(self.cfg, "editor_dir", None) or os.path.dirname(os.path.abspath(__file__))
+        start_dir = os.path.join(editor_dir, "mm9_data", "PreFabs")
+        path = filedialog.askopenfilename(
+            title="Inspect converted prefab DAT",
+            initialdir=start_dir if os.path.isdir(start_dir) else editor_dir,
+            filetypes=[("DAT files", "*.dat"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            report = prefab_inspector.format_report(prefab_inspector.inspect_prefab(path))
+        except Exception as e:
+            messagebox.showerror("Prefab inspection failed", str(e))
+            return
+        self._show_text_dialog("Prefab Inspector", report)
+
+    def cmd_import_static_prefab_bsp(self) -> None:
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        L = self.active
+        bsp_world = L.get_bsp()
+        if bsp_world is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+
+        editor_dir = getattr(self.cfg, "editor_dir", None) or os.path.dirname(os.path.abspath(__file__))
+        start_dir = os.path.join(editor_dir, "mm9_data", "PreFabs")
+        path = filedialog.askopenfilename(
+            title="Import static prefab BSP",
+            initialdir=start_dir if os.path.isdir(start_dir) else editor_dir,
+            filetypes=[("DAT files", "*.dat"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            info = prefab_inspector.inspect_prefab(path)
+            default_name = prefab_import.suggest_import_name(L.preview_bsp() or bsp_world, path)
+        except Exception as e:
+            messagebox.showerror("Prefab import failed", str(e))
+            return
+
+        name = simpledialog.askstring(
+            "Import Static Prefab BSP",
+            "New BSP model name:",
+            initialvalue=default_name,
+            parent=self.root,
+        )
+        if name is None:
+            return
+        name = str(name).strip()
+        if not name:
+            messagebox.showerror("Prefab import failed", "The BSP model name cannot be empty.")
+            return
+
+        try:
+            # Validate before entering click placement so unsupported prefabs
+            # fail at the dialog, not after the user picks a surface.
+            prefab_import.build_static_import_plan(
+                L.preview_bsp() or bsp_world,
+                path,
+                new_name=name,
+                target_pos=(0.0, 0.0, 0.0),
+            )
+        except Exception as e:
+            messagebox.showerror("Prefab import failed", str(e))
+            return
+
+        self._pending_template = None
+        self._pending_kind = "import_prefab_bsp"
+        self._pending_prefab_path = path
+        self._pending_prefab_name = name
+        self._pending_prefab_roles = None
+        if self.view3d is not None:
+            self.view3d.set_place_mode(True)
+        model_roles = ", ".join(f"{k}={v}" for k, v in sorted(info.model_roles.items()))
+        messagebox.showinfo(
+            "Place prefab",
+            f"Click a surface in the 3-D view to place {name!r}.\n\n"
+            f"Prefab models: {info.model_count}; roles: {model_roles or 'unknown'}.\n"
+            "This stage imports static visual BSP geometry only.",
+        )
+
+    def _show_text_dialog(self, title: str, text: str) -> None:
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.configure(bg="#0e1116")
+        win.geometry("820x560")
+
+        frame = tk.Frame(win, bg="#0e1116")
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        yscroll = tk.Scrollbar(frame, orient="vertical")
+        yscroll.pack(side="right", fill="y")
+        widget = tk.Text(
+            frame,
+            bg="#11151c",
+            fg="#dde3ea",
+            insertbackground="#dde3ea",
+            relief="flat",
+            wrap="none",
+            yscrollcommand=yscroll.set,
+        )
+        widget.pack(side="left", fill="both", expand=True)
+        yscroll.config(command=widget.yview)
+        widget.insert("1.0", text)
+        widget.configure(state="disabled")
+
+        buttons = tk.Frame(win, bg="#0e1116")
+        buttons.pack(fill="x", padx=10, pady=(0, 10))
+        tk.Button(buttons, text="Close", command=win.destroy).pack(side="right")
+
     def _on_save_as_preset(self) -> None:
         """Open the New Preset dialog pre-filled from the selected object."""
         obj = self.props_panel.current_obj
@@ -707,9 +918,87 @@ class EditorApp:
         placing objects on tables, platforms, balconies,
         or any other geometry where vertical precision matters.
         """
+        if getattr(self, "_pending_kind", None) == "clone_door":
+            self._place_pending_door_clone_at_pos((float(wx), float(wy), float(wz)))
+            return
+        if getattr(self, "_pending_kind", None) == "import_prefab_bsp":
+            self._place_pending_prefab_bsp_at_pos((float(wx), float(wy), float(wz)))
+            return
         if not getattr(self, "_pending_template", None):
             return
         self._place_pending_at_pos([float(wx), float(wy), float(wz)])
+
+    def _place_pending_door_clone_at_pos(self, new_pos: tuple) -> None:
+        L = self.active
+        source_name = getattr(self, "_pending_door_source", "")
+        new_name = getattr(self, "_pending_door_name", "")
+        include_pair = bool(getattr(self, "_pending_door_include_pair", True))
+        op = P.CloneDoorOp(
+            source_name=source_name,
+            new_name=new_name,
+            target_pos=tuple(float(v) for v in new_pos),
+            include_pair=include_pair,
+        )
+        try:
+            # Validate now so placement errors stay near the click that caused them.
+            op.build_plan(L, L.materialize().objects)
+        except Exception as e:
+            messagebox.showerror("Clone door failed", str(e))
+            return
+        L.append_op(op)
+        mat = L.materialize()
+        selected_index = next(
+            (i for i, obj in enumerate(mat.objects) if (obj.get("Name") or "") == new_name),
+            len(mat.objects) - 1,
+        )
+        self._pending_kind = None
+        self._pending_door_source = ""
+        self._pending_door_name = ""
+        self._pending_door_include_pair = True
+        if self.view3d is not None:
+            self.view3d.set_place_mode(False)
+        self._refresh_after_edit(selected_index)
+
+    def _place_pending_prefab_bsp_at_pos(self, new_pos: tuple) -> None:
+        L = self.active
+        prefab_path = getattr(self, "_pending_prefab_path", "")
+        new_name = getattr(self, "_pending_prefab_name", "")
+        include_roles = getattr(self, "_pending_prefab_roles", None)
+        op = P.ImportPrefabBspOp(
+            prefab_path=prefab_path,
+            new_name=new_name,
+            target_pos=tuple(float(v) for v in new_pos),
+            include_roles=include_roles,
+        )
+        try:
+            # Validate against a preview that includes existing pending prefab
+            # imports, so same-name imports are caught before save preview.
+            target_bsp = L.preview_bsp() or L.get_bsp()
+            prefab_import.build_static_import_plan(
+                target_bsp,
+                prefab_path,
+                new_name=new_name,
+                target_pos=new_pos,
+                include_roles=include_roles,
+            )
+        except Exception as e:
+            messagebox.showerror("Prefab import failed", str(e))
+            return
+
+        L.append_op(op)
+        mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
+        helper_index = next(
+            (i for i, obj in enumerate(mat.objects) if (obj.get("Name") or "") == new_name),
+            len(mat.objects) - 1,
+        )
+        self._pending_kind = None
+        self._pending_prefab_path = ""
+        self._pending_prefab_name = ""
+        self._pending_prefab_roles = None
+        self._selected_world_index = helper_index
+        if self.view3d is not None:
+            self.view3d.set_place_mode(False)
+        self._refresh_after_edit(helper_index)
 
     def _place_pending_at_pos(self, new_pos: List[float]) -> None:
         """Create the pending AddOp at an already-resolved XYZ position."""
@@ -753,8 +1042,12 @@ class EditorApp:
                      overrides=overrides,
                      rude=rude_data)
         L.append_op(op)
-        add_count = sum(1 for pending in L.ops if isinstance(pending, P.AddOp))
-        new_index = len(L.materialized_existing_indices()) + add_count - 1
+        mat = L.materialize()
+        new_name = overrides["Name"]
+        new_index = next(
+            (i for i, obj in enumerate(mat.objects) if (obj.get("Name") or "") == new_name),
+            len(mat.objects) - 1,
+        )
         self._refresh_after_edit(new_index)
 
     def _on_property_edited(self, name: str, new_value: Any) -> None:
@@ -765,6 +1058,21 @@ class EditorApp:
         selected_idx = getattr(self, "_selected_world_index", None)
 
         if selected_idx is not None:
+            prefab_op = L.prefab_import_for_materialized(selected_idx)
+            if prefab_op is not None:
+                if name == "Pos":
+                    prefab_op.target_pos = tuple(float(v) for v in new_value)
+                    L.clear_redo()
+                    self._refresh_after_edit(selected_idx)
+                    return
+                if name == "Rotation":
+                    vals = list(new_value) if isinstance(new_value, (list, tuple)) else []
+                    vals = (vals + [0.0, 0.0, 0.0, 0.0])[:4]
+                    prefab_op.target_yaw = float(vals[1])
+                    L.clear_redo()
+                    self._refresh_after_edit(selected_idx)
+                    return
+
             baseline_idx = L.existing_index_for_materialized(selected_idx)
             if baseline_idx is not None:
                 L.append_op(P.EditOp(target_index=baseline_idx,
@@ -780,10 +1088,34 @@ class EditorApp:
                     L.clear_redo()
                     self._refresh_after_edit(selected_idx)
                     return
+            pending = L.pending_add_offset_for_materialized(selected_idx)
+            if pending is not None:
+                pending_op, object_offset = pending
+                if isinstance(pending_op, P.CloneDoorOp):
+                    if name == "Pos":
+                        pending_op.retarget_from_object(
+                            L,
+                            L.objects_before_op(pending_op),
+                            object_offset,
+                            tuple(float(v) for v in new_value),
+                        )
+                        L.clear_redo()
+                        self._refresh_after_edit(selected_idx)
+                        return
+                    if name == "Rotation":
+                        pending_op.rerotate_from_object(
+                            L,
+                            L.objects_before_op(pending_op),
+                            object_offset,
+                            tuple(float(v) for v in new_value),
+                        )
+                        L.clear_redo()
+                        self._refresh_after_edit(selected_idx)
+                        return
 
         # Legacy fallback for callers that provide an object without the
         # selected materialized index.
-        mat = L.materialize()
+        mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
         for mat_idx, candidate in enumerate(mat.objects):
             if candidate != obj:
                 continue
@@ -808,21 +1140,44 @@ class EditorApp:
         if obj is None: return
         selected_idx = getattr(self, "_selected_world_index", None)
         if selected_idx is not None:
+            prefab_op = L.prefab_import_for_materialized(selected_idx)
+            if prefab_op is not None:
+                try:
+                    L.ops.remove(prefab_op)
+                except ValueError:
+                    pass
+                L.clear_redo()
+                self.props_panel.show(None)
+                self._selected_world_index = None
+                self._refresh_after_edit(None)
+                return
+
             baseline_idx = L.existing_index_for_materialized(selected_idx)
             if baseline_idx is not None:
                 L.append_op(P.DeleteOp(target_index=baseline_idx))
             else:
-                add_offset = L.add_offset_for_materialized(selected_idx)
-                if add_offset is not None:
-                    add_seen = 0
-                    for i, op in enumerate(list(L.ops)):
-                        if not isinstance(op, P.AddOp):
-                            continue
-                        if add_seen == add_offset:
-                            del L.ops[i]
-                            L.clear_redo()
-                            break
-                        add_seen += 1
+                pending = L.pending_add_offset_for_materialized(selected_idx)
+                if pending is not None:
+                    pending_op, _object_offset = pending
+                    if isinstance(pending_op, P.CloneDoorOp):
+                        try:
+                            L.ops.remove(pending_op)
+                        except ValueError:
+                            pass
+                        L.clear_redo()
+                    else:
+                        add_offset = L.add_offset_for_materialized(selected_idx)
+                        if add_offset is None:
+                            add_offset = -1
+                        add_seen = 0
+                        for i, op in enumerate(list(L.ops)):
+                            if not isinstance(op, P.AddOp):
+                                continue
+                            if add_seen == add_offset:
+                                del L.ops[i]
+                                L.clear_redo()
+                                break
+                            add_seen += 1
         else:
             # Legacy fallback for callers that provide an object without
             # preserving the selected materialized index.
@@ -850,15 +1205,37 @@ class EditorApp:
         new_pos = (float(new_wx), float(new_wy), float(new_wz))
 
         baseline_idx = L.existing_index_for_materialized(world_index)
-        if baseline_idx is not None:
+        refresh_clone_preview = False
+        prefab_op = L.prefab_import_for_materialized(world_index)
+        if prefab_op is not None:
+            prefab_op.target_pos = new_pos
+            L.clear_redo()
+            refresh_clone_preview = True
+        elif baseline_idx is not None:
             L.coalesce_move_op(baseline_idx, new_pos=new_pos)
         else:
-            add_offset = L.add_offset_for_materialized(world_index)
-            adds = [op for op in L.ops if isinstance(op, P.AddOp)]
-            if add_offset is not None and add_offset < len(adds):
-                adds[add_offset].overrides["Pos"] = list(new_pos)
-                L.clear_redo()
+            pending = L.pending_add_offset_for_materialized(world_index)
+            if pending is not None:
+                pending_op, object_offset = pending
+                if isinstance(pending_op, P.CloneDoorOp):
+                    pending_op.retarget_from_object(
+                        L,
+                        L.objects_before_op(pending_op),
+                        object_offset,
+                        new_pos,
+                    )
+                    L.clear_redo()
+                    refresh_clone_preview = True
+                else:
+                    add_offset = L.add_offset_for_materialized(world_index)
+                    adds = [op for op in L.ops if isinstance(op, P.AddOp)]
+                    if add_offset is not None and add_offset < len(adds):
+                        adds[add_offset].overrides["Pos"] = list(new_pos)
+                        L.clear_redo()
 
+        if refresh_clone_preview:
+            self._refresh_after_edit(world_index)
+            return
         if getattr(self, "_selected_world_index", None) == world_index:
             self._show_selected_materialized(world_index)
         self._update_history_menu()
@@ -871,7 +1248,13 @@ class EditorApp:
         rot = tuple(float(v) for v in new_rot)
 
         baseline_idx = L.existing_index_for_materialized(world_index)
-        if baseline_idx is not None:
+        refresh_clone_preview = False
+        prefab_op = L.prefab_import_for_materialized(world_index)
+        if prefab_op is not None:
+            prefab_op.target_yaw = float(rot[1])
+            L.clear_redo()
+            refresh_clone_preview = True
+        elif baseline_idx is not None:
             mat = L.materialize()
             if not (0 <= world_index < len(mat.objects)):
                 return
@@ -881,12 +1264,28 @@ class EditorApp:
             pos = (float(old_pos[0]), float(old_pos[1]), float(old_pos[2]))
             L.coalesce_move_op(baseline_idx, new_pos=pos, new_rot=rot)
         else:
-            add_offset = L.add_offset_for_materialized(world_index)
-            adds = [op for op in L.ops if isinstance(op, P.AddOp)]
-            if add_offset is not None and add_offset < len(adds):
-                adds[add_offset].overrides["Rotation"] = list(rot)
-                L.clear_redo()
+            pending = L.pending_add_offset_for_materialized(world_index)
+            if pending is not None:
+                pending_op, object_offset = pending
+                if isinstance(pending_op, P.CloneDoorOp):
+                    pending_op.rerotate_from_object(
+                        L,
+                        L.objects_before_op(pending_op),
+                        object_offset,
+                        rot,
+                    )
+                    L.clear_redo()
+                    refresh_clone_preview = True
+                else:
+                    add_offset = L.add_offset_for_materialized(world_index)
+                    adds = [op for op in L.ops if isinstance(op, P.AddOp)]
+                    if add_offset is not None and add_offset < len(adds):
+                        adds[add_offset].overrides["Rotation"] = list(rot)
+                        L.clear_redo()
 
+        if refresh_clone_preview:
+            self._refresh_after_edit(world_index)
+            return
         if getattr(self, "_selected_world_index", None) == world_index:
             self._show_selected_materialized(world_index)
         self._update_history_menu()
@@ -902,7 +1301,14 @@ class EditorApp:
             return
 
         baseline_idx = L.existing_index_for_materialized(world_index)
-        if baseline_idx is not None:
+        refresh_clone_preview = False
+        prefab_op = L.prefab_import_for_materialized(world_index)
+        if prefab_op is not None:
+            old = prefab_op.target_pos
+            prefab_op.target_pos = (float(old[0]), float(new_y), float(old[2]))
+            L.clear_redo()
+            refresh_clone_preview = True
+        elif baseline_idx is not None:
             mat = L.materialize()
             if not (0 <= world_index < len(mat.objects)):
                 return
@@ -912,15 +1318,34 @@ class EditorApp:
             new_pos = (float(old_pos[0]), float(new_y), float(old_pos[2]))
             L.coalesce_move_op(baseline_idx, new_pos=new_pos)
         else:
-            # Pending added object: update the AddOp's Pos override
-            add_offset = L.add_offset_for_materialized(world_index)
-            adds = [op for op in L.ops if isinstance(op, P.AddOp)]
-            if add_offset is not None and add_offset < len(adds):
-                ov  = adds[add_offset].overrides
-                old = ov.get("Pos", [0.0, 0.0, 0.0])
-                ov["Pos"] = [float(old[0]), float(new_y), float(old[2])]
-                L.clear_redo()
+            # Pending added object: update the AddOp/CloneDoorOp target position.
+            pending = L.pending_add_offset_for_materialized(world_index)
+            if pending is not None:
+                pending_op, object_offset = pending
+                if isinstance(pending_op, P.CloneDoorOp):
+                    mat = L.materialize()
+                    old = mat.objects[world_index].get("Pos")
+                    if old is not None:
+                        pending_op.retarget_from_object(
+                            L,
+                            L.objects_before_op(pending_op),
+                            object_offset,
+                            (float(old[0]), float(new_y), float(old[2])),
+                        )
+                        L.clear_redo()
+                        refresh_clone_preview = True
+                else:
+                    add_offset = L.add_offset_for_materialized(world_index)
+                    adds = [op for op in L.ops if isinstance(op, P.AddOp)]
+                    if add_offset is not None and add_offset < len(adds):
+                        ov  = adds[add_offset].overrides
+                        old = ov.get("Pos", [0.0, 0.0, 0.0])
+                        ov["Pos"] = [float(old[0]), float(new_y), float(old[2])]
+                        L.clear_redo()
 
+        if refresh_clone_preview:
+            self._refresh_after_edit(world_index)
+            return
         if getattr(self, "_selected_world_index", None) == world_index:
             self._show_selected_materialized(world_index)
         self._update_history_menu()

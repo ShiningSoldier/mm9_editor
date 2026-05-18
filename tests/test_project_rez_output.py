@@ -166,6 +166,26 @@ class ProjectRezOutputTests(unittest.TestCase):
             self.assertEqual(len(rude_archives), 1)
             self.assertIn("RUDE/NPC438", rude_archives[0]["entries"])
 
+    def test_manifest_records_validation_warnings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_rez = os.path.join(tmp, "game", "data", "WORLDS.REZ")
+            work_dir = os.path.join(tmp, "output")
+            write_minimal_rez(source_rez, {
+                "WORLDS/LEVEL1": make_world_bytes("Before"),
+            })
+            project = P.Project(work_dir=work_dir)
+            level = project.add_level_from_rez(source_rez, "WORLDS/LEVEL1")
+            level.append_op(P.EditOp(target_index=0, overrides={"Name": "After"}))
+
+            plan = project.save_plan()
+            plan.dats[0].validation_warnings.append("test warning")
+            project.execute(plan)
+
+            manifest_path = os.path.join(work_dir, plan.batch_id, "manifest.json")
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest["dats"][0]["validation_warnings"], ["test warning"])
+
 
 if __name__ == "__main__":
     unittest.main()

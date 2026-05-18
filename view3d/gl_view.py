@@ -746,6 +746,7 @@ if OPENGL_AVAILABLE:
                         self._obj_model_cache,
                         skin_cache=self._skin_cache,
                         tex_cache=self._tex_cache,
+                        bsp_world=bsp_world,
                     )
 
             if bsp_world is not None:
@@ -785,6 +786,38 @@ if OPENGL_AVAILABLE:
                         self._obj_model_cache,
                         skin_cache=self._skin_cache,
                         tex_cache=self._tex_cache,
+                        bsp_world=self._bsp_world,
+                    )
+            self._request_render()
+
+        def reload_level_state(self, bsp_world, objects) -> None:
+            """Reload sprites and the BSP draw batch without refitting camera."""
+            self._discard_pending_transform_commit()
+            self._delete_sprites()
+            self._sprite_position_pending.clear()
+            self._objects = objects
+            self._obj_count = len(objects)
+            self._object_model_items = []
+            self._bsp_world = bsp_world
+
+            self._mesh_cache.invalidate()
+            self._bsp_draw_batch = None
+            if bsp_world is not None:
+                self._bsp_draw_batch = build_bsp_draw_batch(
+                    bsp_world,
+                    self._mesh_cache,
+                    tex_cache=self._tex_cache,
+                )
+
+            if objects:
+                self._rebuild_sprites()
+                if self._obj_model_cache is not None:
+                    self._object_model_items = build_render_items(
+                        objects,
+                        self._obj_model_cache,
+                        skin_cache=self._skin_cache,
+                        tex_cache=self._tex_cache,
+                        bsp_world=bsp_world,
                     )
             self._request_render()
 
@@ -1745,15 +1778,19 @@ class View3D(tk.Frame if _HAS_TK else object):
             self._status.config(text="No level loaded")
             return
 
-        # get_bsp() uses the cached _raw_bytes stored during load()
+        # preview_bsp() adds pending cloned physical doors to the cached BSP.
         bsp_world = None
         try:
-            bsp_world = level_edit.get_bsp()
+            bsp_world = level_edit.preview_bsp()
         except Exception as exc:
             print(f"[view3d] BSP parse failed for {level_edit.display_name!r}: "
                   f"{exc}", file=sys.stderr)
 
-        mat = level_edit.materialize()
+        mat = (
+            level_edit.editor_materialize()
+            if hasattr(level_edit, "editor_materialize")
+            else level_edit.materialize()
+        )
         self._canvas.load_level(level_edit, bsp_world, mat.objects)
         self._status.config(
             text=f"{level_edit.display_name}  ·  loading 3-D view…")
@@ -1763,8 +1800,18 @@ class View3D(tk.Frame if _HAS_TK else object):
         if not OPENGL_AVAILABLE or self._level is None:
             return
         self._canvas._flush_transform_commit()
-        mat = self._level.materialize()
-        self._canvas.reload_sprites(mat.objects)
+        mat = (
+            self._level.editor_materialize()
+            if hasattr(self._level, "editor_materialize")
+            else self._level.materialize()
+        )
+        try:
+            bsp_world = self._level.preview_bsp()
+        except Exception as exc:
+            print(f"[view3d] BSP preview failed for {self._level.display_name!r}: "
+                  f"{exc}", file=sys.stderr)
+            bsp_world = self._level.get_bsp()
+        self._canvas.reload_level_state(bsp_world, mat.objects)
 
     def flush_pending_transforms(self) -> None:
         """Commit any debounced preview transform immediately."""

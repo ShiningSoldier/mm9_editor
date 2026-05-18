@@ -4,7 +4,7 @@ mm9_rezmgr.py
 
 Reader for Lithtech .REZ archive files (v1 — the format MM9 uses).
 
-The format is fully documented in lithtech/libs/rezmgr/rezmgr.cpp. This is a
+The format is fully documented in https://github.com/jsj2008/lithtech libs/rezmgr/rezmgr.cpp. This is a
 straight port of the read path:
 
     [167-byte main header]                  see _MainHeader

@@ -150,25 +150,24 @@ class LevelPanel(tk.Frame):
             self.subheader.config(text="(no level loaded)")
             return
 
-        world = self._level.materialize()
-        n_existing = len(self._level.world.objects)
-        deletes = {op.target_index for op in self._level.ops
-                   if isinstance(op, P.DeleteOp)}
+        world = (
+            self._level.editor_materialize()
+            if hasattr(self._level, "editor_materialize")
+            else self._level.materialize()
+        )
+        existing_indices = self._level.materialized_existing_indices()
 
         # Build (world_index, obj, is_pending) triples
         triples: List[Tuple[int, patcher.WorldObject, bool]] = []
 
         # Existing objects
-        keep_idx = [i for i in range(n_existing) if i not in deletes]
-        for j, orig_idx in enumerate(keep_idx):
-            triples.append((orig_idx, world.objects[j], False))
+        for mat_idx, _orig_idx in enumerate(existing_indices):
+            triples.append((mat_idx, world.objects[mat_idx], False))
 
-        # Pending additions
-        added_count = sum(1 for op in self._level.ops if isinstance(op, P.AddOp))
-        for k in range(added_count):
-            mat_idx = len(keep_idx) + k
-            world_idx = n_existing + k
-            triples.append((world_idx, world.objects[mat_idx], True))
+        # Pending additions, including multi-object operations such as CloneDoorOp
+        # and editor-only prefab BSP import handles.
+        for mat_idx in range(len(existing_indices), len(world.objects)):
+            triples.append((mat_idx, world.objects[mat_idx], True))
 
         # Sort: category rank first, then type name, then object name
         flt = self.filter_var.get().strip().lower()
