@@ -21,6 +21,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
+from actor_visuals import resolve_actor_visual
 from view3d.abc_loader import load_abc, upload_abc_model
 from view3d.gl_mesh import GpuMesh, delete_mesh, draw_mesh
 
@@ -114,19 +115,6 @@ _MONSTER_DEFAULT_SKIN_STEMS = {
     "skeleton": ("Skeleton2",),
     "skeletonwarrior": ("SkeletonWar2",),
     "skeletonmaster": ("SkeletonWar1",),
-}
-
-_MONSTER_MODEL_ALIASES = {
-    # Shipped DATs sometimes reference these variant names directly, but the
-    # extracted actor/monster tables and model files use one shared ABC.
-    "colloidalsoldier": ("models\\ColloidalWarrior.abc", "skins\\Colloidal1.dtx"),
-    "colloidalguardian": ("models\\ColloidalWarrior.abc", "skins\\Colloidal3.dtx"),
-    # LICHLAB has several Oculus placements with the typo
-    # EvilEyeTerrorTerror.abc.  The archive contains only EvileyeTerror.abc.
-    "evileyeterrorterror": ("models\\EvileyeTerror.abc", "skins\\Orbus3.dtx"),
-    "eye": ("models\\EvileyeTerror.abc", "skins\\Orbus1.dtx"),
-    "orbus": ("models\\EvileyeTerror.abc", "skins\\Orbus2.dtx"),
-    "oculus": ("models\\EvileyeTerror.abc", "skins\\Orbus3.dtx"),
 }
 
 
@@ -294,44 +282,14 @@ def _is_civilian_placeholder_model(filename: str) -> bool:
     return _skin_base_token(filename) == "peasantmale"
 
 
-def _script_basename(obj) -> str:
-    try:
-        script = str(obj.get("ScriptName") or "")
-    except Exception:
-        script = ""
-    base = script.replace("/", "\\").rsplit("\\", 1)[-1]
-    if "." in base:
-        base = base.rsplit(".", 1)[0]
-    return _skin_base_token(base)
-
-
-def _runtime_model_override(obj) -> Tuple[str, List[str]]:
-    """
-    Preview a small set of runtime/data-table model swaps.
-
-    BATHHOUSE.DAT stores Ebora and her concubines with the missing placeholder
-    model ``models\\Honk.abc``; their scripts replace it on world start.
-    """
-    object_key = _skin_base_token(str(getattr(obj, "type_str", "") or ""))
-    script_key = _script_basename(obj)
-    filename_key = _skin_base_token(str(obj.get("Filename") or ""))
-    if object_key == "succebora" or script_key == "eborabath":
-        return "models\\ebora.abc", ["skins\\succubusredgstrng.dtx"]
-    if object_key == "concubine" or script_key == "eboraconcubine":
-        return "models\\ebora.abc", ["skins\\Siren1.dtx"]
-
-    for key in (filename_key, object_key):
-        alias = _MONSTER_MODEL_ALIASES.get(key)
-        if alias:
-            model, skin = alias
-            return model, [skin]
-    return "", []
-
-
-def _object_model_filename(obj) -> str:
-    override_model, _override_skins = _runtime_model_override(obj)
-    if override_model:
-        return override_model
+def _object_model_filename(obj, actor_visuals: Optional[Dict[str, object]] = None) -> str:
+    actor_visual = resolve_actor_visual(
+        actor_visuals,
+        str(getattr(obj, "type_str", "") or ""),
+        str(obj.get("Name") or ""),
+    )
+    if actor_visual and actor_visual.model:
+        return actor_visual.model
 
     filename = str(obj.get("Filename") or "")
     if not filename:
@@ -358,10 +316,15 @@ def _object_model_filename(obj) -> str:
     return _civilian_preview_model(appearance_key) or filename
 
 
-def _object_skin_names(obj) -> List[str]:
-    _override_model, override_skins = _runtime_model_override(obj)
-    if override_skins:
-        return override_skins
+def _object_skin_names(obj, actor_visuals: Optional[Dict[str, object]] = None) -> List[str]:
+    actor_visual = resolve_actor_visual(
+        actor_visuals,
+        str(getattr(obj, "type_str", "") or ""),
+        str(obj.get("Name") or ""),
+    )
+    if actor_visual and actor_visual.skins:
+        return list(actor_visual.skins)
+
     return _split_skin_names(str(obj.get("Skin") or ""))
 
 
@@ -1070,6 +1033,7 @@ def build_instances(
     cache: ObjectModelCache,
     view_proj: np.ndarray,
     selected_index: int = -1,
+    actor_visuals: Optional[Dict[str, object]] = None,
 ) -> List[ObjectModelInstance]:
     """Build drawable mesh instances for all currently supported objects."""
     instances: List[ObjectModelInstance] = []
@@ -1077,16 +1041,21 @@ def build_instances(
         if not _object_is_visible(obj):
             continue
         filename = obj.get("Filename")
-        if not filename:
+        has_actor_visual = resolve_actor_visual(
+            actor_visuals,
+            str(getattr(obj, "type_str", "") or ""),
+            str(obj.get("Name") or ""),
+        ) is not None
+        if not filename and not has_actor_visual:
             continue
-        filename_str = _object_model_filename(obj)
+        filename_str = _object_model_filename(obj, actor_visuals=actor_visuals)
         mesh = cache.get_or_upload(filename_str)
         if mesh is None or mesh.is_empty():
             continue
         model = _object_matrix(obj)
         if model is None:
             continue
-        skins = _object_skin_names(obj)
+        skins = _object_skin_names(obj, actor_visuals=actor_visuals)
         instances.append(ObjectModelInstance(
             world_index=world_index,
             mesh=mesh,
@@ -1103,6 +1072,7 @@ def build_render_items(
     skin_cache=None,
     tex_cache=None,
     bsp_world=None,
+    actor_visuals: Optional[Dict[str, object]] = None,
 ) -> List[ObjectModelRenderItem]:
     """
     Build the stable object-to-ABC-mesh mapping for a materialized level.
@@ -1115,13 +1085,18 @@ def build_render_items(
         if not _object_is_visible(obj):
             continue
         filename = obj.get("Filename")
-        if not filename:
+        has_actor_visual = resolve_actor_visual(
+            actor_visuals,
+            str(getattr(obj, "type_str", "") or ""),
+            str(obj.get("Name") or ""),
+        ) is not None
+        if not filename and not has_actor_visual:
             continue
-        filename_str = _object_model_filename(obj)
+        filename_str = _object_model_filename(obj, actor_visuals=actor_visuals)
         mesh = cache.get_or_upload(filename_str)
         if mesh is None or mesh.is_empty():
             continue
-        skins = _object_skin_names(obj)
+        skins = _object_skin_names(obj, actor_visuals=actor_visuals)
         object_type = str(getattr(obj, "type_str", "") or "")
         appearance_key = _civilian_appearance_key(object_type, str(obj.get("Name") or ""))
         items.append(ObjectModelRenderItem(
@@ -1210,6 +1185,7 @@ def draw_object_models(
     fog_near: float = 500.0,
     fog_far: float = 3000.0,
     fog_color: Tuple[float, float, float] = (0.055, 0.063, 0.086),
+    actor_visuals: Optional[Dict[str, object]] = None,
 ) -> Tuple[int, int, set]:
     """
     Draw supported ABC models.
@@ -1225,6 +1201,7 @@ def draw_object_models(
         cache,
         skin_cache=skin_cache,
         tex_cache=tex_cache,
+        actor_visuals=actor_visuals,
     )
     return draw_object_model_items(
         items,

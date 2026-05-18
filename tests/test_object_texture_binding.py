@@ -16,6 +16,7 @@ from view3d.gl_object_models import (
     _resolve_skin_for_piece,
     _split_skin_names,
 )
+from actor_visuals import parse_actor_visual_tables
 
 
 class FakeTextureCache:
@@ -76,8 +77,21 @@ class ObjectTextureBindingTests(unittest.TestCase):
             "SkeletonWar1.dtx",
             "SkeletonWar2.dtx",
             "SkeletonScimitar.dtx",
-            "succubusredgstrng.dtx",
+            "ebora.dtx",
             "Siren1.dtx",
+        ])
+        header = (
+            "Number\tMonster Name\tModelName\tSkinName\tSkinName2\tSkinName3\t"
+            "Type/Picture\n"
+        )
+        self.actor_visuals = parse_actor_visual_tables([
+            ("MONSTERS.TXT", header
+             + "228\tEye\tEvileyeTerror.abc\tOrbus1.dtx\t\t\tBeholder A\n"
+             + "230\tOculus\tEvileyeTerror.abc\tOrbus3.dtx\t\t\tBeholder C\n"
+             + "234\tColloidal Soldier\tColloidalWarrior.abc\tColloidal1.dtx\t\t\tStrange Beast A\n"
+             + "236\tColloidal Guardian\tColloidalWarrior.abc\tColloidal3.dtx\t\t\tStrange Beast C\n"
+             + "301\tEbora\tebora.abc\tebora.dtx\t\t\tEbora\n"
+             + "302\tConcubine\tebora.abc\tSiren1.dtx\t\t\tConcubine\n"),
         ])
 
     def resolve(self, piece, index, count, model, object_type="", skin="", appearance_key=""):
@@ -311,8 +325,14 @@ class ObjectTextureBindingTests(unittest.TestCase):
             Filename="models\\EvilEyeTerrorTerror.abc",
         )
 
-        self.assertEqual(_object_model_filename(obj), "models\\EvileyeTerror.abc")
-        self.assertEqual(_object_skin_names(obj), ["skins\\Orbus3.dtx"])
+        self.assertEqual(
+            _object_model_filename(obj, actor_visuals=self.actor_visuals),
+            "models\\EvileyeTerror.abc",
+        )
+        self.assertEqual(
+            _object_skin_names(obj, actor_visuals=self.actor_visuals),
+            ["skins\\Orbus3.dtx"],
+        )
 
     def test_skeleton_master_uses_actor_table_body_and_weapon_skins(self):
         self.assertEqual(
@@ -336,30 +356,42 @@ class ObjectTextureBindingTests(unittest.TestCase):
             "SkeletonScimitar.dtx",
         )
 
-    def test_colloidal_variant_model_aliases_use_shared_warrior_mesh(self):
+    def test_colloidal_variants_use_actor_table_shared_warrior_mesh(self):
         soldier = FakeObject(
-            "JellySpore",
-            Name="ColSInRoomA0",
+            "ColloidalSoldier",
+            Name="ColloidalSoldier0",
             Filename="models\\ColloidalSoldier.abc",
         )
         guardian = FakeObject(
-            "JellySpore",
-            Name="ColGInRoomB0",
+            "ColloidalGuardian",
+            Name="ColloidalGuardian0",
             Filename="models\\ColloidalGuardian.abc",
         )
 
-        self.assertEqual(_object_model_filename(soldier), "models\\ColloidalWarrior.abc")
-        self.assertEqual(_object_skin_names(soldier), ["skins\\Colloidal1.dtx"])
-        self.assertEqual(_object_model_filename(guardian), "models\\ColloidalWarrior.abc")
-        self.assertEqual(_object_skin_names(guardian), ["skins\\Colloidal3.dtx"])
+        self.assertEqual(
+            _object_model_filename(soldier, actor_visuals=self.actor_visuals),
+            "models\\ColloidalWarrior.abc",
+        )
+        self.assertEqual(
+            _object_skin_names(soldier, actor_visuals=self.actor_visuals),
+            ["skins\\Colloidal1.dtx"],
+        )
+        self.assertEqual(
+            _object_model_filename(guardian, actor_visuals=self.actor_visuals),
+            "models\\ColloidalWarrior.abc",
+        )
+        self.assertEqual(
+            _object_skin_names(guardian, actor_visuals=self.actor_visuals),
+            ["skins\\Colloidal3.dtx"],
+        )
         self.assertEqual(
             self.resolve(
                 "Bip01 Head",
                 8,
                 56,
-                _object_model_filename(guardian),
+                _object_model_filename(guardian, actor_visuals=self.actor_visuals),
                 "JellySpore",
-                skin=";".join(_object_skin_names(guardian)),
+                skin=";".join(_object_skin_names(guardian, actor_visuals=self.actor_visuals)),
             ),
             "skins\\Colloidal3.dtx",
         )
@@ -371,18 +403,24 @@ class ObjectTextureBindingTests(unittest.TestCase):
             Filename="models\\Honk.abc",
             ScriptName="scripts\\eborabath.scr",
         )
-        self.assertEqual(_object_model_filename(ebora), "models\\ebora.abc")
-        self.assertEqual(_object_skin_names(ebora), ["skins\\succubusredgstrng.dtx"])
+        self.assertEqual(
+            _object_model_filename(ebora, actor_visuals=self.actor_visuals),
+            "models\\ebora.abc",
+        )
+        self.assertEqual(
+            _object_skin_names(ebora, actor_visuals=self.actor_visuals),
+            ["skins\\ebora.dtx"],
+        )
         self.assertEqual(
             self.resolve(
                 "Ebora",
                 0,
                 1,
-                _object_model_filename(ebora),
+                _object_model_filename(ebora, actor_visuals=self.actor_visuals),
                 "SuccEbora",
-                skin=";".join(_object_skin_names(ebora)),
+                skin=";".join(_object_skin_names(ebora, actor_visuals=self.actor_visuals)),
             ),
-            "skins\\succubusredgstrng.dtx",
+            "skins\\ebora.dtx",
         )
 
     def test_concubine_script_model_uses_deterministic_siren_preview(self):
@@ -392,16 +430,22 @@ class ObjectTextureBindingTests(unittest.TestCase):
             Filename="models\\Honk.abc",
             ScriptName="scripts\\eboraconcubine.scr",
         )
-        self.assertEqual(_object_model_filename(concubine), "models\\ebora.abc")
-        self.assertEqual(_object_skin_names(concubine), ["skins\\Siren1.dtx"])
+        self.assertEqual(
+            _object_model_filename(concubine, actor_visuals=self.actor_visuals),
+            "models\\ebora.abc",
+        )
+        self.assertEqual(
+            _object_skin_names(concubine, actor_visuals=self.actor_visuals),
+            ["skins\\Siren1.dtx"],
+        )
         self.assertEqual(
             self.resolve(
                 "Ebora",
                 0,
                 1,
-                _object_model_filename(concubine),
+                _object_model_filename(concubine, actor_visuals=self.actor_visuals),
                 "Concubine",
-                skin=";".join(_object_skin_names(concubine)),
+                skin=";".join(_object_skin_names(concubine, actor_visuals=self.actor_visuals)),
             ),
             "skins\\Siren1.dtx",
         )

@@ -15,6 +15,7 @@ manually unless you want to force a rebuild.
 
     # Rebuild directly from an archive:
     python catalog.py build-from-rez path/to/WORLDS.REZ --out catalog.json
+    python catalog.py build-from-rez path/to/WORLDS.REZ --data-rez path/to/DATA.REZ --out catalog.json
 
     # Inspect an existing catalog:
     python catalog.py info catalog.json
@@ -29,6 +30,7 @@ catalog.json shape
               "category":       "npc_civilian",   # see CATEGORY_RULES below
               "property_names": ["Name","Pos",...],
               "filenames":      ["models\\\\peasantmale.abc", ...],
+              "skins":          ["skins\\\\peasantm2a.dtx", ...],
               "template": {
                   "source_level":    "BOOTCAMP.DAT",
                   "source_instance": "CommonerHuman2MaleA0",
@@ -65,6 +67,12 @@ import sys
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 import _path_setup  # noqa: F401  (adds mm9_patcher/ to sys.path)
+from actor_visuals import (
+    ActorVisual,
+    load_actor_visuals_from_data_dir,
+    load_actor_visuals_from_data_rez,
+    resolve_actor_visual,
+)
 import mm9_patch as patcher
 
 # --------------------------------------------------------------------------
@@ -330,7 +338,19 @@ def categorize(
 # Build from a temporary WORLDS/ folder
 # --------------------------------------------------------------------------
 
-def build_catalog(worlds_dir: str) -> Dict[str, Any]:
+def _json_actor_visuals(actor_visuals: Optional[Dict[str, ActorVisual]]) -> Dict[str, Any]:
+    if not actor_visuals:
+        return {}
+    return {
+        key: visual.to_json()
+        for key, visual in sorted(actor_visuals.items())
+    }
+
+
+def build_catalog(
+    worlds_dir: str,
+    actor_visuals: Optional[Dict[str, ActorVisual]] = None,
+) -> Dict[str, Any]:
     """Scan all *.DAT files in *worlds_dir* and return a catalog dict.
 
     This is the low-level builder used by :func:`build_catalog_from_rez`, which
@@ -364,10 +384,20 @@ def build_catalog(worlds_dir: str) -> Dict[str, Any]:
             for p in obj.props:
                 entry["property_names"].add(p.name)
 
-            fname = obj.get("Filename")
+            actor_visual = resolve_actor_visual(
+                actor_visuals, cls, str(obj.get("Name") or ""))
+            fname = actor_visual.model if actor_visual else obj.get("Filename")
             if isinstance(fname, str) and fname.endswith((".abc", ".ABC", ".lta", ".ltb")):
-                entry["filenames"].add(fname.lower())
-                fnentry = filenames.setdefault(fname.lower(), {
+                fname_key = fname.lower()
+                entry["filenames"].add(fname_key)
+                if actor_visual is not None:
+                    skins = entry.setdefault("skins", set())
+                    skins.update(s.lower() for s in actor_visual.skins)
+                    sources = entry.setdefault("actor_visual_sources", set())
+                    sources.add(
+                        f"{actor_visual.source_file}:{actor_visual.number}"
+                    )
+                fnentry = filenames.setdefault(fname_key, {
                     "uses": 0, "classes": set(), "levels": set()
                 })
                 fnentry["uses"] += 1
@@ -396,6 +426,10 @@ def build_catalog(worlds_dir: str) -> Dict[str, Any]:
         entry["levels"]         = sorted(entry["levels"])
         entry["property_names"] = sorted(entry["property_names"])
         entry["filenames"]      = sorted(entry["filenames"])
+        if "skins" in entry:
+            entry["skins"] = sorted(entry["skins"])
+        if "actor_visual_sources" in entry:
+            entry["actor_visual_sources"] = sorted(entry["actor_visual_sources"])
     for fn, entry in filenames.items():
         entry["levels"]  = sorted(entry["levels"])
         entry["classes"] = sorted(entry["classes"])
@@ -403,6 +437,7 @@ def build_catalog(worlds_dir: str) -> Dict[str, Any]:
     return {
         "classes":   classes,
         "filenames": filenames,
+        "actor_visuals": _json_actor_visuals(actor_visuals),
         "summary": {
             "total_levels":            len(dat_paths),
             "total_classes":           len(classes),
@@ -422,7 +457,11 @@ def load_catalog(path: str) -> Dict[str, Any]:
 # Build directly from WORLDS.REZ (standard install path)
 # --------------------------------------------------------------------------
 
-def build_catalog_from_rez(worlds_rez_path: str) -> Dict[str, Any]:
+def build_catalog_from_rez(
+    worlds_rez_path: str,
+    data_rez_path: Optional[str] = None,
+    data_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """Build the catalog by extracting .DAT levels from *worlds_rez_path*.
 
     This is the standard first-run path used by the editor when no
@@ -430,8 +469,10 @@ def build_catalog_from_rez(worlds_rez_path: str) -> Dict[str, Any]:
 
     1. Extracts every ``WORLDS/<name>`` entry whose first byte is ``0x42``
        (v66 DAT magic) into a temporary directory, adding a ``.DAT`` suffix.
-    2. Calls :func:`build_catalog` on that directory.
-    3. Deletes the temp directory unconditionally.
+    2. Optionally reads ACTOR.TXT/MONSTERS.TXT from DATA.REZ or an extracted
+       DATA folder so NPC/monster models use the same runtime table as the game.
+    3. Calls :func:`build_catalog` on that directory.
+    4. Deletes the temp directory unconditionally.
 
     A standard MM9 install has no loose WORLDS/ folder -- all levels live
     inside WORLDS.REZ -- so this function is the only way to build the
@@ -443,6 +484,14 @@ def build_catalog_from_rez(worlds_rez_path: str) -> Dict[str, Any]:
     from mm9_rezmgr import RezReader
 
     print(f"Building catalog from {os.path.basename(worlds_rez_path)} ...")
+    actor_visuals: Dict[str, ActorVisual] = {}
+    if data_dir:
+        actor_visuals = load_actor_visuals_from_data_dir(data_dir)
+    elif data_rez_path:
+        actor_visuals = load_actor_visuals_from_data_rez(data_rez_path)
+    if actor_visuals:
+        print(f"  {len(actor_visuals)} actor/monster visual keys loaded")
+
     tmpdir = tempfile.mkdtemp(prefix="mm9cat_")
     reader = None
     try:
@@ -464,7 +513,7 @@ def build_catalog_from_rez(worlds_rez_path: str) -> Dict[str, Any]:
                 f.write(data)
             extracted += 1
         print(f"  {extracted} levels extracted")
-        return build_catalog(tmpdir)
+        return build_catalog(tmpdir, actor_visuals=actor_visuals)
     finally:
         if reader is not None:
             reader.close()
@@ -501,6 +550,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="catalog.json",
         help="output path for catalog.json (default: catalog.json)",
     )
+    pbr.add_argument(
+        "--data-rez",
+        default=None,
+        help="optional path to DATA.REZ; ACTOR.TXT/MONSTERS.TXT override NPC models",
+    )
+    pbr.add_argument(
+        "--data-dir",
+        default=None,
+        help="optional extracted DATA folder containing ACTOR.TXT/MONSTERS.TXT",
+    )
 
     # info -- summarise an existing catalog
     pi = sub.add_parser("info", help="print a summary of an existing catalog.json")
@@ -512,7 +571,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not os.path.isfile(args.worlds_rez):
             print(f"ERROR: {args.worlds_rez!r} not found", file=sys.stderr)
             return 1
-        cat = build_catalog_from_rez(args.worlds_rez)
+        cat = build_catalog_from_rez(
+            args.worlds_rez,
+            data_rez_path=args.data_rez,
+            data_dir=args.data_dir,
+        )
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(cat, f, indent=2)
         s = cat["summary"]

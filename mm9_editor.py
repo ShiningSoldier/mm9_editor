@@ -360,6 +360,7 @@ class EditorApp:
                 textures_dir = textures_dir,
                 skins_dir    = skins_dir,
                 models_dir   = models_dir,
+                actor_visuals = self.catalog.get("actor_visuals", {}),
             )
             self.view3d.pack(fill="both", expand=True)
         else:
@@ -1714,7 +1715,12 @@ def main(argv=None):
     if not os.path.exists(args.catalog):
         if paths.has_archive("worlds"):
             print("catalog.json not found -- building from game data/WORLDS.REZ ...")
-            cat_dict = build_catalog_from_rez(paths.archive_path("worlds"))
+            cat_dict = build_catalog_from_rez(
+                paths.archive_path("worlds"),
+                data_rez_path=(
+                    paths.archive_path("data") if paths.has_archive("data") else None
+                ),
+            )
         else:
             print(
                 "ERROR: could not build catalog: game data/WORLDS.REZ was not found.",

@@ -618,16 +618,13 @@ Current support is intentionally conservative:
 - Rigid/static props with validated layouts render as meshes.
 - Top-level NPC/creature ABCs from `MODELS.REZ` render as static posed
   meshes, including weighted/complex models via a conservative LOD0 preview.
-- A few known script-applied `SetModelFilenames` swaps are previewed when the
-  raw DAT stores a placeholder or missing model.  For example,
-  BATHHOUSE.DAT's Ebora and concubines store `models\Honk.abc`, but their
-  scripts swap them to `models\ebora.abc`; Ebora uses
-  `skins\succubusredgstrng.dtx`, while concubines use a deterministic
-  `skins\Siren1.dtx` preview for the game's randomized Siren skin.
-- Colloidal Soldier/Warrior/Guardian variants are data-table aliases over the
-  shared `models\ColloidalWarrior.abc` mesh.  DAT references to
-  `models\ColloidalSoldier.abc` or `models\ColloidalGuardian.abc` are previewed
-  with the shared mesh plus the matching `Colloidal1` or `Colloidal3` skin.
+- NPC/creature model and skin previews prefer the `actor_visuals` table stored
+  in `catalog.json`, generated from `DATA.REZ`'s `ACTOR`/`MONSTERS` resources.
+  This fixes DAT placeholder filenames such as BATHHOUSE's `models\Honk.abc`
+  Ebora/concubines and MOUNTAINPASS wolf objects with `models\sheep.abc`.
+- The renderer no longer keeps BATHHOUSE-specific model/skin path overrides;
+  DATA.REZ table rows now provide `models\ebora.abc`, `skins\ebora.dtx`,
+  `skins\Siren1.dtx`, shared Colloidal meshes, and Orbus/Oculus skins.
 - Unsupported models fall back to coloured handles, which remain selectable.
 - Full animation playback is out of scope.
 - Socket/attachment rendering is intentionally deferred.  Many accessories are
@@ -919,20 +916,16 @@ instances, and the set of `filenames` (model paths) the class uses
 across LoMM levels.
 
 ## Issues to fix
- - MOUNTAINPASS level: All Wolf enemies (`GreyWolf`, `BlackWolf`, `RedWolf`)
-   use the `sheep` model (filename: `models/sheep.abc`). Proposed fix: replace with
-   `models/wolf.abc`. Or perhaps leave it in place? It looks like some kind of an
-   Easter egg rather than error. But anyway, it's worth investigating, why the game
-   uses wrong FileNames for certain objects
- - MOUNTAINPASS level: most Harpy enemies (`WingedAberration`, `WingedMutant`, `WingedOddity`)
-   use the `flyingicky` model (filename: `models/flyingicky.abc`). Proposed fix: replace
-   with `models/wingedmutant.abc`
  - CandleProp are not rendered in any level (examples: 1000TERRORS.DAT). CandleProps
    have visible = 0, so perhaps this is the intended behavior? Requires investigation.
- - 1000TERRORS level: Njam and NjamtheMeddler are not rendered
  - Filtering in the left "Objects" panel works weird and displays console errors
  - Levels are mirrored between the editor and the game. Example: added an ExitTrigger
    to the left side of the peasant in the BOOTCAMP, but in the game it appears to the right side
- - DragonKing in DRAGONSTADIUM is rendered without textures
  - In order to see the changes in the game, a new game hass to be started. It looks like the
    saved game files store the level data state. Requires investigation.
+ - Split files into different folders based on the functionality
+ - Interface improvements:
+    - When an object is selected, don't display it's parameters right now (except position/rotation) - add "Edit params" button instead
+    - "Helpers" button should trigger billboards for the visible 3D objects only (like NPCs, monsters, chests, etc)
+    - Add a separate option (hidden somewhere) for showing/hiding the billboards for service objects (AITracks, Door objects, Weather objects, etc)
+    - Move the "Import prefab"/"Clone door" to a separate option

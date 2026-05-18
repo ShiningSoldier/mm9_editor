@@ -206,6 +206,7 @@ if OPENGL_AVAILABLE:
             self._skin_cache    = None   # dtx.TextureCache or None
             self._models_dir: Optional[str] = None
             self._obj_model_cache = None   # gl_object_models.ObjectModelCache or None
+            self._actor_visuals: dict = {}
 
             self._level        = None   # LevelEdit or None
             self._bsp_world    = None   # bsp.BspWorld or None
@@ -748,6 +749,7 @@ if OPENGL_AVAILABLE:
                         skin_cache=self._skin_cache,
                         tex_cache=self._tex_cache,
                         bsp_world=bsp_world,
+                        actor_visuals=self._actor_visuals,
                     )
 
             if bsp_world is not None:
@@ -789,6 +791,7 @@ if OPENGL_AVAILABLE:
                         skin_cache=self._skin_cache,
                         tex_cache=self._tex_cache,
                         bsp_world=self._bsp_world,
+                        actor_visuals=self._actor_visuals,
                     )
             self._request_render()
 
@@ -827,6 +830,7 @@ if OPENGL_AVAILABLE:
                         skin_cache=self._skin_cache,
                         tex_cache=self._tex_cache,
                         bsp_world=bsp_world,
+                        actor_visuals=self._actor_visuals,
                     )
             self._request_render()
 
@@ -1649,6 +1653,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         textures_dir: Optional[str] = None,
         skins_dir:    Optional[str] = None,
         models_dir:   Optional[str] = None,
+        actor_visuals: Optional[dict] = None,
     ) -> None:
         if _HAS_TK:
             super().__init__(parent, bg="#0e1116")
@@ -1663,6 +1668,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         self._textures_dir = textures_dir
         self._skins_dir    = skins_dir
         self._models_dir   = models_dir
+        self._actor_visuals = actor_visuals or {}
 
         if not OPENGL_AVAILABLE:
             self._inner = _PlaceholderView(self, _MISSING)
@@ -1788,6 +1794,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         self._canvas._textures_dir  = self._textures_dir   # passed to initgl
         self._canvas._skins_dir     = self._skins_dir      # passed to initgl
         self._canvas._models_dir    = self._models_dir     # passed to initgl
+        self._canvas._actor_visuals = self._actor_visuals
         self._canvas.pack(fill="both", expand=True)
 
         # ── Status bar ────────────────────────────────────────────────────
