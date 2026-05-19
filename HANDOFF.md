@@ -966,7 +966,6 @@ across LoMM levels.
 ## Issues to fix
  - CandleProp are not rendered in any level (examples: 1000TERRORS.DAT). CandleProps
    have visible = 0, so perhaps this is the intended behavior? Requires investigation.
- - Filtering in the left "Objects" panel works weird and displays console errors
  - Levels are mirrored between the editor and the game. Example: added an ExitTrigger
    to the left side of the peasant in the BOOTCAMP, but in the game it appears to the right side
  - In order to see the changes in the game, a new game hass to be started. It looks like the

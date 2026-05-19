@@ -82,7 +82,7 @@ class LevelPanel(tk.Frame):
 
         # Filter
         self.filter_var = tk.StringVar()
-        self.filter_var.trace_add("write", lambda *_: self._populate())
+        self.filter_var.trace_add("write", lambda *_: self.refresh())
         filter_row = tk.Frame(self, bg="#1a1d22")
         filter_row.pack(fill="x", padx=8, pady=(0, 4))
         tk.Label(filter_row, text="Filter:", bg="#1a1d22", fg="#888",
@@ -210,6 +210,10 @@ class LevelPanel(tk.Frame):
         if restore_row is not None:
             self.listbox.selection_set(restore_row)
             self.listbox.see(restore_row)
+
+    def _populate(self) -> None:
+        """Backward-compatible alias for the pre-refactor list rebuild hook."""
+        self.refresh()
 
     def highlight_index(self, world_index: int) -> None:
         """Sync list selection when the user clicks a dot on the map."""
