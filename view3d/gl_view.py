@@ -112,7 +112,8 @@ if OPENGL_AVAILABLE:
                                   build_bsp_draw_batch, draw_bsp_batch)
     from view3d.gl_objects import (upload_objects, draw_sprites,
                                    decode_pick_color, delete_sprites,
-                                   ObjectSprites)
+                                   ObjectSprites,
+                                   should_draw_billboard_for_modeled_object)
     from view3d.gl_object_models import (ObjectModelCache, build_render_items,
                                          draw_object_model_items)
     import _path_setup     # type: ignore  # noqa: F401
@@ -169,6 +170,9 @@ class _PlaceholderView(tk.Frame if _HAS_TK else object):
     def set_place_mode(self, on):      pass
     def set_camera_mode(self, mode):   pass
     def set_show_helper_billboards(self, enabled): pass
+    def set_show_object_helper_billboards(self, enabled): pass
+    def set_show_world_helper_billboards(self, enabled): pass
+    def set_helper_bsp_mode(self, mode): pass
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +224,8 @@ if OPENGL_AVAILABLE:
             # it disabled: the old toggle was barely visible and reduced
             # placement clarity more than it helped.
             self._fog_enabled: bool = False
-            self._show_helper_billboards: bool = False
+            self._show_object_helper_billboards: bool = False
+            self._show_world_helper_billboards: bool = False
             self._helper_bsp_mode: str = "solid"
 
             # Deferred level load: when set_active_level() is called before
@@ -565,7 +570,13 @@ if OPENGL_AVAILABLE:
                             world_idx == self._selected_index
                             or world_idx == self._3d_drag_index
                         )
-                        if world_idx in self._modeled_world_indices and not is_marker:
+                        if not should_draw_billboard_for_modeled_object(
+                            world_idx,
+                            self._modeled_world_indices,
+                            selected_index=self._selected_index,
+                            drag_index=self._3d_drag_index,
+                            show_object_helpers=self._show_object_helper_billboards,
+                        ):
                             continue
                         prog.set_float(
                             "uWorldSize",
@@ -708,7 +719,10 @@ if OPENGL_AVAILABLE:
                 self._sprites = upload_objects(
                     self._objects,
                     categorize,
-                    include_helpers=self._show_helper_billboards,
+                    include_world_helpers=self._show_world_helper_billboards,
+                    object_helper_indices=[
+                        item.world_index for item in self._object_model_items
+                    ],
                     selected_index=self._selected_index,
                 )
 
@@ -741,7 +755,6 @@ if OPENGL_AVAILABLE:
             self._sprite_position_pending.clear()   # stale patches must not apply to new VBO
 
             if objects:
-                self._rebuild_sprites()
                 if self._obj_model_cache is not None:
                     self._object_model_items = build_render_items(
                         objects,
@@ -751,6 +764,7 @@ if OPENGL_AVAILABLE:
                         bsp_world=bsp_world,
                         actor_visuals=self._actor_visuals,
                     )
+                self._rebuild_sprites()
 
             if bsp_world is not None:
                 self._bsp_draw_batch = build_bsp_draw_batch(
@@ -783,7 +797,6 @@ if OPENGL_AVAILABLE:
             self._obj_count = len(objects)
             self._object_model_items = []
             if objects:
-                self._rebuild_sprites()
                 if self._obj_model_cache is not None:
                     self._object_model_items = build_render_items(
                         objects,
@@ -793,6 +806,7 @@ if OPENGL_AVAILABLE:
                         bsp_world=self._bsp_world,
                         actor_visuals=self._actor_visuals,
                     )
+                self._rebuild_sprites()
             self._request_render()
 
         def reload_level_state(self, bsp_world, objects) -> None:
@@ -822,7 +836,6 @@ if OPENGL_AVAILABLE:
                 )
 
             if objects:
-                self._rebuild_sprites()
                 if self._obj_model_cache is not None:
                     self._object_model_items = build_render_items(
                         objects,
@@ -832,14 +845,24 @@ if OPENGL_AVAILABLE:
                         bsp_world=bsp_world,
                         actor_visuals=self._actor_visuals,
                     )
+                self._rebuild_sprites()
             self._request_render()
 
-        def set_show_helper_billboards(self, enabled: bool) -> None:
-            self._show_helper_billboards = bool(enabled)
+        def set_show_object_helper_billboards(self, enabled: bool) -> None:
+            self._show_object_helper_billboards = bool(enabled)
+            if not self._ready:
+                return
+            self._request_render()
+
+        def set_show_world_helper_billboards(self, enabled: bool) -> None:
+            self._show_world_helper_billboards = bool(enabled)
             if not self._ready:
                 return
             self._rebuild_sprites()
             self._request_render()
+
+        def set_show_helper_billboards(self, enabled: bool) -> None:
+            self.set_show_object_helper_billboards(enabled)
 
         def set_helper_bsp_mode(self, mode: str) -> None:
             self._helper_bsp_mode = str(mode or "solid").lower()
@@ -856,7 +879,7 @@ if OPENGL_AVAILABLE:
 
         def set_selected_index(self, world_index: int) -> None:
             self._selected_index = world_index
-            if not self._show_helper_billboards and self._objects:
+            if not self._show_world_helper_billboards and self._objects:
                 self._rebuild_sprites()
             self._request_render()
 
@@ -1654,6 +1677,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         skins_dir:    Optional[str] = None,
         models_dir:   Optional[str] = None,
         actor_visuals: Optional[dict] = None,
+        on_object_helpers_changed: Optional[Callable[[bool], None]] = None,
     ) -> None:
         if _HAS_TK:
             super().__init__(parent, bg="#0e1116")
@@ -1669,6 +1693,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         self._skins_dir    = skins_dir
         self._models_dir   = models_dir
         self._actor_visuals = actor_visuals or {}
+        self._on_object_helpers_changed = on_object_helpers_changed
 
         if not OPENGL_AVAILABLE:
             self._inner = _PlaceholderView(self, _MISSING)
@@ -1719,7 +1744,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         )
         self._btn_fly.pack(side="left", padx=(0, 12), pady=3)
 
-        # ── Helper billboard toggle ──────────────────────────────────────
+        # ── Object billboard toggle ──────────────────────────────────────
         tk.Label(bar, text="Helpers:", bg="#15171b", fg="#aaaaaa",
                  font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
 
@@ -1727,11 +1752,13 @@ class View3D(tk.Frame if _HAS_TK else object):
 
         def _toggle_helpers():
             enabled = self._helpers_var.get()
-            self._canvas.set_show_helper_billboards(enabled)
+            self._canvas.set_show_object_helper_billboards(enabled)
             self._btn_helpers.config(
                 bg="#2c5e8a" if enabled else "#23272d",
                 fg="white"   if enabled else "#aaaaaa",
             )
+            if self._on_object_helpers_changed is not None:
+                self._on_object_helpers_changed(enabled)
             self._canvas.focus_for_input()
 
         self._btn_helpers = tk.Checkbutton(
@@ -1746,34 +1773,6 @@ class View3D(tk.Frame if _HAS_TK else object):
             padx=6,
         )
         self._btn_helpers.pack(side="left", padx=(0, 8), pady=3)
-
-        tk.Label(bar, text="Collision BSP:", bg="#15171b", fg="#aaaaaa",
-                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
-        self._helper_bsp_var = tk.StringVar(value="solid")
-
-        def _set_helper_bsp_mode(_value=None):
-            mode = self._helper_bsp_var.get()
-            self._canvas.set_helper_bsp_mode(mode)
-            self._canvas.focus_for_input()
-
-        self._helper_bsp_menu = tk.OptionMenu(
-            bar,
-            self._helper_bsp_var,
-            "hidden",
-            "solid",
-            "wireframe",
-            "raw",
-            command=_set_helper_bsp_mode,
-        )
-        self._helper_bsp_menu.config(
-            bg="#23272d", fg="#aaaaaa",
-            activebackground="#2c5e8a",
-            activeforeground="white",
-            relief="flat", font=("Segoe UI", 8),
-            highlightthickness=0,
-        )
-        self._helper_bsp_menu["menu"].config(bg="#23272d", fg="#dde3ea")
-        self._helper_bsp_menu.pack(side="left", padx=(0, 8), pady=3)
 
         tk.Label(bar,
                  text="F = fit  ·  arrows = nudge  ·  PgUp/PgDn = height  "
@@ -1899,22 +1898,33 @@ class View3D(tk.Frame if _HAS_TK else object):
         except Exception:
             pass
 
-    def set_show_helper_billboards(self, enabled: bool) -> None:
-        """Toggle editor helper/control object billboards."""
+    def set_show_object_helper_billboards(self, enabled: bool) -> None:
+        """Toggle billboards for objects that already render as 3-D models."""
         if not OPENGL_AVAILABLE:
             return
         self._helpers_var.set(enabled)
-        self._canvas.set_show_helper_billboards(enabled)
+        self._canvas.set_show_object_helper_billboards(enabled)
         self._btn_helpers.config(
             bg="#2c5e8a" if enabled else "#23272d",
             fg="white"   if enabled else "#aaaaaa",
         )
+        if self._on_object_helpers_changed is not None:
+            self._on_object_helpers_changed(bool(enabled))
+
+    def set_show_world_helper_billboards(self, enabled: bool) -> None:
+        """Toggle editor service/world helper billboards."""
+        if not OPENGL_AVAILABLE:
+            return
+        self._canvas.set_show_world_helper_billboards(enabled)
+
+    def set_show_helper_billboards(self, enabled: bool) -> None:
+        """Backward-compatible alias for object helper billboards."""
+        self.set_show_object_helper_billboards(enabled)
 
     def set_helper_bsp_mode(self, mode: str) -> None:
         """Set collision/helper BSP preview mode."""
         if not OPENGL_AVAILABLE:
             return
-        self._helper_bsp_var.set(mode)
         self._canvas.set_helper_bsp_mode(mode)
 
     def set_camera_mode(self, mode: str) -> None:

@@ -21,7 +21,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
-from actor_visuals import resolve_actor_visual
+from catalog.actor_visuals import resolve_actor_visual
 from view3d.abc_loader import load_abc, upload_abc_model
 from view3d.gl_mesh import GpuMesh, delete_mesh, draw_mesh
 
@@ -908,7 +908,7 @@ def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
     if local_min_y is None:
         return None
     try:
-        import bsp as bsp_mod  # type: ignore
+        from core import bsp as bsp_mod  # type: ignore
         floor_y = bsp_mod.raycast_floor_y(
             bsp_world,
             x,

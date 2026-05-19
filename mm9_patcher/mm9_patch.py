@@ -84,12 +84,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 def _try_import_rez_reader():
     """Return RezReader class or None if mm9_rezmgr is not importable."""
-    # The script lives in mm9_patcher/; parent dir contains mm9_rezmgr.py.
+    # The script lives in mm9_patcher/; parent dir contains the core package.
     parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if parent not in sys.path:
         sys.path.insert(0, parent)
     try:
-        from mm9_rezmgr import RezReader  # type: ignore
+        from core.rezmgr import RezReader  # type: ignore
         return RezReader
     except ImportError:
         return None

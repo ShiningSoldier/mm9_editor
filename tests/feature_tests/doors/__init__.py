@@ -1,0 +1,2 @@
+"""Door feature tests."""
+

@@ -43,8 +43,8 @@ _CAT_COLORS: Dict[str, Tuple[float, float, float]] = {
     "other":       (0.50, 0.50, 0.50),   # neutral grey
 }
 _DEFAULT_COLOR = (0.50, 0.50, 0.50)
-_EDITOR_HELPER_CATEGORIES = {"trigger", "sound", "marker", "world", "light", "door"}
-_EDITOR_HELPER_CLASSES = {
+_WORLD_HELPER_CATEGORIES = {"trigger", "sound", "marker", "world", "light", "door"}
+_WORLD_HELPER_CLASSES = {
     "BlueWater", "StartPoint", "ScriptObject", "EffectsMgr", "WorldObject",
     "EarthQuake", "Ladder", "Switch", "Fire", "Camera", "DestructableBrush",
     "WeatherMan", "Fog", "Spawner", "Button", "Shooter"
@@ -56,9 +56,9 @@ def _cat_color(cat: str) -> Tuple[float, float, float]:
     return _CAT_COLORS.get(cat, _DEFAULT_COLOR)
 
 
-def is_editor_helper_billboard(obj, categorize) -> bool:
+def is_world_helper_billboard(obj, categorize) -> bool:
     """Return True for editor/control objects that are noisy as billboards."""
-    if getattr(obj, "type_str", "") in _EDITOR_HELPER_CLASSES:
+    if getattr(obj, "type_str", "") in _WORLD_HELPER_CLASSES:
         return True
     name = ""
     try:
@@ -67,7 +67,27 @@ def is_editor_helper_billboard(obj, categorize) -> bool:
         pass
     if any(name.startswith(prefix) for prefix in _EDITOR_HELPER_NAME_PREFIXES):
         return True
-    return categorize(obj.type_str) in _EDITOR_HELPER_CATEGORIES
+    return categorize(obj.type_str) in _WORLD_HELPER_CATEGORIES
+
+
+def is_editor_helper_billboard(obj, categorize) -> bool:
+    """Backward-compatible alias for world/service helper billboards."""
+    return is_world_helper_billboard(obj, categorize)
+
+
+def should_draw_billboard_for_modeled_object(
+    world_index: int,
+    modeled_world_indices,
+    selected_index: int = -1,
+    drag_index: int = -1,
+    show_object_helpers: bool = False,
+) -> bool:
+    """Return whether a billboard should be drawn for an object sprite."""
+    if world_index not in modeled_world_indices:
+        return True
+    if world_index == selected_index or world_index == drag_index:
+        return True
+    return bool(show_object_helpers)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +122,9 @@ class ObjectSprites:
 def _build_arrays(
     objects,              # List[WorldObject]  (patcher.WorldObject)
     categorize,           # Callable[[str], str]
-    include_helpers: bool = True,
+    include_world_helpers: bool = True,
+    include_helpers: Optional[bool] = None,
+    object_helper_indices=None,
     selected_index: int = -1,
 ) -> Tuple[np.ndarray, List[int]]:
     """
@@ -114,10 +136,15 @@ def _build_arrays(
     rows:    List[np.ndarray] = []
     w_idxs:  List[int]        = []
 
+    if include_helpers is not None:
+        include_world_helpers = bool(include_helpers)
+    object_helper_indices = set(object_helper_indices or ())
+
     for world_idx, obj in enumerate(objects):
-        if (not include_helpers
+        if (not include_world_helpers
                 and world_idx != selected_index
-                and is_editor_helper_billboard(obj, categorize)):
+                and world_idx not in object_helper_indices
+                and is_world_helper_billboard(obj, categorize)):
             continue
 
         pos = obj.get("Pos")
@@ -146,7 +173,9 @@ def _build_arrays(
 def upload_objects(
     objects,        # List[WorldObject]
     categorize,     # Callable[[str], str]  — from catalog.categorize
-    include_helpers: bool = True,
+    include_world_helpers: bool = True,
+    include_helpers: Optional[bool] = None,
+    object_helper_indices=None,
     selected_index: int = -1,
 ) -> Optional[ObjectSprites]:
     """
@@ -159,7 +188,9 @@ def upload_objects(
     verts, w_idxs = _build_arrays(
         objects,
         categorize,
+        include_world_helpers=include_world_helpers,
         include_helpers=include_helpers,
+        object_helper_indices=object_helper_indices,
         selected_index=selected_index,
     )
     if verts.shape[0] == 0:

@@ -33,7 +33,7 @@ python mm9_editor.py
 python mm9_editor.py --game-root "C:\Path\To\Might and Magic 9"
 ```
 
-On first launch the editor builds `catalog.json` from `data/WORLDS.REZ`.
+On first launch the editor builds `catalog/data/catalog.json` from `data/WORLDS.REZ`.
 Output files are written under `mm9_editor/output/`, and source archives are
 backed up under `mm9_editor/backups/`. If those folders are not writable, the
 editor falls back to `%LOCALAPPDATA%\mm9_editor\`.
@@ -184,7 +184,7 @@ The bundled `mm9_patcher/` folder contains standalone tools:
 
 ```sh
 python mm9_rezmgr.py list "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
-python catalog.py build-from-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ" --out catalog.json
+python catalog.py build-from-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
 ```
 
 Some lower-level patcher utilities still accept ordinary DAT/RUDE file paths
@@ -210,7 +210,7 @@ only rewrites the WorldObject section, applying three kinds of rules:
 #### Usage
 
 ```sh
-# Default config (lomm_to_mm9.yaml next to the script)
+# Default config (conversion/lomm_to_mm9.yaml)
 python lomm_to_mm9.py CHATEAUESCAPE.DAT
 
 # Custom output path
@@ -237,7 +237,7 @@ falls back to JSON parsing for the config file.
 
 #### Editing the YAML config
 
-The default rules live in `lomm_to_mm9.yaml`. Three top-level sections:
+The default rules live in `conversion/lomm_to_mm9.yaml`. Three top-level sections:
 
 ```yaml
 remove_unknown_classes: true       # drop classes not in MM9 catalog

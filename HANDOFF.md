@@ -52,36 +52,52 @@ pip install PyOpenGL PyOpenGL_accelerate pyopengltk
 If OpenGL packages are unavailable, `view3d.gl_view` shows a placeholder with
 the install hint. There is no separate editor mode fallback.
 
+## Project layout
+
+```text
+app/                 editor startup, game detection, resource/cache setup
+ui/                  Tk dialogs and panels
+core/                project model, BSP/REZ primitives, save/load logic
+catalog/             catalog builder, actor visual table parsing, catalog data
+features/doors/      physical-door matching, cloning, validation, BSP writing
+features/prefabs/    prefab inspection, static import planning, validation
+features/presets/    preset persistence
+conversion/          LoMM-to-MM9 conversion tools and config
+view3d/              existing OpenGL preview package
+mm9_patcher/         DAT/RUDE patcher tools, kept stable until core refactors settle
+tests/               package/feature-grouped test suites
+```
+Intentional command launchers are kept at the package root.
+
+Import/refactor rules:
+
+- Use package-relative imports inside packages after each module is moved.
+- Keep thin root launcher wrappers for existing commands:
+  `mm9_editor.py`, `catalog.py`, `lomm_to_mm9.py`, `bsp.py`, and
+  `mm9_rezmgr.py`.
+- Move one cluster at a time and run `python -m unittest discover -s tests`
+  after each cluster.
+- Do not move generated/debug data into code packages except stable catalog
+  artifacts, which now live under `catalog/data/`.
+
 ## Main Modules
 
 | Path | Purpose |
 |---|---|
-| `mm9_editor.py` | Main Tk application. Owns menus, toolbar, project state, level panel, `View3D`, properties panel, save dialog, placement callbacks, movement/rotation/elevation commit logic, and preset commands. |
-| `project.py` | In-memory project model. `LevelEdit` owns source level data and pending ops. `AddOp`, `MoveOp`, `EditOp`, `DeleteOp`, and `CloneDoorOp` materialize pending edits and feed the save plan. |
+| `app/editor.py` + `mm9_editor.py` | Main Tk application. `app/editor.py` owns menus, toolbar, project state, level panel, `View3D`, properties panel, save dialog, placement callbacks, movement/rotation/elevation commit logic, and preset commands. `mm9_editor.py` is the compatibility launcher. |
+| `core/` | Shared editor infrastructure: project model, `.mm9mod` save/open support, BSP parser, REZ reader/writer, game resource provider, game-path autodetection, and install/restore logic. Root `bsp.py` and `mm9_rezmgr.py` remain command launchers only. |
 | `mm9_patcher/mm9_patch.py` | DAT v66 parser/serializer. Trusted core for `World`, `WorldObject`, and `Property`. |
-| `catalog.py` | Builds/loads `catalog.json`, indexing WorldObject classes and model filenames from shipped levels. |
-| `catalog_panel.py` | Left panel listing level objects and launching the Add Object dialog. |
-| `add_object_dialog.py` | Class and preset picker used before entering placement mode. |
-| `properties_panel.py` | Right-side inspector. Includes transform controls for `Pos`, yaw from `Rotation[1]`, and `MoveToFloor`. |
-| `preset_manager.py` / `preset_dialog.py` | User preset persistence and dialogs. |
-| `npc_dialog.py` | Fresh NPC dialogue setup before placement. |
-| `diff_panel.py` | Save/commit dialog for patched REZ output and optional RUDE archive entries. |
-| `project_io.py` | `.mm9mod` save/open support for pending operations. |
-| `bsp.py` | BSP parser plus optional floor raycast utility. The viewport uses parsed BSP geometry for rendering and click placement. |
-| `door_links.py` | Read-only matching between `Door`/`RotatingDoor` world objects and same-named physical BSP submodels. |
-| `door_clone.py` | In-memory physical-door clone planner. Produces cloned controller objects plus copied BSP submodel byte records for later DAT serialization. |
-| `door_clone_dialog.py` | Tk dialog used by the editor's Clone Physical Door command. |
-| `door_clone_validation.py` | Save-plan validation for pending physical-door clones. Emits warnings for portal reuse, mismatched controller/BSP data, and terminal BSP tails. |
-| `door_bsp_writer.py` | Minimal BSP-aware DAT writer for appending renamed and translated cloned door submodels during save. |
-| `prefab_inspector.py` | Read-only inspector for converted DEdit prefab DATs. Summarizes contained WorldObjects, BSP model roles, bounds, polygon counts, and parse warnings before any prefab import work mutates levels. |
-| `prefab_import.py` | Static BSP import planner for converted prefab DATs. Produces renamed/transformed BSP submodel clone records without importing WorldObjects or scripts. |
-| `prefab_import_validation.py` | Save-plan validation for static prefab imports. Emits non-blocking warnings for ignored prefab objects, default texture names, duplicate names, physics-role imports, and unconfirmed collision behavior. |
-| `mm9_rezmgr.py` | REZ reader/writer retained for CLI, legacy projects, and advanced tooling. |
-| `game_resources.py` | REZ-backed resource provider for game-style virtual paths. Reads from detected `data/*.REZ` archives and materializes cached asset trees for existing loaders. |
+| `catalog/` + `catalog.py` | Builds/loads catalog data. `catalog.py` is a compatibility CLI wrapper; implementation lives in `catalog/builder.py`, actor table parsing in `catalog/actor_visuals.py`, and generated JSON in `catalog/data/`. |
+| `conversion/` + `lomm_to_mm9.py` | LoMM-to-MM9 conversion. `lomm_to_mm9.py` is a compatibility CLI wrapper; implementation and default YAML rules live under `conversion/`. |
+| `ui/` | Tk panels and dialogs: level catalog panel, Add Object dialog, properties inspector, fresh NPC dialog, save/commit dialog, preset dialogs, REZ picker, and door clone dialog. |
+| `features/presets/manager.py` | User preset persistence. |
+| `features/doors/` | Physical-door matching, clone planning, validation, and BSP writing. |
+| `features/prefabs/` | Converted prefab inspection, static BSP import planning, and save-plan validation. |
+| `tests/` | Test package grouped by area: `tests/app_tests/`, `tests/catalog_tests/`, `tests/core_tests/`, `tests/feature_tests/doors/`, `tests/feature_tests/prefabs/`, and `tests/view3d_tests/`. Shared test path setup lives in `tests/_path.py`; folder names avoid shadowing production packages during `unittest discover`. |
 
 ## Game Install Detection And Resources
 
-- `autodetect.detect()` requires a nearby MM9 install. It checks the editor
+- `core/autodetect.detect()` requires a nearby MM9 install. It checks the editor
   folder, then its parent, for a `data/` folder containing the required
   `WORLDS.REZ`, `RUDE.REZ`, and `SCRIPTS.REZ` archives. `--game-root <path>`
   can be used to point at an install explicitly.
@@ -101,7 +117,7 @@ the install hint. There is no separate editor mode fallback.
 - Fresh NPC number suggestion scans `RUDE/NPC<N>` through
   `GameResources`, excluding the special `NPC997`-`NPC999` journal/note/award
   files. In the bundled extracted data this currently suggests `438`.
-- The cache bridge is in place for viewport assets. `autodetect` resolves
+- The cache bridge is in place for viewport assets. `core/autodetect` resolves
   a writable cache folder, and `GameResources.cache_archive_tree()` can
   materialize REZ entries into a versioned cache keyed by archive path, size,
   and mtime. `EditorApp` passes cached folders to the existing DTX/ABC
@@ -129,7 +145,7 @@ the install hint. There is no separate editor mode fallback.
   patched archive list, confirms the affected archives, backs up the live game
   `data/*.REZ` files under `backups/install_<timestamp>/data/`, then replaces
   only those archives in the detected game `data` folder. The installer logic
-  lives in `install_manager.py`; it writes an `install_manifest.json` next to
+  lives in `core/install_manager.py`; it writes an `install_manifest.json` next to
   the backup and uses a temporary `<archive>.installing` copy before
   `os.replace()`.
 - Restore is in place. `File -> Restore Installed Backup...` accepts
@@ -166,6 +182,14 @@ Orbit mode is the editing mode:
 - `Tools -> Import Static Prefab BSP...` opens a converted prefab `.dat`, asks
   for a new BSP model name, then the next BSP click places a static prefab
   import preview.
+- `View -> Toggle object helpers` mirrors the viewport `Helpers` button and
+  toggles billboards for objects that already have visible 3-D models, such as
+  NPCs, monsters, furniture, chests, and props.
+- `View -> Toggle world helpers` toggles editor/service billboards such as
+  AI rails/barriers, ambient sounds, triggers, weather/world markers, doors,
+  lights, and `BlueWater` markers.
+- `View -> Collision BSP` controls helper BSP preview mode with `hidden`,
+  `solid`, `wireframe`, and `raw`.
 - Drag selected object: move X/Z while preserving current Y.
 - Arrow keys: nudge selected object X/Z relative to camera.
 - `PageUp` / `PageDown`, or `E` / `Q`: adjust selected object height.
@@ -191,7 +215,7 @@ Fly mode is for navigation:
 - `on_elevate(world_index, new_y)`
 - `on_rotate(world_index, rotation_tuple)`
 
-`mm9_editor.py` maps these to project operations:
+`app/editor.py` maps these to project operations:
 
 - New objects become `AddOp(template, overrides={"Pos": [...]})`.
 - Physical door clones become `CloneDoorOp(source_name, new_name,
@@ -427,20 +451,20 @@ properties alone.
 
 Physical-door clone implementation status:
 
-- `bsp.py` preserves source byte ranges for parsed world-model records, so
+- `core/bsp.py` preserves source byte ranges for parsed world-model records, so
   door submodels such as `Door32`, `ChurchdoorR`, and `ChurchdoorL` can be
   copied from the original DAT bytes.
-- `door_links.py` links door controller objects to same-named BSP submodels
+- `features/doors/links.py` links door controller objects to same-named BSP submodels
   and resolves paired rotating doors through `DoubleDoorName`.
-- `door_clone.py` builds an in-memory clone plan from an existing physical
+- `features/doors/clone.py` builds an in-memory clone plan from an existing physical
   door. It deep-copies one or two controller objects, translates `Pos` and
   `RotationPoint`, updates paired `DoubleDoorName` values, checks name
   collisions, and carries copied BSP source records with source/new names.
-- `project.py` has `CloneDoorOp`, materialized object support, undo/redo
+- `core/project.py` has `CloneDoorOp`, materialized object support, undo/redo
   compatibility through the existing op stack, pending-object index mapping,
-  and save-plan `door_clones` metadata. `project_io.py` serializes this op in
+  and save-plan `door_clones` metadata. `core/project_io.py` serializes this op in
   `.mm9mod` files.
-- `mm9_editor.py` exposes the workflow through `Tools -> Clone Physical
+- `app/editor.py` exposes the workflow through `Tools -> Clone Physical
   Door...` and a toolbar `Clone Door...` button. The dialog lists existing
   physical door links in the active level and suggests a collision-free clone
   name. After the user confirms, the next BSP click creates the pending clone.
@@ -465,7 +489,7 @@ Physical-door clone implementation status:
   The manifest records `door_clones` and `validation_warnings` per DAT write.
 - Current warnings include reused `PortalName`, incomplete clone/controller
   data, BSP/controller name mismatches, and terminal BSP-tail handling.
-- `door_bsp_writer.py` implements the current save path for physical-door
+- `features/doors/bsp_writer.py` implements the current save path for physical-door
   clones. It appends copied world-model records before the WorldObject section,
   increments the world-model count, patches `NextWorldItem`, renames the BSP
   submodels, transforms `min_box`, `max_box`, `translation`, and point
@@ -497,13 +521,13 @@ not all have the same shape:
   geometry is only in system-named BSP records: `PhysicsBSP` and `VisBSP`, each
   with 345 polygons and matching bounds.
 
-`prefab_inspector.py` is the Stage 1 read-only layer for this work. It parses a
+`features/prefabs/inspector.py` is the Stage 1 read-only layer for this work. It parses a
 converted prefab DAT, classifies BSP model roles (`geometry`,
 `controller_geometry`, `physics`, `visibility`, `skybox`), reports object
 classes, bounds, polygon/point/texture counts, and carries BSP parse warnings.
 The editor exposes it through `Tools -> Inspect Prefab DAT...`.
 
-Stage 2 backend import is in place in `prefab_import.py` and
+Stage 2 backend import is in place in `features/prefabs/import_static.py` and
 `project.ImportPrefabBspOp`:
 
 - It imports static BSP records only. It does not yet import prefab
@@ -535,7 +559,7 @@ Stage 2 backend import is in place in `prefab_import.py` and
   These edits mutate `ImportPrefabBspOp.target_pos` / `target_yaw` and rebuild
   the BSP preview. The operation remains the source of truth, so the visible
   object and imported BSP stay together instead of drifting.
-- Stage 4 validation is in place through `prefab_import_validation.py`.
+- Stage 4 validation is in place through `features/prefabs/validation.py`.
   Save Preview and `manifest.json` now report non-blocking warnings when a
   static import ignores prefab WorldObjects, imports `PhysicsBSP` polygon data
   as a normal visible submodel, uses source models with `Default` texture
@@ -592,8 +616,9 @@ Stage 2 backend import is in place in `prefab_import.py` and
   `InvisibleBrush` WorldObject controller, and the segment length is persisted
   as `ImportPrefabBspOp.collision_segment_length` in `.mm9mod` format version
   7.
-- Stage 4 helper BSP preview modes are in place in the 3-D toolbar as
-  `Collision BSP: hidden/solid/wireframe/raw`. Helper BSPs are detected by
+- Stage 4 helper BSP preview modes are in place under
+  `View -> Collision BSP` as `hidden`, `solid`, `wireframe`, and `raw`.
+  Helper BSPs are detected by
   `_Collision` model names or helper textures such as `Firethrough.dtx`.
   `hidden` skips them, `solid` draws a translucent magenta helper, `wireframe`
   draws a magenta wire overlay, and `raw` uses normal BSP texture/range
@@ -619,7 +644,8 @@ Current support is intentionally conservative:
 - Top-level NPC/creature ABCs from `MODELS.REZ` render as static posed
   meshes, including weighted/complex models via a conservative LOD0 preview.
 - NPC/creature model and skin previews prefer the `actor_visuals` table stored
-  in `catalog.json`, generated from `DATA.REZ`'s `ACTOR`/`MONSTERS` resources.
+  in `catalog/data/catalog.json`, generated from `DATA.REZ`'s
+  `ACTOR`/`MONSTERS` resources.
   This fixes DAT placeholder filenames such as BATHHOUSE's `models\Honk.abc`
   Ebora/concubines and MOUNTAINPASS wolf objects with `models\sheep.abc`.
 - The renderer no longer keeps BATHHOUSE-specific model/skin path overrides;
@@ -656,9 +682,12 @@ Confirmed ABC details:
   transform commits are undoable/redoable; edits to not-yet-saved added objects
   still mutate that object's `AddOp.overrides` and are undone as part of the
   whole add rather than as separate property-level steps.
-- Editor helper billboards are hidden by default in the 3-D view.  Use the
-  `Helpers` toolbar toggle to show trigger/sound/marker/world handles and
-  `BlueWater` markers while debugging level logic.
+- Object and world helper billboards are both hidden by default in the 3-D
+  view.  Use the viewport `Helpers` toolbar toggle, or
+  `View -> Toggle object helpers`, to show billboards for objects that already
+  render with 3-D models. Use `View -> Toggle world helpers` to show
+  trigger/sound/marker/world handles, AI rails/barriers, doors, lights,
+  weather helpers, and `BlueWater` markers while debugging level logic.
 
 ## Suggested Next Work
 
@@ -667,44 +696,62 @@ Confirmed ABC details:
 
 ### Editor Billboard Visibility Notes
 
-Implemented goal: hide non-gameplay-visual helper billboards by default while
-keeping a single control-panel checkbox for debugging/level-authoring work that
-needs them.
+Implemented goal: split billboard helper visibility into object helpers and
+world/service helpers.
 
 Implementation summary:
 
-1. Added an editor-only visibility predicate for WorldObject billboards:
+1. Added an editor-only visibility predicate for world/service helper
+   WorldObject billboards:
    - classes like `BlueWater`, `ExitTrigger`, `AIRail`, `AmbientSound`
-   - categories like `trigger`, `sound`, `marker`, and `world`
-   - real selectable/gameplay visuals such as NPCs, monsters, props and visible interactive objects.
-2. Added a checkbox to the 3-D control bar beside the existing Camera/Fog
-   controls:
+   - categories like `trigger`, `sound`, `marker`, `world`, `light`, and
+     `door`
+   - AI track name prefixes such as `AITrk`
+2. Repurposed the viewport checkbox beside the Camera controls:
    - label: `Helpers`
    - default: off
-   - on: show all editor helper billboards
-   - off: hide the helper/control billboard classes above
-3. The checkbox value is stored on `_GLCanvas` as
-   `_show_helper_billboards = False`.  Toggling it rebuilds sprites from the
-   current materialized object list and requests a render.
-4. Filtering happens at sprite-upload time in `view3d/gl_objects.py`, not
-   while drawing:
-   - `_build_arrays()` / `upload_objects()` accept `include_helpers` and
-     `selected_index`.
-   - This keeps rendering and picking consistent because hidden helpers are
-     not in the billboard VBO or pick pass.
-5. Selection behavior:
+   - on: show billboards for objects that already render as 3-D models
+   - off: hide those model-backed billboards unless the object is selected or
+     actively dragged
+   - `View -> Toggle object helpers` duplicates the same control.
+3. Added `View -> Toggle world helpers` for editor/service billboards:
+   - default: off
+   - on: show all world/service helper billboards
+   - off: hide helper/control billboard classes above unless selected.
+4. Added `View -> Collision BSP` and moved the helper BSP mode selector out of
+   the viewport toolbar. The four modes remain `hidden`, `solid`,
+   `wireframe`, and `raw`.
+5. State is split on `_GLCanvas`:
+   - `_show_object_helper_billboards = False`
+   - `_show_world_helper_billboards = False`
+   - `_helper_bsp_mode = "solid"`
+6. Filtering happens in two places:
+   - world/service helpers are filtered at sprite-upload time in
+     `view3d/gl_objects.py` via `_build_arrays()` / `upload_objects()` with
+     `include_world_helpers`, `object_helper_indices`, and `selected_index`.
+   - model-backed object billboards are suppressed at draw time via
+     `should_draw_billboard_for_modeled_object()` because the viewport only
+     knows which objects successfully rendered as ABC meshes after
+     `build_render_items()`.
+7. Selection behavior:
    - the left object list still shows every object.
-   - selected helper objects stay included in the billboard VBO even when
-     helpers are off, so list selection remains spatially understandable.
-6. Object meshes are independent:
-   - this filter is for billboards/handles only.
-   - actual BSP geometry and ABC object meshes keep their existing
-     visibility rules.
-7. Added focused tests around the pure predicate:
+   - selected world/service helper objects stay included in the billboard VBO
+     even when world helpers are off, so list selection remains spatially
+     understandable.
+   - selected or dragged model-backed objects keep their billboard visible
+     even when object helpers are off.
+8. Object meshes are independent:
+   - these controls are for billboards/handles only.
+   - actual BSP geometry and ABC object meshes keep their existing visibility
+     rules.
+9. Added focused tests around the pure predicates:
    - `BlueWater`, `ExitTrigger`, `AIRail`, `AmbientSound` hidden by default.
-   - normal props/NPCs/monsters still visible.
-   - selected hidden helper is included when the selected-index override is
-     active.
+   - modeled objects can keep object-helper billboards even if their catalog
+     category is otherwise a world-helper category.
+   - selected hidden world helpers are included when the selected-index
+     override is active.
+   - model-backed billboards are hidden, shown, selected, and dragged according
+     to the object-helper toggle.
 
 ### Undo/Redo Notes
 
@@ -881,8 +928,9 @@ a matching `StartPoint` there. The transition wizard described in the
 
 ### Converter Pipeline
 
-`lomm_to_mm9.py` implements the findings above as a YAML-driven
-pipeline (`lomm_to_mm9.yaml`):
+`conversion/lomm_to_mm9.py` implements the findings above as a YAML-driven
+pipeline (`conversion/lomm_to_mm9.yaml`). The root `lomm_to_mm9.py` remains a
+compatibility launcher:
 
 1. **Convert classes via templates.** Replaces instances of a class
    (including LoMM-only enemies like `Orc`) with a clone of a named MM9
@@ -906,9 +954,9 @@ The converter reuses `mm9_patcher.mm9_patch` so its output round-trips
 byte-identical through the MM9 parser. See README.md for invocation
 syntax.
 
-A separate `catalog_lomm.json` (built by running `catalog.py
-build-from-rez mm9_data/worlds_lomm.rez --out catalog_lomm.json`)
-mirrors `catalog.json`'s shape but indexes the LoMM levels. It's
+A separate `catalog/data/catalog_lomm.json` (built by running `catalog.py
+build-from-rez mm9_data/worlds_lomm.rez --out catalog/data/catalog_lomm.json`)
+mirrors `catalog/data/catalog.json`'s shape but indexes the LoMM levels. It's
 useful when designing experimental conversion rules: each LoMM-only
 class entry includes the `template` (source level + instance) you can
 clone from, the union of `property_names` actually observed on
@@ -923,9 +971,8 @@ across LoMM levels.
    to the left side of the peasant in the BOOTCAMP, but in the game it appears to the right side
  - In order to see the changes in the game, a new game hass to be started. It looks like the
    saved game files store the level data state. Requires investigation.
- - Split files into different folders based on the functionality
+ - Remove hardcoded directories for the lomm conversion
+ - Make lomm_to_mm9 the part of the app, store the converted levels to WORLDS.REZ
  - Interface improvements:
     - When an object is selected, don't display it's parameters right now (except position/rotation) - add "Edit params" button instead
-    - "Helpers" button should trigger billboards for the visible 3D objects only (like NPCs, monsters, chests, etc)
-    - Add a separate option (hidden somewhere) for showing/hiding the billboards for service objects (AITracks, Door objects, Weather objects, etc)
     - Move the "Import prefab"/"Clone door" to a separate option
