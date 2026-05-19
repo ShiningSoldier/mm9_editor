@@ -31,8 +31,10 @@ See ``conversion/lomm_to_mm9.yaml`` for the default rules and inline schema docs
 Usage
 -----
 
-    python lomm_to_mm9.py CHATEAUESCAPE.DAT
-    python lomm_to_mm9.py CHATEAUESCAPE.DAT --lomm-data lomm_data
+    python lomm_to_mm9.py --mm9_root "C:\\Games\\Might and Magic IX" \\
+        --lomm_root "C:\\Games\\Legends of Might and Magic" \\
+        --level_to_convert CHATEAUESCAPE \\
+        --converted_level_name CHATEAUESCAPE_MM9
 """
 
 from __future__ import annotations
@@ -69,10 +71,6 @@ from core.rezmgr import RezReader  # type: ignore  # noqa: E402
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_MM9_REZ = os.path.join(PROJECT_ROOT, "mm9_data", "WORLDS.REZ")
-DEFAULT_MM9_MODELS_REZ = os.path.join(PROJECT_ROOT, "mm9_data", "MODELS.REZ")
-DEFAULT_MM9_SKINS_REZ = os.path.join(PROJECT_ROOT, "mm9_data", "SKINS.REZ")
-DEFAULT_LOMM_DATA = os.path.join(PROJECT_ROOT, "lomm_data")
 DEFAULT_CATALOG = os.path.join(PROJECT_ROOT, "catalog", "data", "catalog.json")
 DEFAULT_CONFIG = os.path.join(HERE, "lomm_to_mm9.yaml")
 
@@ -636,6 +634,8 @@ def _stage_audit_assets(
     mm9_models_rez: Optional[str],
     mm9_skins_rez: Optional[str],
     lomm_data_dir: Optional[str],
+    lomm_models_rez: Optional[str] = None,
+    lomm_skins_rez: Optional[str] = None,
 ) -> Tuple[AssetAudit, AssetAudit]:
     """Walk `world.objects`, gather all Filename and Skin references,
     and return (model_audit, skin_audit)."""
@@ -661,8 +661,14 @@ def _stage_audit_assets(
 
     mm9_models = _build_rez_asset_index(mm9_models_rez)
     mm9_skins = _build_rez_asset_index(mm9_skins_rez)
-    lomm_models = _build_loose_asset_index(lomm_data_dir, "MODELS")
-    lomm_skins = _build_loose_asset_index(lomm_data_dir, "SKINS")
+    lomm_models = (
+        _build_loose_asset_index(lomm_data_dir, "MODELS")
+        | _build_rez_asset_index(lomm_models_rez)
+    )
+    lomm_skins = (
+        _build_loose_asset_index(lomm_data_dir, "SKINS")
+        | _build_rez_asset_index(lomm_skins_rez)
+    )
 
     model_audit = _classify_asset_refs(model_refs, mm9_models, lomm_models)
     skin_audit = _classify_asset_refs(skin_refs, mm9_skins, lomm_skins)
@@ -677,6 +683,8 @@ def convert(
     mm9_models_rez: Optional[str] = None,
     mm9_skins_rez: Optional[str] = None,
     lomm_data_dir: Optional[str] = None,
+    lomm_models_rez: Optional[str] = None,
+    lomm_skins_rez: Optional[str] = None,
 ) -> ConversionStats:
     # 1. Apply convert rules (cloning/retyping).
     #    Runs first so converted objects (e.g. Orc -> LizardOrc)
@@ -692,7 +700,12 @@ def convert(
 
     # 4. Asset audit (informational).
     model_audit, skin_audit = _stage_audit_assets(
-        src_world, mm9_models_rez, mm9_skins_rez, lomm_data_dir,
+        src_world,
+        mm9_models_rez,
+        mm9_skins_rez,
+        lomm_data_dir,
+        lomm_models_rez=lomm_models_rez,
+        lomm_skins_rez=lomm_skins_rez,
     )
 
     return ConversionStats(
@@ -727,6 +740,19 @@ def _verify_round_trip(out_path: str) -> bool:
     return rebuilt == original
 
 
+def _world_from_bytes(data: bytes) -> World:
+    fd, tmp = tempfile.mkstemp(suffix=".DAT", prefix="lomm_cli_")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return World.load(tmp)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _print_audit(label: str, audit: AssetAudit) -> None:
     total = len(audit.in_mm9) + len(audit.in_lomm_only) + len(audit.missing)
     print(
@@ -735,7 +761,7 @@ def _print_audit(label: str, audit: AssetAudit) -> None:
         f"{len(audit.missing):>3} missing  (total {total})"
     )
     if audit.in_lomm_only:
-        print(f"      -- need to be added to MM9 {label}.REZ from lomm_data:")
+        print(f"      -- need to be added to MM9 {label}.REZ from LoMM assets:")
         for p in audit.in_lomm_only:
             print(f"         {p}")
     if audit.missing:
@@ -791,44 +817,33 @@ def _print_summary(stats: ConversionStats, world: World) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Convert a LoMM .DAT level into an MM9-compatible one.",
+        description=(
+            "Convert a LoMM level from LoMM WORLDS.REZ and add it to "
+            "MM9 WORLDS.REZ."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("input", help="LoMM .DAT to convert")
     parser.add_argument(
-        "-o", "--output",
-        help="Output path (default: <input>_mm9.DAT next to the input)",
+        "--mm9_root", required=True,
+        help="Path to the Might and Magic IX install folder.",
+    )
+    parser.add_argument(
+        "--lomm_root", required=True,
+        help="Path to the Legends of Might and Magic install folder.",
+    )
+    parser.add_argument(
+        "--level_to_convert", required=True,
+        help="Level name from LoMM WORLDS.REZ, e.g. CHATEAUESCAPE.",
+    )
+    parser.add_argument(
+        "--converted_level_name", required=True,
+        help="New level name to add to MM9 WORLDS.REZ.",
     )
     parser.add_argument(
         "--config", default=DEFAULT_CONFIG,
         help=(
             "Path to the YAML (or JSON) conversion config "
             "(default: %(default)s)"
-        ),
-    )
-    parser.add_argument(
-        "--mm9-rez", default=DEFAULT_MM9_REZ,
-        help=f"Path to MM9 WORLDS.REZ (default: {DEFAULT_MM9_REZ})",
-    )
-    parser.add_argument(
-        "--mm9-models-rez", default=DEFAULT_MM9_MODELS_REZ,
-        help=(
-            "Path to MM9 MODELS.REZ for the asset audit "
-            "(default: %(default)s)"
-        ),
-    )
-    parser.add_argument(
-        "--mm9-skins-rez", default=DEFAULT_MM9_SKINS_REZ,
-        help=(
-            "Path to MM9 SKINS.REZ for the asset audit "
-            "(default: %(default)s)"
-        ),
-    )
-    parser.add_argument(
-        "--lomm-data", default=DEFAULT_LOMM_DATA,
-        help=(
-            "Folder containing loose LoMM MODELS/ and SKINS/ for the "
-            "asset audit's LoMM fallback (default: %(default)s)"
         ),
     )
     parser.add_argument(
@@ -840,100 +855,68 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--backup_root",
+        help=(
+            "Folder for automatic WORLDS.REZ backups. Default: "
+            "<mm9_root>/mm9_editor/backups"
+        ),
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
-        help="Print stats but don't write the output file.",
+        help="Validate and convert, but do not modify MM9 WORLDS.REZ.",
     )
     args = parser.parse_args(argv)
 
-    in_path = args.input
-    out_path = args.output or _default_output(in_path)
-
-    print(f"input    : {in_path}")
-    print(f"output   : {out_path}")
-    print(f"config   : {args.config}")
-    print(f"MM9 REZ  : {args.mm9_rez}")
-    print()
-
     try:
-        raw_config = _load_config(args.config)
-    except FileNotFoundError:
-        print(f"error: config file not found: {args.config}", file=sys.stderr)
-        return 1
-    except RuntimeError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+        from conversion import lomm_to_mm9_service as service
 
-    try:
-        config = _parse_config(raw_config)
-    except ValueError as exc:
-        print(f"error in config: {exc}", file=sys.stderr)
-        return 1
-
-    print(
-        f"config: drop_unknown={config.remove_unknown_classes}, "
-        f"extra_remove={sorted(config.extra_remove_classes)}, "
-        f"keep={sorted(config.keep_classes)}"
-    )
-    print(
-        f"        patch rules: {sorted(config.patch_class)}; "
-        f"convert rules: {sorted(config.convert_class)}"
-    )
-    print()
-
-    try:
-        catalog = _Mm9Catalog(
-            args.mm9_rez,
+        request = service.ConvertLevelRequest(
+            mm9_root=args.mm9_root,
+            lomm_root=args.lomm_root,
+            level_to_convert=args.level_to_convert,
+            converted_level_name=args.converted_level_name,
+            config_path=args.config,
             catalog_json=args.catalog or None,
         )
-    except FileNotFoundError as exc:
+
+        print(f"MM9 root     : {args.mm9_root}")
+        print(f"LoMM root    : {args.lomm_root}")
+        print(f"source level : {args.level_to_convert}")
+        print(f"output level : {args.converted_level_name}")
+        print(f"config       : {args.config}")
+        print()
+
+        if args.dry_run:
+            result = service.convert_level_to_bytes(request)
+            print(f"source entry : {result.source_virtual_path}")
+            print(f"output entry : {result.output_virtual_path}")
+            print(f"DAT bytes    : {len(result.dat_bytes)}")
+            print()
+            _print_summary(result.stats, _world_from_bytes(result.dat_bytes))
+            print()
+            print("dry-run: MM9 WORLDS.REZ was not modified")
+            return 0
+
+        result = service.convert_and_insert_level(
+            request,
+            backup_root=args.backup_root,
+        )
+    except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    in_basename = os.path.basename(in_path)
-    print(f"class registry source: {catalog.catalog_source()}")
-    mm9_classes = catalog.class_names(exclude_basename=in_basename)
-    print(f"  -> {len(mm9_classes)} distinct MM9 classes")
+    print(f"source entry : {result.conversion.source_virtual_path}")
+    print(f"added entry  : {result.added_virtual_path}")
+    print(f"MM9 WORLDS   : {result.worlds_rez}")
+    print(f"backup       : {result.backup_path}")
     print()
-
-    print(f"loading {in_path}...")
-    src_world = World.load(in_path)
-    print(f"  -> {len(src_world.objects)} WorldObjects")
+    _print_summary(
+        result.conversion.stats,
+        _world_from_bytes(result.conversion.dat_bytes),
+    )
     print()
-
-    try:
-        stats = convert(
-            src_world=src_world,
-            catalog=catalog,
-            config=config,
-            input_basename=in_basename,
-            mm9_models_rez=args.mm9_models_rez,
-            mm9_skins_rez=args.mm9_skins_rez,
-            lomm_data_dir=args.lomm_data,
-        )
-    except (LookupError, ValueError) as exc:
-        print(f"error during conversion: {exc}", file=sys.stderr)
-        return 1
-
-    _print_summary(stats, src_world)
-    print()
-
-    if args.dry_run:
-        print("dry-run: not writing output")
-        return 0
-
-    src_world.save(out_path)
-    print(f"wrote {out_path} ({os.path.getsize(out_path)} bytes)")
-
-    if _verify_round_trip(out_path):
-        print("verify : output round-trips byte-identical OK")
-    else:
-        print(
-            "verify : !! output does NOT round-trip byte-identical "
-            "(this is unexpected for a clean conversion)",
-            file=sys.stderr,
-        )
-        return 2
-
+    for line in result.log:
+        print(line)
     return 0
 
 

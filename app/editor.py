@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import os
 import re
 import struct
@@ -59,7 +60,7 @@ from catalog import build_catalog_from_rez, load_catalog
 from features.presets.manager import PresetStore
 
 # These imports pull in tkinter; they're deferred to _import_gui() below.
-CatalogPanel = PropertiesPanel = SaveDialog = None  # type: ignore
+CatalogPanel = PropertiesPanel = SaveDialog = LommConversionDialog = None  # type: ignore
 View3D = None          # type: ignore
 OPENGL_AVAILABLE = False
 _view3d_missing: list = []   # packages still needed; populated by _import_gui()
@@ -170,7 +171,7 @@ def _ask_prefab_collision_options(parent) -> Optional[Dict[str, Any]]:
 def _import_gui():
     """Import all the GUI-dependent modules. Called only after config
     validation passes, so console errors don't get masked by missing-Tk."""
-    global tk, CatalogPanel, PropertiesPanel, SaveDialog
+    global tk, CatalogPanel, PropertiesPanel, SaveDialog, LommConversionDialog
     global filedialog, messagebox, simpledialog, ttk
     global EditPresetDialog, ManagePresetsDialog
     global View3D, OPENGL_AVAILABLE, _view3d_missing
@@ -180,9 +181,11 @@ def _import_gui():
     from ui.properties_panel import PropertiesPanel as _PP
     from ui.diff_panel import SaveDialog as _SD
     from ui.preset_dialog import EditPresetDialog as _EPD, ManagePresetsDialog as _MPD
+    from ui.lomm_conversion_dialog import LommConversionDialog as _LCD
     tk = _tk
     filedialog = _fd; messagebox = _mb; simpledialog = _sd; ttk = _ttk
     CatalogPanel = _CP; PropertiesPanel = _PP; SaveDialog = _SD
+    LommConversionDialog = _LCD
     EditPresetDialog = _EPD; ManagePresetsDialog = _MPD
     try:
         from view3d import View3D as _V3D, OPENGL_AVAILABLE as _OGL
@@ -203,9 +206,10 @@ def _import_gui():
 
 class EditorApp:
     def __init__(self, root: tk.Tk, catalog: Dict[str, Any],
-                 paths: Any):
+                 paths: Any, catalog_path: Optional[str] = None):
         self.root = root
         self.catalog = catalog
+        self.catalog_path = catalog_path
         self.cfg = paths          # GamePaths — kept as self.cfg for compat
         self.resources = paths.resources()
 
@@ -221,6 +225,9 @@ class EditorApp:
         # User preset store — loads (or creates) user_presets.json in the
         # editor directory so presets survive across sessions.
         _editor_dir = getattr(paths, "editor_dir", None) or EDITOR_ROOT
+        self.editor_dir = _editor_dir
+        self.settings_path = os.path.join(_editor_dir, "editor_settings.json")
+        self.editor_settings = self._load_editor_settings()
         self.preset_store = PresetStore(
             os.path.join(_editor_dir, "user_presets.json"))
         self.preset_store.load()
@@ -291,6 +298,11 @@ class EditorApp:
                 variable=self._view_collision_bsp_var,
                 command=self.cmd_set_collision_bsp_mode,
             )
+
+        menubar.add_command(
+            label="LoMM to MM9 conversion",
+            command=self.cmd_lomm_to_mm9_conversion,
+        )
 
         m_tools = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=m_tools)
@@ -412,6 +424,54 @@ class EditorApp:
         self.root.bind_all("<Control-z>",       lambda e: self.cmd_undo())
         self.root.bind_all("<Control-y>",       lambda e: self.cmd_redo())
         self.root.bind_all("<Control-Z>",       lambda e: self.cmd_redo())
+
+    # ---------- editor settings ----------
+
+    def _load_editor_settings(self) -> Dict[str, Any]:
+        path = getattr(self, "settings_path", "")
+        if not path or not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            return dict(raw.get("settings", raw))
+        except Exception:
+            return {}
+
+    def _save_editor_settings(self) -> None:
+        path = getattr(self, "settings_path", "")
+        if not path:
+            return
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "version": 1,
+                        "settings": getattr(self, "editor_settings", {}),
+                    },
+                    fh,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+        except Exception:
+            pass
+
+    def _last_lomm_root(self) -> str:
+        settings = getattr(self, "editor_settings", {}) or {}
+        value = str(settings.get("last_lomm_root") or "")
+        return value if value and os.path.isdir(value) else ""
+
+    def _remember_lomm_root(self, lomm_root: str) -> None:
+        value = str(lomm_root or "").strip()
+        if not value:
+            return
+        settings = getattr(self, "editor_settings", None)
+        if not isinstance(settings, dict):
+            settings = {}
+            self.editor_settings = settings
+        settings["last_lomm_root"] = os.path.abspath(value)
+        self._save_editor_settings()
 
     def _on_3d_object_selected(self, world_index: int) -> None:
         """Selection callback from the 3-D view (one-arg; adapts to two-arg)."""
@@ -648,6 +708,37 @@ class EditorApp:
         if self.view3d is None:
             return
         self.view3d.set_helper_bsp_mode(self._view_collision_bsp_var.get())
+
+    def cmd_lomm_to_mm9_conversion(self) -> None:
+        """Open the LoMM-to-MM9 conversion workflow."""
+        self._flush_view_transforms()
+        mm9_root = getattr(self.cfg, "game_root", None)
+        if not mm9_root or not os.path.isdir(mm9_root):
+            messagebox.showerror(
+                "MM9 game folder not detected",
+                "No MM9 game folder was detected. Launch from the game folder "
+                "or use --game-root.",
+            )
+            return
+        LommConversionDialog.open(
+            self.root,
+            mm9_root=mm9_root,
+            backup_root=getattr(self.cfg, "backup_root", None),
+            catalog_json=self.catalog_path,
+            initial_lomm_root=self._last_lomm_root(),
+            on_success=self._on_lomm_conversion_success,
+        )
+
+    def _on_lomm_conversion_success(self, result: Any, lomm_root: str = "") -> None:
+        """Open the newly inserted MM9 level after a LoMM conversion."""
+        self._remember_lomm_root(lomm_root)
+        try:
+            self._open_rez_level(result.worlds_rez, result.added_virtual_path)
+        except Exception as exc:
+            messagebox.showerror(
+                "Open converted level failed",
+                str(exc),
+            )
 
     def _on_view3d_object_helpers_changed(self, enabled: bool) -> None:
         """Keep View menu state synced when the toolbar button is clicked."""
@@ -1798,7 +1889,7 @@ def main(argv=None):
                 + "\n\nThis is just a heads-up - the editor will work normally.")
         root.after(200, _show_warnings)
 
-    app = EditorApp(root, catalog, paths)
+    app = EditorApp(root, catalog, paths, catalog_path=args.catalog)
     root.mainloop()
     return 0
 

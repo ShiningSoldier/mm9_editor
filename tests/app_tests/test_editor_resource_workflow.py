@@ -1,5 +1,6 @@
 import os
 import importlib.util
+import json
 import sys
 import tempfile
 import types
@@ -56,6 +57,7 @@ class EditorResourceWorkflowTests(unittest.TestCase):
         app.project = P.Project()
         app.catalog = catalog
         app.cfg = types.SimpleNamespace()
+        app.view3d = None
         return app
 
     def test_template_lookup_loads_source_level_through_resources(self):
@@ -118,6 +120,129 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             n = mm9_editor_app.EditorApp._suggest_next_npc_nbr(app)
 
             self.assertEqual(n, 3)
+
+    def test_lomm_conversion_command_opens_dialog_with_detected_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            opened = {}
+
+            class FakeDialog:
+                @staticmethod
+                def open(parent, **kwargs):
+                    opened["parent"] = parent
+                    opened.update(kwargs)
+
+            method_globals = mm9_editor_app.EditorApp.cmd_lomm_to_mm9_conversion.__globals__
+            old_dialog = method_globals.get("LommConversionDialog")
+            try:
+                method_globals["LommConversionDialog"] = FakeDialog
+                app = self._dummy_app({}, {"classes": {}, "filenames": {}})
+                app.root = object()
+                app.editor_settings = {
+                    "last_lomm_root": os.path.join(tmp, "LoMM"),
+                }
+                os.makedirs(app.editor_settings["last_lomm_root"])
+                app.cfg = types.SimpleNamespace(
+                    game_root=tmp,
+                    backup_root=os.path.join(tmp, "backups"),
+                )
+                app.catalog_path = os.path.join(tmp, "catalog.json")
+
+                mm9_editor_app.EditorApp.cmd_lomm_to_mm9_conversion(app)
+            finally:
+                method_globals["LommConversionDialog"] = old_dialog
+
+            self.assertEqual(opened["parent"], app.root)
+            self.assertEqual(opened["mm9_root"], tmp)
+            self.assertEqual(opened["backup_root"], os.path.join(tmp, "backups"))
+            self.assertEqual(opened["catalog_json"], os.path.join(tmp, "catalog.json"))
+            self.assertEqual(opened["initial_lomm_root"], os.path.join(tmp, "LoMM"))
+            self.assertTrue(callable(opened["on_success"]))
+
+    def test_lomm_conversion_success_opens_new_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            worlds_rez = os.path.join(tmp, "game", "data", "WORLDS.REZ")
+            write_minimal_rez(worlds_rez, {
+                "WORLDS/NEWLEVEL": make_world_bytes("Converted"),
+            })
+            app = self._dummy_app({"worlds": worlds_rez}, {"classes": {}, "filenames": {}})
+
+            class FakeCombo(dict):
+                def __setitem__(self, key, value):
+                    super().__setitem__(key, value)
+
+            class FakeVar:
+                def __init__(self):
+                    self.value = None
+
+                def set(self, value):
+                    self.value = value
+
+            selected = {}
+            app.level_combo = FakeCombo()
+            app.level_var = FakeVar()
+            app._set_active = lambda level: selected.setdefault("level", level)
+
+            result = types.SimpleNamespace(
+                worlds_rez=worlds_rez,
+                added_virtual_path="WORLDS/NEWLEVEL",
+            )
+            app._remember_lomm_root = lambda value: selected.setdefault("lomm_root", value)
+
+            mm9_editor_app.EditorApp._on_lomm_conversion_success(
+                app,
+                result,
+                r"C:\games\Legends of Might and Magic",
+            )
+
+            self.assertEqual(app.level_combo["values"], ["WORLDS/NEWLEVEL"])
+            self.assertEqual(app.level_var.value, "WORLDS/NEWLEVEL")
+            self.assertEqual(selected["level"].rez_vpath, "WORLDS/NEWLEVEL")
+            self.assertEqual(selected["lomm_root"], r"C:\games\Legends of Might and Magic")
+
+    def test_lomm_root_setting_round_trips_through_editor_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lomm_root = os.path.join(tmp, "LoMM")
+            os.makedirs(lomm_root)
+            app = object.__new__(mm9_editor_app.EditorApp)
+            app.settings_path = os.path.join(tmp, "editor_settings.json")
+            app.editor_settings = {}
+
+            mm9_editor_app.EditorApp._remember_lomm_root(app, lomm_root)
+
+            with open(app.settings_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["settings"]["last_lomm_root"], os.path.abspath(lomm_root))
+
+            app2 = object.__new__(mm9_editor_app.EditorApp)
+            app2.settings_path = app.settings_path
+            loaded = mm9_editor_app.EditorApp._load_editor_settings(app2)
+            app2.editor_settings = loaded
+
+            self.assertEqual(
+                mm9_editor_app.EditorApp._last_lomm_root(app2),
+                os.path.abspath(lomm_root),
+            )
+
+    def test_lomm_conversion_command_reports_missing_game_root(self):
+        errors = []
+
+        class FakeMessagebox:
+            @staticmethod
+            def showerror(title, body):
+                errors.append((title, body))
+
+        method_globals = mm9_editor_app.EditorApp.cmd_lomm_to_mm9_conversion.__globals__
+        old_messagebox = method_globals.get("messagebox")
+        try:
+            method_globals["messagebox"] = FakeMessagebox
+            app = self._dummy_app({}, {"classes": {}, "filenames": {}})
+            app.cfg = types.SimpleNamespace(game_root=None, backup_root=None)
+
+            mm9_editor_app.EditorApp.cmd_lomm_to_mm9_conversion(app)
+        finally:
+            method_globals["messagebox"] = old_messagebox
+
+        self.assertEqual(errors[0][0], "MM9 game folder not detected")
 
 
 if __name__ == "__main__":

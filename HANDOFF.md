@@ -24,7 +24,10 @@ Open level from WORLDS.REZ -> select/add object -> click a BSP surface to place
 The editor never writes over the live game archives during ordinary Save.
 Opened source archives are backed up under `backups/`; committed output goes
 under `output/<timestamp>/`. Installing output to the game is an explicit menu
-action that creates a separate install backup first.
+action that creates a separate install backup first. The LoMM-to-MM9
+conversion workflow is the explicit live-archive exception: it transactionally
+adds a converted level to `data/WORLDS.REZ` only after writing an automatic
+conversion backup.
 
 ## Runtime Layout
 
@@ -67,7 +70,7 @@ view3d/              existing OpenGL preview package
 mm9_patcher/         DAT/RUDE patcher tools, kept stable until core refactors settle
 tests/               package/feature-grouped test suites
 ```
-Intentional command launchers are kept at the package root.
+Command launchers are kept at the package root.
 
 Import/refactor rules:
 
@@ -88,8 +91,8 @@ Import/refactor rules:
 | `core/` | Shared editor infrastructure: project model, `.mm9mod` save/open support, BSP parser, REZ reader/writer, game resource provider, game-path autodetection, and install/restore logic. Root `bsp.py` and `mm9_rezmgr.py` remain command launchers only. |
 | `mm9_patcher/mm9_patch.py` | DAT v66 parser/serializer. Trusted core for `World`, `WorldObject`, and `Property`. |
 | `catalog/` + `catalog.py` | Builds/loads catalog data. `catalog.py` is a compatibility CLI wrapper; implementation lives in `catalog/builder.py`, actor table parsing in `catalog/actor_visuals.py`, and generated JSON in `catalog/data/`. |
-| `conversion/` + `lomm_to_mm9.py` | LoMM-to-MM9 conversion. `lomm_to_mm9.py` is a compatibility CLI wrapper; implementation and default YAML rules live under `conversion/`. |
-| `ui/` | Tk panels and dialogs: level catalog panel, Add Object dialog, properties inspector, fresh NPC dialog, save/commit dialog, preset dialogs, REZ picker, and door clone dialog. |
+| `conversion/` + `lomm_to_mm9.py` | LoMM-to-MM9 conversion. `lomm_to_mm9.py` is a compatibility CLI wrapper; reusable service/insertion logic and default YAML rules live under `conversion/`. |
+| `ui/` | Tk panels and dialogs: level catalog panel, Add Object dialog, properties inspector, fresh NPC dialog, save/commit dialog, preset dialogs, REZ picker, LoMM conversion dialog, and door clone dialog. |
 | `features/presets/manager.py` | User preset persistence. |
 | `features/doors/` | Physical-door matching, clone planning, validation, and BSP writing. |
 | `features/prefabs/` | Converted prefab inspection, static BSP import planning, and save-plan validation. |
@@ -154,6 +157,16 @@ Import/refactor rules:
   `backups/restore_<timestamp>_current/data/`, then restores the original REZ
   files from the selected install backup. `restore_manifest.json` records what
   was restored and where the pre-restore live files were saved.
+- LoMM-to-MM9 conversion is in place. The top menu item
+  `LoMM to MM9 conversion` opens a dialog that accepts a LoMM install folder,
+  lists v66 DAT levels from LoMM `WORLDS.REZ`, asks for the new MM9 level name,
+  converts the DAT through the YAML pipeline, and transactionally adds a new
+  `WORLDS/<name>` entry to the detected MM9 `data/WORLDS.REZ`. Before replacing
+  the live archive it writes `backups/lomm_to_mm9_<timestamp>/data/WORLDS.REZ`
+  and an `install_manifest.json` with a `conversion` section. The backup is
+  compatible with the existing restore flow. After a successful conversion the
+  editor opens the new level immediately. The last successful LoMM install path
+  is remembered in `editor_settings.json`.
 
 ## `view3d/`
 
@@ -930,7 +943,9 @@ a matching `StartPoint` there. The transition wizard described in the
 
 `conversion/lomm_to_mm9.py` implements the findings above as a YAML-driven
 pipeline (`conversion/lomm_to_mm9.yaml`). The root `lomm_to_mm9.py` remains a
-compatibility launcher:
+compatibility launcher, while `conversion/lomm_to_mm9_service.py` provides the
+shared install-root validation, LoMM level listing, conversion-to-bytes, and
+transactional `WORLDS.REZ` insertion used by both the CLI and editor:
 
 1. **Convert classes via templates.** Replaces instances of a class
    (including LoMM-only enemies like `Orc`) with a clone of a named MM9
@@ -942,26 +957,55 @@ compatibility launcher:
    `WorldProperties`).
 4. **Asset audit** walks every remaining object's `Filename`
    (`.abc`/`.lta`/`.ltb`) and `Skin` (`.dtx`) and three-way classifies:
-   in MM9, in `lomm_data/` only, or missing entirely. The "in LoMM
-   only" bucket is the punch list of files to copy into MM9's
+   in MM9, in LoMM's `MODELS.REZ` / `SKINS.REZ` only, or missing entirely.
+   The "in LoMM only" bucket is the punch list of files to copy into MM9's
    `MODELS.REZ` / `SKINS.REZ` before the level renders correctly.
+
+The standalone CLI now takes install roots rather than loose/debug data paths:
+
+```text
+python lomm_to_mm9.py \
+  --mm9_root "C:\Path\To\Might and Magic IX" \
+  --lomm_root "C:\Path\To\Legends of Might and Magic" \
+  --level_to_convert CHATEAUESCAPE \
+  --converted_level_name CHATEAUESCAPE_MM9
+```
+
+Both roots are validated before conversion. MM9 requires `data/WORLDS.REZ`,
+`data/RUDE.REZ`, and `data/SCRIPTS.REZ`; LoMM uses the same required archive
+set. The requested source level must exist in LoMM `WORLDS.REZ`, and the
+requested converted level name must not already exist in MM9 `WORLDS.REZ`
+under either extensionless or `.DAT` lookup forms.
 
 `_Mm9Catalog.load_level()` accepts the level path with or without the
 `.DAT` suffix, so the loader transparently retries the alternate form
 when the literal lookup fails.
 
-The converter reuses `mm9_patcher.mm9_patch` so its output round-trips
-byte-identical through the MM9 parser. See README.md for invocation
-syntax.
+The converter reuses `mm9_patcher.mm9_patch` so its output round-trips through
+the MM9 parser. `RezWriter.add()` is used with a DAT restype inferred from the
+converted payload magic, which is important because MM9 world entries are
+usually extensionless (`WORLDS/BOOTCAMP`, not `WORLDS/BOOTCAMP.DAT`).
 
-A separate `catalog/data/catalog_lomm.json` (built by running `catalog.py
-build-from-rez mm9_data/worlds_lomm.rez --out catalog/data/catalog_lomm.json`)
-mirrors `catalog/data/catalog.json`'s shape but indexes the LoMM levels. It's
-useful when designing experimental conversion rules: each LoMM-only
-class entry includes the `template` (source level + instance) you can
-clone from, the union of `property_names` actually observed on
-instances, and the set of `filenames` (model paths) the class uses
-across LoMM levels.
+The editor exposes the same workflow through the top-level
+`LoMM to MM9 conversion` menu item. The dialog remembers the last successful
+LoMM install folder in `editor_settings.json`, loads LoMM levels into a
+combobox, confirms the live archive replacement, writes an automatic conversion
+backup plus `install_manifest.json`, and opens the newly inserted MM9 level for
+inspection after success.
+
+A separate `catalog/data/catalog_lomm.json` can still be built from a LoMM
+`WORLDS.REZ` for conversion-rule research, for example:
+
+```text
+python catalog.py build-from-rez "C:\Path\To\LoMM\data\WORLDS.REZ" \
+  --out catalog/data/catalog_lomm.json
+```
+
+It mirrors `catalog/data/catalog.json`'s shape but indexes the LoMM levels.
+It's useful when designing experimental conversion rules: each LoMM-only class
+entry includes the `template` (source level + instance) you can clone from, the
+union of `property_names` actually observed on instances, and the set of
+`filenames` (model paths) the class uses across LoMM levels.
 
 ## Issues to fix
  - CandleProp are not rendered in any level (examples: 1000TERRORS.DAT). CandleProps
@@ -970,8 +1014,6 @@ across LoMM levels.
    to the left side of the peasant in the BOOTCAMP, but in the game it appears to the right side
  - In order to see the changes in the game, a new game hass to be started. It looks like the
    saved game files store the level data state. Requires investigation.
- - Remove hardcoded directories for the lomm conversion
- - Make lomm_to_mm9 the part of the app, store the converted levels to WORLDS.REZ
  - Interface improvements:
     - When an object is selected, don't display it's parameters right now (except position/rotation) - add "Edit params" button instead
     - Move the "Import prefab"/"Clone door" to a separate option

@@ -193,10 +193,12 @@ for reverse-engineering work, but the GUI editor workflow is REZ-only.
 ### Converting Legends of Might and Magic Levels
 
 `lomm_to_mm9.py` is a converter that takes a Legends of Might and Magic
-`.DAT` level and produces an MM9-compatible `.DAT`. Both games run on the
-same LithTech engine family and share the v66 DAT container, so the binary
-header, BSP, lightmap and PVS regions transfer cleanly. The converter
-only rewrites the WorldObject section, applying three kinds of rules:
+level from LoMM `WORLDS.REZ`, converts it to MM9-compatible DAT bytes,
+and transactionally adds it to MM9 `WORLDS.REZ` after backing up the
+original archive. Both games run on the same LithTech engine family and
+share the v66 DAT container, so the binary header, BSP, lightmap and PVS
+regions transfer cleanly. The converter only rewrites the WorldObject
+section, applying three kinds of rules:
 
 1. **Drop unknown classes.** Any WorldObject whose class is not present in
    MM9's class registry (`catalog.json`) is removed. This handles
@@ -207,33 +209,46 @@ only rewrites the WorldObject section, applying three kinds of rules:
    and `CanSaveGame = 1` plus `CanMiniSaveGame = 1` to
    `WorldProperties` so the player can save in the converted level.
 
+In the editor, use **LoMM to MM9 conversion** from the top menu, choose the
+LoMM install folder, pick a LoMM level from its `WORLDS.REZ`, and enter the
+new MM9 level name. The editor uses the same transactional backup and
+archive-replacement flow as the standalone tool, then opens the converted
+level from MM9 `WORLDS.REZ` for inspection. The last successful LoMM install
+folder is remembered in `editor_settings.json` and offered automatically the
+next time you open the conversion dialog. The selected LoMM install must have
+`data/WORLDS.REZ`, `data/RUDE.REZ`, and `data/SCRIPTS.REZ`.
+
 #### Usage
 
 ```sh
-# Default config (conversion/lomm_to_mm9.yaml)
-python lomm_to_mm9.py CHATEAUESCAPE.DAT
+python lomm_to_mm9.py \
+    --mm9_root "C:\Path\To\Might and Magic 9" \
+    --lomm_root "C:\Path\To\Legends of Might and Magic" \
+    --level_to_convert CHATEAUESCAPE \
+    --converted_level_name CHATEAUESCAPE_MM9
 
-# Custom output path
-python lomm_to_mm9.py CHATEAUESCAPE.DAT -o CHATEAUESCAPE_mm9.DAT
+# Preview only; MM9 WORLDS.REZ is not modified
+python lomm_to_mm9.py \
+    --mm9_root "C:\Path\To\Might and Magic 9" \
+    --lomm_root "C:\Path\To\Legends of Might and Magic" \
+    --level_to_convert CHATEAUESCAPE \
+    --converted_level_name CHATEAUESCAPE_MM9 \
+    --dry-run
 
-# Preview only, no file written
-python lomm_to_mm9.py CHATEAUESCAPE.DAT --dry-run
-
-# Different rule set
-python lomm_to_mm9.py CHATEAUESCAPE.DAT --config my_rules.yaml
-
-# Point at a different MM9 install (overrides catalog and template lookups)
-python lomm_to_mm9.py CHATEAUESCAPE.DAT \
-    --mm9-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
-
-# Force a fresh class scan instead of using catalog.json
-python lomm_to_mm9.py CHATEAUESCAPE.DAT --catalog ""
+# Different rule set, or force a fresh class scan instead of catalog.json
+python lomm_to_mm9.py ... --config my_rules.yaml
+python lomm_to_mm9.py ... --catalog ""
 ```
 
-The converter prints a per-stage summary, writes the output `.DAT`, and
-re-parses it to confirm it round-trips byte-identically through the MM9
-parser. PyYAML is a soft dependency; if it is not installed the loader
-falls back to JSON parsing for the config file.
+The converter prints a per-stage summary, writes a complete temporary
+`WORLDS.REZ`, backs up the original archive under
+`<mm9_root>/mm9_editor/backups/lomm_to_mm9_<timestamp>/data/`, installs the
+new archive with `os.replace()`, and verifies that the new level can be
+read back. The backup folder also gets an `install_manifest.json` with a
+`conversion` section recording the LoMM source level and new MM9 entry, so it
+can be inspected or restored through the existing backup-restore flow. PyYAML
+is a soft dependency; if it is not installed the loader falls back to JSON
+parsing for the config file.
 
 #### Editing the YAML config
 
@@ -296,14 +311,13 @@ After conversion, the script walks every remaining object's
 `Filename` (`.abc`/`.lta`/`.ltb`) and `Skin` (`.dtx`) and reports a
 three-way classification:
 
-- **in MM9** - resolves inside `mm9_data/MODELS.REZ` /
-  `mm9_data/SKINS.REZ`. Nothing to do.
-- **in LoMM only** - found inside the `--lomm-data` folder
-  (default: `lomm_data/`) but not in the MM9 archives. These are the
-  files you need to add to MM9's REZ archives before the level
-  renders correctly.
-- **missing** - not found in MM9 or in `lomm_data`. Either provide
-  the file or substitute a different model/skin in the YAML.
+- **in MM9** - resolves inside the MM9 install's `MODELS.REZ` /
+  `SKINS.REZ`. Nothing to do.
+- **in LoMM only** - found inside the LoMM install's `MODELS.REZ` /
+  `SKINS.REZ` but not in the MM9 archives. These are the files you need
+  to add to MM9's REZ archives before the level renders correctly.
+- **missing** - not found in MM9 or LoMM assets. Either provide the file
+  or substitute a different model/skin in the YAML.
 
 The audit prints the punch list under the conversion summary every
 run; pass `--dry-run` to preview without writing the output DAT.
