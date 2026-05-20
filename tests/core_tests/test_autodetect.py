@@ -21,7 +21,7 @@ class AutodetectTests(unittest.TestCase):
             editor_dir = os.path.join(game_root, "mm9_editor")
             data_dir = os.path.join(game_root, "data")
             os.makedirs(editor_dir)
-            for name in ("WORLDS.REZ", "RUDE.REZ", "SCRIPTS.REZ"):
+            for name in ("WORLDS.REZ", "RUDE.REZ", "SCRIPTS.REZ", "TEXTURES.REZ", "SKINS.REZ", "MODELS.REZ", "DATA.REZ"):
                 self._touch(os.path.join(data_dir, name))
 
             paths = autodetect.detect(editor_dir)

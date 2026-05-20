@@ -1515,7 +1515,12 @@ if OPENGL_AVAILABLE:
             not necessarily the widget under the pointer.  Skip events already
             delivered to this canvas so the zoom step is not applied twice.
             """
-            if getattr(e, "widget", None) is self:
+            widget = getattr(e, "widget", None)
+            if widget is self:
+                return
+            if widget is None or not hasattr(widget, "winfo_toplevel"):
+                return
+            if widget.winfo_toplevel() != self.winfo_toplevel():
                 return
             if not self._event_is_over_canvas():
                 return

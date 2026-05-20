@@ -8,18 +8,21 @@ adjust objects in the level view, configure NPC dialogue, and save patched
 ## Requirements
 
 - Python 3.9 or later
-- A Might and Magic IX install with `data/WORLDS.REZ`, `data/RUDE.REZ`, and
-  `data/SCRIPTS.REZ`
+- A Might and Magic IX install with the required archives in its `data` folder:
+  - `WORLDS.REZ` (Level geometry and placements)
+  - `RUDE.REZ` (NPC dialogues)
+  - `SCRIPTS.REZ` (Scripts)
+  - `TEXTURES.REZ` (BSP textures)
+  - `SKINS.REZ` (Object and character skins)
+  - `MODELS.REZ` (Object and character models)
+  - `DATA.REZ` (Game databases and global configuration)
 - PyOpenGL dependencies:
 
 ```sh
 pip install PyOpenGL PyOpenGL_accelerate pyopengltk
 ```
 
-Optional archives such as `TEXTURES.REZ`, `SKINS.REZ`, `MODELS.REZ`, and
-`DATA.REZ` improve textured rendering and actor/material previews. When they
-are present, the editor materializes only the needed files into its internal
-cache.
+Optional archives such as `SOUNDS.REZ` are used when present to load sound effects. The editor materializes only the needed files from these archives into its internal cache.
 
 ## Installation
 
@@ -158,7 +161,7 @@ Start a new game to see the changes - currently they're not displayed in previou
 
 ## Object Rendering
 
-The view renders BSP geometry with DTX textures when `TEXTURES.REZ` is available.
+The view renders BSP geometry with DTX textures loaded from `TEXTURES.REZ`.
 WorldObjects with supported ABC models render as static meshes using
 `MODELS.REZ` and `SKINS.REZ`; unsupported objects remain selectable coloured
 handles.
@@ -170,13 +173,14 @@ work.
 
 ## Known Caveats
 
+- **Mirrored Level Editing:** The editor renders the level in OpenGL's
+  right-handed coordinate system, but the LithTech game engine uses a
+  left-handed coordinate system. This results in the horizontal layout
+  (left-to-right) being mirrored between the editor view and the running game.
+  When positioning objects, remember to swap left and right relative to the target entities.
 - No undo UI yet. Close without saving to discard pending edits.
 - `.mm9mod` project files store operations, not full level bytes. The source
   game archives must remain accessible.
-- Older `.mm9mod` files that referenced loose DAT files are no longer
-  supported.
-- Some ABC models still fall back to handles because their weighted mesh,
-  material, attachment, or animation layouts are not fully decoded yet.
 
 ## CLI Tools
 
@@ -205,11 +209,12 @@ section, applying three kinds of rules:
    LoMM-only classes such as `CandleWall`, `Orc`, `GoodKingRescueZone`,
    `BuyZone`, and `Timer`.
 2. **Patch shared classes.** Adds missing properties to existing objects.
-   By default this adds `MovePlayerToFloor = 1` to every `StartPoint`
-   and `CanSaveGame = 1` plus `CanMiniSaveGame = 1` to
-   `WorldProperties` so the player can save in the converted level.
+    By default this adds `MovePlayerToFloor = 1` to every `StartPoint`
+    and `CanSaveGame = 1` plus `CanMiniSaveGame = 1` to
+    `WorldProperties` so the player can save in the converted level.
+3. **Copy missing assets.** If the level references models (`.abc`), skins (`.dtx`), or sounds (`.wav`) that are missing from MM9's active archives but exist in LoMM, they are automatically copied into MM9's `MODELS.REZ`, `SKINS.REZ`, and `SOUNDS.REZ`. A `conversion_log.txt` is created inside the backup folder detailing what was copied.
 
-In the editor, use **LoMM to MM9 conversion** from the top menu, choose the
+In the editor, select **LoMM to MM9** from the **Conversion** dropdown menu, choose the
 LoMM install folder, pick a LoMM level from its `WORLDS.REZ`, and enter the
 new MM9 level name. The editor uses the same transactional backup and
 archive-replacement flow as the standalone tool, then opens the converted
@@ -289,7 +294,7 @@ Property `code` values match the LithTech v66 DAT type codes:
 | 6    | uint32          |
 | 7    | quaternion      |
 
-#### Experimental: porting LoMM enemies to MM9
+#### Porting LoMM enemies to MM9
 
 Each rule there clones an MM9 host class instance (which
 brings MM9-compatible stats, AI, sound table, and animation state
@@ -308,16 +313,14 @@ rules in the YAML; each rule may use:
 #### Asset audit
 
 After conversion, the script walks every remaining object's
-`Filename` (`.abc`/`.lta`/`.ltb`) and `Skin` (`.dtx`) and reports a
+`Filename` (`.abc`/`.lta`/`.ltb`), `Skin` (`.dtx`), and referenced sounds (`.wav`), reporting a
 three-way classification:
 
 - **in MM9** - resolves inside the MM9 install's `MODELS.REZ` /
-  `SKINS.REZ`. Nothing to do.
-- **in LoMM only** - found inside the LoMM install's `MODELS.REZ` /
-  `SKINS.REZ` but not in the MM9 archives. These are the files you need
-  to add to MM9's REZ archives before the level renders correctly.
-- **missing** - not found in MM9 or LoMM assets. Either provide the file
-  or substitute a different model/skin in the YAML.
+  `SKINS.REZ` / `SOUNDS.REZ`. Nothing to do.
+- **in LoMM only** - found inside the LoMM archives but not in MM9. These are automatically extracted and merged into the MM9 archives during conversion.
+- **missing** - not found in either MM9 or LoMM assets. Either provide the file
+  or substitute a different asset in the YAML.
 
 The audit prints the punch list under the conversion summary every
 run; pass `--dry-run` to preview without writing the output DAT.

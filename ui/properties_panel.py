@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import struct
 import tkinter as tk
+from tkinter import messagebox
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import _path_setup  # noqa: F401
@@ -69,6 +70,132 @@ def _str_to_value(code: int, text: str) -> Any:
     raise ValueError(f"unknown code {code}")
 
 
+class EditPropertiesDialog(tk.Toplevel):
+    def __init__(self, parent: tk.Misc, obj: patcher.WorldObject, on_save: Callable[[Dict[str, Any]], None]) -> None:
+        super().__init__(parent)
+        self.title(f"Edit Properties - {obj.get('Name') or obj.type_str}")
+        self.configure(bg="#1a1d22")
+        self.resizable(True, True)
+
+        self.obj = obj
+        self.on_save = on_save
+
+        self.entries: List[Tuple[str, int, tk.StringVar]] = []
+
+        # Header info
+        hdr_frame = tk.Frame(self, bg="#1a1d22")
+        hdr_frame.pack(fill="x", padx=15, pady=(15, 5))
+        tk.Label(hdr_frame, text=f"Name: {obj.get('Name') or ''}", bg="#1a1d22", fg="#dddddd", font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
+        tk.Label(hdr_frame, text=f"Class: {obj.type_str}", bg="#1a1d22", fg="#aaaaaa", font=("Segoe UI", 9), anchor="w").pack(fill="x")
+
+        # Scrollable outer frame
+        outer = tk.Frame(self, bg="#1a1d22")
+        outer.pack(fill="both", expand=True, padx=15, pady=5)
+        outer.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        # Canvas & Scrollbar setup
+        canvas = tk.Canvas(outer, bg="#0e1116", highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        
+        vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        vsb.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=vsb.set)
+
+        self.scroll_frame = tk.Frame(canvas, bg="#0e1116")
+        canvas_win = canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+
+        def _on_frame_configure(_e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        self.scroll_frame.bind("<Configure>", _on_frame_configure)
+
+        def _on_canvas_configure(e):
+            canvas.itemconfig(canvas_win, width=e.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Mouse wheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        present = {p.name: p for p in obj.props}
+        transformed_fields = {"Pos", "Rotation", "MoveToFloor"}
+        ordered = [n for n in PRIMARY_FIELDS if n in present] + \
+                  [n for n in present if n not in PRIMARY_FIELDS]
+
+        for name in ordered:
+            if name in transformed_fields:
+                continue
+            p = present[name]
+            row = tk.Frame(self.scroll_frame, bg="#0e1116")
+            row.pack(fill="x", pady=2, padx=4)
+
+            tk.Label(row, text=name, bg="#0e1116", fg="#9bb",
+                     width=24, anchor="w",
+                     font=("Consolas", 9)).pack(side="left")
+
+            sv = tk.StringVar(value=_value_to_str(p.code, p.value))
+            ent = tk.Entry(row, textvariable=sv, bg="#23272d", fg="#e6e6e6",
+                           insertbackground="#fff", relief="flat",
+                           font=("Consolas", 9))
+            ent.pack(side="left", fill="x", expand=True)
+            self.entries.append((name, p.code, sv))
+
+        # Bind mousewheel to all elements recursively
+        def _bind_mousewheel(widget):
+            widget.bind("<MouseWheel>", _on_mousewheel)
+            for child in widget.winfo_children():
+                _bind_mousewheel(child)
+
+        _bind_mousewheel(canvas)
+
+        # Bottom buttons
+        btns = tk.Frame(self, bg="#1a1d22")
+        btns.pack(fill="x", padx=15, pady=15)
+
+        tk.Button(btns, text="Cancel", bg="#23272d", fg="#cccccc",
+                  activebackground="#33373d", relief="flat",
+                  command=self._cancel).pack(side="right")
+
+        tk.Button(btns, text="Save", bg="#2c5e8a", fg="white",
+                  activebackground="#3a78ad", relief="flat",
+                  command=self._save).pack(side="right", padx=(0, 8))
+
+        # Size and center
+        self.update_idletasks()
+        w, h = 550, 480
+        px = parent.winfo_rootx() + parent.winfo_width() // 2
+        py = parent.winfo_rooty() + parent.winfo_height() // 2
+        self.geometry(f"{w}x{h}+{px - w // 2}+{py - h // 2}")
+        self.minsize(450, 350)
+
+        self.transient(parent)
+        self.grab_set()
+        self.focus_force()
+
+    def _cancel(self) -> None:
+        self.destroy()
+
+    def _save(self) -> None:
+        updates = {}
+        for name, code, sv in self.entries:
+            try:
+                val = _str_to_value(code, sv.get())
+                try:
+                    coerced = patcher._coerce(code, val)
+                    current_coerced = patcher._coerce(code, self.obj.get(name))
+                    if coerced != current_coerced:
+                        updates[name] = val
+                except Exception:
+                    if val != self.obj.get(name):
+                        updates[name] = val
+            except Exception as e:
+                messagebox.showerror("Invalid Value", f"Could not parse value for '{name}': {e}", parent=self)
+                return
+        if updates:
+            self.on_save(updates)
+        self.destroy()
+
+
 class PropertiesPanel(tk.Frame):
     def __init__(self, parent: tk.Misc,
                  on_edit:         Callable[[str, Any], None],
@@ -124,59 +251,28 @@ class PropertiesPanel(tk.Frame):
             return
 
         display_name = str(obj.get("Name") or "").strip()
-        if display_name and display_name != obj.type_str:
-            header = f"{display_name}\n{obj.type_str}\n({len(obj.props)} fields)"
-        else:
-            header = f"{obj.type_str}\n({len(obj.props)} fields)"
+        header = f"Name: {display_name}\nClass: {obj.type_str}"
         self.header.config(text=header)
         self.del_btn.config(state="normal")
         self.preset_btn.config(
             state="normal" if self.on_save_preset else "disabled")
 
         present = {p.name: p for p in obj.props}
-        transformed_fields = self._draw_transform_controls(present)
-        ordered = [n for n in PRIMARY_FIELDS if n in present] + \
-                  [n for n in present if n not in PRIMARY_FIELDS]
+        self._draw_transform_controls(present)
 
-        for name in ordered:
-            if name in transformed_fields:
-                continue
-            p = present[name]
-            row = tk.Frame(self.body, bg="#1a1d22")
-            row.pack(fill="x", pady=1)
+        self.edit_btn = tk.Button(
+            self.body, text="Edit properties",
+            bg="#30343b", fg="white",
+            activebackground="#3a4660",
+            relief="flat", font=("Segoe UI", 9, "bold"),
+            command=self._open_edit_properties_dialog
+        )
+        self.edit_btn.pack(fill="x", padx=6, pady=8)
 
-            tk.Label(row, text=name, bg="#1a1d22", fg="#9bb",
-                     width=16, anchor="w",
-                     font=("Consolas", 9)).pack(side="left")
-
-            sv = tk.StringVar(value=_value_to_str(p.code, p.value))
-            ent = tk.Entry(row, textvariable=sv, bg="#23272d", fg="#e6e6e6",
-                           insertbackground="#fff", relief="flat",
-                           font=("Consolas", 9))
-            ent.pack(side="left", fill="x", expand=True)
-            ent.bind("<Return>", lambda e, n=name: self._commit(n))
-            ent.bind("<FocusOut>", lambda e, n=name: self._commit(n))
-            self.entries.append((name, p.code, sv))
-
-    def _commit(self, name: str) -> None:
+    def _open_edit_properties_dialog(self) -> None:
         if self.current_obj is None:
             return
-        for n, code, sv in self.entries:
-            if n != name:
-                continue
-            try:
-                new_val = _str_to_value(code, sv.get())
-            except Exception:
-                p = next((p for p in self.current_obj.props if p.name == name), None)
-                if p is not None:
-                    sv.set(_value_to_str(p.code, p.value))
-                return
-            self.on_edit(name, new_val)
-            p = next((p for p in self.current_obj.props if p.name == name), None)
-            if p is not None:
-                sv.set(_value_to_str(p.code, p.value))
-            self._sync_transform_vars()
-            break
+        EditPropertiesDialog(self.winfo_toplevel(), self.current_obj, on_save=self.on_edit)
 
     def _draw_transform_controls(self, present: Dict[str, patcher.Property]) -> set:
         handled = set()

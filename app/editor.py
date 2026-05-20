@@ -299,10 +299,10 @@ class EditorApp:
                 command=self.cmd_set_collision_bsp_mode,
             )
 
-        menubar.add_command(
-            label="LoMM to MM9 conversion",
-            command=self.cmd_lomm_to_mm9_conversion,
-        )
+        m_conversion = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Conversion", menu=m_conversion)
+        m_conversion.add_command(label="LoMM to MM9",
+                                 command=self.cmd_lomm_to_mm9_conversion)
 
         m_tools = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=m_tools)
@@ -310,8 +310,6 @@ class EditorApp:
                             command=self.cmd_clone_physical_door)
         m_tools.add_command(label="Import Static Prefab BSP...",
                             command=self.cmd_import_static_prefab_bsp)
-        m_tools.add_command(label="Inspect Prefab DAT...",
-                            command=self.cmd_inspect_prefab_dat)
 
         m_presets = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Presets", menu=m_presets)
@@ -333,12 +331,6 @@ class EditorApp:
         tk.Button(bar, text="Save…", bg="#2c5e8a", fg="white",
                   activebackground="#3a78ad",
                   relief="flat", command=self.cmd_save).pack(side="left", padx=4, pady=4)
-        tk.Button(bar, text="Clone Door…", bg="#30343b", fg="white",
-                  activebackground="#3a4660",
-                  relief="flat", command=self.cmd_clone_physical_door).pack(side="left", padx=4, pady=4)
-        tk.Button(bar, text="Import Prefab…", bg="#30343b", fg="white",
-                  activebackground="#3a4660",
-                  relief="flat", command=self.cmd_import_static_prefab_bsp).pack(side="left", padx=4, pady=4)
 
         tk.Label(bar, text="Level:", bg="#1a1d22", fg="#cccccc",
                  font=("Segoe UI", 9)).pack(side="left", padx=(16, 4))
@@ -1014,22 +1006,7 @@ class EditorApp:
         if self.view3d is not None:
             self.view3d.set_place_mode(True)
 
-    def cmd_inspect_prefab_dat(self) -> None:
-        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
-        start_dir = os.path.join(editor_dir, "mm9_data", "PreFabs")
-        path = filedialog.askopenfilename(
-            title="Inspect converted prefab DAT",
-            initialdir=start_dir if os.path.isdir(start_dir) else editor_dir,
-            filetypes=[("DAT files", "*.dat"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            report = prefab_inspector.format_report(prefab_inspector.inspect_prefab(path))
-        except Exception as e:
-            messagebox.showerror("Prefab inspection failed", str(e))
-            return
-        self._show_text_dialog("Prefab Inspector", report)
+
 
     def cmd_import_static_prefab_bsp(self) -> None:
         if not getattr(self, "active", None):
@@ -1371,33 +1348,36 @@ class EditorApp:
         )
         self._refresh_after_edit(new_index)
 
-    def _on_property_edited(self, name: str, new_value: Any) -> None:
+    def _on_property_edited(self, name_or_dict: str | Dict[str, Any], new_value: Any = None) -> None:
         self._flush_view_transforms()
         L = self.active
         obj = self.props_panel.current_obj
         if obj is None: return
         selected_idx = getattr(self, "_selected_world_index", None)
 
+        if isinstance(name_or_dict, dict):
+            overrides = name_or_dict
+        else:
+            overrides = {name_or_dict: new_value}
+
         if selected_idx is not None:
             prefab_op = L.prefab_import_for_materialized(selected_idx)
             if prefab_op is not None:
-                if name == "Pos":
-                    prefab_op.target_pos = tuple(float(v) for v in new_value)
-                    L.clear_redo()
-                    self._refresh_after_edit(selected_idx)
-                    return
-                if name == "Rotation":
-                    vals = list(new_value) if isinstance(new_value, (list, tuple)) else []
-                    vals = (vals + [0.0, 0.0, 0.0, 0.0])[:4]
-                    prefab_op.target_yaw = float(vals[1])
-                    L.clear_redo()
-                    self._refresh_after_edit(selected_idx)
-                    return
+                for name, val in overrides.items():
+                    if name == "Pos":
+                        prefab_op.target_pos = tuple(float(v) for v in val)
+                    elif name == "Rotation":
+                        vals = list(val) if isinstance(val, (list, tuple)) else []
+                        vals = (vals + [0.0, 0.0, 0.0, 0.0])[:4]
+                        prefab_op.target_yaw = float(vals[1])
+                L.clear_redo()
+                self._refresh_after_edit(selected_idx)
+                return
 
             baseline_idx = L.existing_index_for_materialized(selected_idx)
             if baseline_idx is not None:
                 L.append_op(P.EditOp(target_index=baseline_idx,
-                                     overrides={name: new_value}))
+                                     overrides=overrides))
                 self._refresh_after_edit(selected_idx)
                 return
 
@@ -1405,34 +1385,34 @@ class EditorApp:
             if add_offset is not None:
                 adds = [op for op in L.ops if isinstance(op, P.AddOp)]
                 if add_offset < len(adds):
-                    adds[add_offset].overrides[name] = new_value
+                    for name, val in overrides.items():
+                        adds[add_offset].overrides[name] = val
                     L.clear_redo()
                     self._refresh_after_edit(selected_idx)
                     return
+
             pending = L.pending_add_offset_for_materialized(selected_idx)
             if pending is not None:
                 pending_op, object_offset = pending
                 if isinstance(pending_op, P.CloneDoorOp):
-                    if name == "Pos":
-                        pending_op.retarget_from_object(
-                            L,
-                            L.objects_before_op(pending_op),
-                            object_offset,
-                            tuple(float(v) for v in new_value),
-                        )
-                        L.clear_redo()
-                        self._refresh_after_edit(selected_idx)
-                        return
-                    if name == "Rotation":
-                        pending_op.rerotate_from_object(
-                            L,
-                            L.objects_before_op(pending_op),
-                            object_offset,
-                            tuple(float(v) for v in new_value),
-                        )
-                        L.clear_redo()
-                        self._refresh_after_edit(selected_idx)
-                        return
+                    for name, val in overrides.items():
+                        if name == "Pos":
+                            pending_op.retarget_from_object(
+                                L,
+                                L.objects_before_op(pending_op),
+                                object_offset,
+                                tuple(float(v) for v in val),
+                            )
+                        elif name == "Rotation":
+                            pending_op.rerotate_from_object(
+                                L,
+                                L.objects_before_op(pending_op),
+                                object_offset,
+                                tuple(float(v) for v in val),
+                            )
+                    L.clear_redo()
+                    self._refresh_after_edit(selected_idx)
+                    return
 
         # Legacy fallback for callers that provide an object without the
         # selected materialized index.
@@ -1443,13 +1423,14 @@ class EditorApp:
             baseline_idx = L.existing_index_for_materialized(mat_idx)
             if baseline_idx is not None:
                 L.append_op(P.EditOp(target_index=baseline_idx,
-                                     overrides={name: new_value}))
+                                     overrides=overrides))
                 selected_idx = mat_idx
                 break
             add_offset = L.add_offset_for_materialized(mat_idx)
             adds = [op for op in L.ops if isinstance(op, P.AddOp)]
             if add_offset is not None and add_offset < len(adds):
-                adds[add_offset].overrides[name] = new_value
+                for name, val in overrides.items():
+                    adds[add_offset].overrides[name] = val
                 L.clear_redo()
                 selected_idx = mat_idx
                 break

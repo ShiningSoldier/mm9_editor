@@ -44,8 +44,8 @@ _ARCHIVE_FILENAMES: Dict[str, str] = {
     "sounds": "SOUNDS.REZ",
 }
 
-_REQUIRED_ARCHIVES = ("worlds", "rude", "scripts")
-_OPTIONAL_ARCHIVES = ("textures", "skins", "models", "data", "sounds")
+_REQUIRED_ARCHIVES = ("worlds", "rude", "scripts", "textures", "skins", "models", "data")
+_OPTIONAL_ARCHIVES = ("sounds",)
 
 
 class GameNotFoundError(RuntimeError):
@@ -263,7 +263,7 @@ def detect(editor_dir: Optional[str] = None,
         )
         notes.append(f"Cache folder (fallback): {cache_dir}")
 
-    for key in ("worlds", "rude", "scripts"):
+    for key in _REQUIRED_ARCHIVES:
         notes.append(f"{_ARCHIVE_FILENAMES[key]:<13s}: {archives[key]}")
     for key in _OPTIONAL_ARCHIVES:
         if key in archives:
