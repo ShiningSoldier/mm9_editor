@@ -16,3 +16,4 @@ __pycache__/
 # Catalog files with all objects from MM9 and LoMM
 catalog.json
 catalog_lomm.json
+editor_settings.json

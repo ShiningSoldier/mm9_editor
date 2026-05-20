@@ -385,6 +385,7 @@ class ConversionStats:
     converted_by_class: Dict[str, Tuple[str, int]]
     audit_models: AssetAudit
     audit_skins: AssetAudit
+    audit_sounds: AssetAudit
 
 
 def _convert_with_template(
@@ -553,10 +554,10 @@ def _stage_patch_classes(
 
 def _normalize_asset_path(path: str) -> Tuple[str, str]:
     """Return (stem_lower, ext_lower) for asset path comparison.
-    Strips the ``models/`` or ``skins/`` prefix and the file extension."""
+    Strips the ``models/``, ``skins/``, or ``sounds/`` prefix and the file extension."""
     p = (path or "").replace("\\", "/").lower().lstrip("/")
     parts = p.split("/")
-    if parts and parts[0] in ("models", "skins"):
+    if parts and parts[0] in ("models", "skins", "sounds"):
         parts = parts[1:]
     rejoined = "/".join(parts)
     stem, dot, ext = rejoined.rpartition(".")
@@ -570,14 +571,14 @@ def _build_rez_asset_index(rez_path: Optional[str]) -> Set[str]:
     archive (case- and extension-insensitive lookup)."""
     if not rez_path or not os.path.isfile(rez_path):
         return set()
-    try:
-        reader = RezReader(rez_path).open()
-    except Exception:
-        return set()
     out: Set[str] = set()
-    for p in reader.list_paths():
-        stem, _ = _normalize_asset_path(p)
-        out.add(stem)
+    try:
+        with RezReader(rez_path) as reader:
+            for p in reader.list_paths():
+                stem, _ = _normalize_asset_path(p)
+                out.add(stem)
+    except Exception:
+        pass
     return out
 
 
@@ -614,7 +615,7 @@ def _classify_asset_refs(
     refs: Set[str],
     mm9_index: Set[str],
     lomm_index: Set[str],
-) -> AssetAudit:
+ ) -> AssetAudit:
     audit = AssetAudit()
     for ref in sorted(refs):
         stem, _ = _normalize_asset_path(ref)
@@ -633,14 +634,17 @@ def _stage_audit_assets(
     world: World,
     mm9_models_rez: Optional[str],
     mm9_skins_rez: Optional[str],
+    mm9_sounds_rez: Optional[str],
     lomm_data_dir: Optional[str],
     lomm_models_rez: Optional[str] = None,
     lomm_skins_rez: Optional[str] = None,
-) -> Tuple[AssetAudit, AssetAudit]:
-    """Walk `world.objects`, gather all Filename and Skin references,
-    and return (model_audit, skin_audit)."""
+    lomm_sounds_rez: Optional[str] = None,
+) -> Tuple[AssetAudit, AssetAudit, AssetAudit]:
+    """Walk `world.objects`, gather all Filename, Skin, and Sound references,
+    and return (model_audit, skin_audit, sound_audit)."""
     model_refs: Set[str] = set()
     skin_refs: Set[str] = set()
+    sound_refs: Set[str] = set()
     # Filename is overloaded across classes (AmbientSound stores a .wav
     # path in it, for example).  Restrict each audit bucket to its own
     # known extensions so the punch list stays meaningful.
@@ -658,9 +662,17 @@ def _stage_audit_assets(
                 piece = piece.strip()
                 if piece and piece.lower().endswith(SKIN_EXTS):
                     skin_refs.add(piece)
+        for prop in obj.props:
+            val = prop.value
+            if isinstance(val, str) and val.strip():
+                for piece in val.split(";"):
+                    piece = piece.strip()
+                    if piece.lower().endswith(".wav"):
+                        sound_refs.add(piece)
 
     mm9_models = _build_rez_asset_index(mm9_models_rez)
     mm9_skins = _build_rez_asset_index(mm9_skins_rez)
+    mm9_sounds = _build_rez_asset_index(mm9_sounds_rez)
     lomm_models = (
         _build_loose_asset_index(lomm_data_dir, "MODELS")
         | _build_rez_asset_index(lomm_models_rez)
@@ -669,10 +681,15 @@ def _stage_audit_assets(
         _build_loose_asset_index(lomm_data_dir, "SKINS")
         | _build_rez_asset_index(lomm_skins_rez)
     )
+    lomm_sounds = (
+        _build_loose_asset_index(lomm_data_dir, "SOUNDS")
+        | _build_rez_asset_index(lomm_sounds_rez)
+    )
 
     model_audit = _classify_asset_refs(model_refs, mm9_models, lomm_models)
     skin_audit = _classify_asset_refs(skin_refs, mm9_skins, lomm_skins)
-    return model_audit, skin_audit
+    sound_audit = _classify_asset_refs(sound_refs, mm9_sounds, lomm_sounds)
+    return model_audit, skin_audit, sound_audit
 
 
 def convert(
@@ -682,9 +699,11 @@ def convert(
     input_basename: Optional[str] = None,
     mm9_models_rez: Optional[str] = None,
     mm9_skins_rez: Optional[str] = None,
+    mm9_sounds_rez: Optional[str] = None,
     lomm_data_dir: Optional[str] = None,
     lomm_models_rez: Optional[str] = None,
     lomm_skins_rez: Optional[str] = None,
+    lomm_sounds_rez: Optional[str] = None,
 ) -> ConversionStats:
     # 1. Apply convert rules (cloning/retyping).
     #    Runs first so converted objects (e.g. Orc -> LizardOrc)
@@ -699,13 +718,15 @@ def convert(
     patched = _stage_patch_classes(src_world, config.patch_class)
 
     # 4. Asset audit (informational).
-    model_audit, skin_audit = _stage_audit_assets(
+    model_audit, skin_audit, sound_audit = _stage_audit_assets(
         src_world,
         mm9_models_rez,
         mm9_skins_rez,
+        mm9_sounds_rez,
         lomm_data_dir,
         lomm_models_rez=lomm_models_rez,
         lomm_skins_rez=lomm_skins_rez,
+        lomm_sounds_rez=lomm_sounds_rez,
     )
 
     return ConversionStats(
@@ -714,6 +735,7 @@ def convert(
         converted_by_class=converted,
         audit_models=model_audit,
         audit_skins=skin_audit,
+        audit_sounds=sound_audit,
     )
 
 
@@ -813,6 +835,7 @@ def _print_summary(stats: ConversionStats, world: World) -> None:
     print("== asset audit ==")
     _print_audit("models", stats.audit_models)
     _print_audit("skins ", stats.audit_skins)
+    _print_audit("sounds", stats.audit_sounds)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

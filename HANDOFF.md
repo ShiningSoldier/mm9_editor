@@ -160,13 +160,15 @@ Import/refactor rules:
 - LoMM-to-MM9 conversion is in place. The top menu item
   `LoMM to MM9 conversion` opens a dialog that accepts a LoMM install folder,
   lists v66 DAT levels from LoMM `WORLDS.REZ`, asks for the new MM9 level name,
-  converts the DAT through the YAML pipeline, and transactionally adds a new
-  `WORLDS/<name>` entry to the detected MM9 `data/WORLDS.REZ`. Before replacing
-  the live archive it writes `backups/lomm_to_mm9_<timestamp>/data/WORLDS.REZ`
-  and an `install_manifest.json` with a `conversion` section. The backup is
-  compatible with the existing restore flow. After a successful conversion the
-  editor opens the new level immediately. The last successful LoMM install path
-  is remembered in `editor_settings.json`.
+  converts the DAT through the YAML pipeline, copies missing models, skins, and
+  sounds from LoMM archives/loose files into MM9's `MODELS.REZ`, `SKINS.REZ`, and
+  `SOUNDS.REZ` (if present), and transactionally applies these updates. Before
+  replacing the live archives, it writes backups of all modified archives under
+  `backups/lomm_to_mm9_<timestamp>/data/`, creates a `conversion_log.txt` detailing
+  all copied assets, and writes an `install_manifest.json` registering all changed
+  archives. The backup is fully compatible with the existing restore flow. After a
+  successful conversion, the editor opens the new level immediately. The last
+  successful LoMM install path is remembered in `editor_settings.json`.
 
 ## `view3d/`
 
@@ -649,6 +651,62 @@ Stage 2 backend import is in place in `features/prefabs/import_static.py` and
 - `NextWritePos` points to the directory-tree boundary, so safe writing is a
   full output rewrite, not append-in-place.
 
+### Save Game Files
+
+MM9 save games are split into paired `.HDR` and `.MM9` files.  The `.HDR`
+file begins with the current world path, for example
+`worlds\bootcamp`, and appears to carry metadata/preview data for the save
+slot.  The `.MM9` file contains the actual runtime game state.
+
+The sample saves under `mm9_data/saves/` (`autosave.*` and `d11.*`) were both
+standing in Bootcamp.  Their `.MM9` files do not embed a full v66 world DAT:
+there is no DAT header, no full BSP/render payload, and no matching 4 KiB
+chunks from `WORLDS/BOOTCAMP.DAT`.  Instead, they contain a linked list of
+runtime object records for the active level:
+
+- The file header starts with small counters.  In both samples, the second
+  `uint32` is `401`, matching the number of linked runtime object records.
+- Runtime object records are marked by the magic bytes `AF EF CD AB`.
+- Each record stores a next-record pointer at `magic + 4`.  The pointer value
+  is four bytes past the next record's magic offset; the terminal record uses
+  `0xFFFFFFFF`.
+- The class name is stored as a LithTech-style `uint16 length + bytes` string
+  at `magic + 12`.
+- The record body then contains object state such as position, rotation,
+  object name, model/skin paths, script names, trigger targets, and
+  class-specific runtime fields.
+
+The saved Bootcamp object list contains many DAT-backed live objects:
+`Prop`, `AIRail`, `CandleProp`, `RotatingDoor`, `AmbientSound`,
+`WorldObject`, `Door`, `PerceptionBrush`, creatures/NPCs, and similar
+interactive/runtime classes.  It omits many static/setup DAT classes such as
+`Light`, `DirLight`, `WorldProperties`, `StartPoint`, `StaticSunLight`, and
+`Terrain`.  In the two sample saves, roughly 398-399 of Bootcamp's 591 named
+DAT objects were found by name in the `.MM9` data.
+
+Practical consequence: when a player loads an existing save that is already
+standing in a level, the engine restores these saved runtime objects instead
+of rebuilding them from the patched `WORLDS.REZ` entry.  Object-section edits
+therefore do not reliably appear in old saves for that level, while a new game
+does see them because the runtime object list is created from the patched DAT.
+
+BSP-only changes are a separate concern.  The current samples do not show a
+full embedded Bootcamp BSP/DAT payload in the `.MM9` file, so missing BSP-only
+changes in an old save would point more toward install/archive/cache behavior
+or another not-yet-identified save section than toward a copied DAT blob.
+
+Potential tooling:
+
+- A safe first step is a save analyzer that reports the current world path,
+  runtime object count, saved classes, and whether the save already contains
+  object state for a patched level.
+- A save migrator may be possible, but should be treated as experimental.
+  Records contain runtime handles, AI/script state, and class-specific fields,
+  so blindly replacing them with DAT objects could corrupt a save or reset
+  quest/AI state.  Any migrator should create backups, preserve unknown fields,
+  operate by stable object names where possible, and be validated in-game with
+  paired before/after saves.
+
 ## ABC Rendering Notes
 
 Current support is intentionally conservative:
@@ -945,7 +1003,8 @@ a matching `StartPoint` there. The transition wizard described in the
 pipeline (`conversion/lomm_to_mm9.yaml`). The root `lomm_to_mm9.py` remains a
 compatibility launcher, while `conversion/lomm_to_mm9_service.py` provides the
 shared install-root validation, LoMM level listing, conversion-to-bytes, and
-transactional `WORLDS.REZ` insertion used by both the CLI and editor:
+transactional multi-archive insertion (updating `WORLDS.REZ`, `MODELS.REZ`,
+`SKINS.REZ`, and `SOUNDS.REZ`) used by both the CLI and editor:
 
 1. **Convert classes via templates.** Replaces instances of a class
    (including LoMM-only enemies like `Orc`) with a clone of a named MM9
@@ -955,11 +1014,12 @@ transactional `WORLDS.REZ` insertion used by both the CLI and editor:
    in MM9's catalog (and wasn't retyped in stage 1) is removed.
 3. **Add missing properties** to shared classes (`StartPoint`,
    `WorldProperties`).
-4. **Asset audit** walks every remaining object's `Filename`
-   (`.abc`/`.lta`/`.ltb`) and `Skin` (`.dtx`) and three-way classifies:
-   in MM9, in LoMM's `MODELS.REZ` / `SKINS.REZ` only, or missing entirely.
-   The "in LoMM only" bucket is the punch list of files to copy into MM9's
-   `MODELS.REZ` / `SKINS.REZ` before the level renders correctly.
+4. **Asset audit** walks every remaining object's `Filename` (`.abc`/`.lta`/`.ltb`),
+   `Skin` (`.dtx`), and `AmbientSound` (`.wav`) properties and three-way classifies:
+   in MM9, in LoMM only, or missing entirely. The "in LoMM only" bucket (which includes
+   loose files and entries inside LoMM's `MODELS.REZ`, `SKINS.REZ`, and `SOUNDS.REZ`)
+   is transactionally copied into MM9's respective archives (`MODELS.REZ`, `SKINS.REZ`,
+   and `SOUNDS.REZ`) so the level renders and plays correctly.
 
 The standalone CLI now takes install roots rather than loose/debug data paths:
 
@@ -990,8 +1050,9 @@ The editor exposes the same workflow through the top-level
 `LoMM to MM9 conversion` menu item. The dialog remembers the last successful
 LoMM install folder in `editor_settings.json`, loads LoMM levels into a
 combobox, confirms the live archive replacement, writes an automatic conversion
-backup plus `install_manifest.json`, and opens the newly inserted MM9 level for
-inspection after success.
+backup of all modified archives plus `install_manifest.json` and `conversion_log.txt`,
+and opens the newly inserted MM9 level for inspection after success (triggering a
+dynamic viewport cache refresh so copied models and skins render immediately).
 
 A separate `catalog/data/catalog_lomm.json` can still be built from a LoMM
 `WORLDS.REZ` for conversion-rule research, for example:
@@ -1007,13 +1068,33 @@ entry includes the `template` (source level + instance) you can clone from, the
 union of `property_names` actually observed on instances, and the set of
 `filenames` (model paths) the class uses across LoMM levels.
 
+## Music
+
+There are fundamental differences in how music is configured between LoMM and MM9:
+
+- **Legends of Might and Magic (LoMM):** Level music configurations reside directly inside the level `.DAT` files on the `WorldProperties` object (via properties such as `MusicDirectory`, `InstrumentFiles`, `AmbientList`, `CruisingList`, `HarddrivingList`, `CDTrack`, and `ScenarioNbr`). However, in all shipping LoMM levels, these fields are left as empty strings, and the level relies entirely on placement of environmental `AmbientSound` objects.
+- **Might and Magic IX (MM9):** Background level music is completely decoupled from the level `.DAT` files. Instead, the game engine uses a global lookup table in the game configuration file MAPSTATS.TXT (located in `data.rez/DATA/MAPSTATS.TXT`). This table maps the map's file name to a **Music Track** index and **Battle Track** index.
+
+### How to Add Music to a Newly Converted Level
+
+Since converted levels are not part of the original MM9 campaign, they lack an entry in MM9's MAPSTATS.TXT. Consequently, the game client plays no background music when loading them.
+
+To assign music to a converted level:
+1. Open the active MM9 game configuration file `data.rez/DATA/MAPSTATS.TXT`.
+2. Add a new row mapping your converted level's filename to your desired track index. For example, if your converted level file name is `ChateauEscape_mm9`, append a new entry:
+   ```text
+   #  Name                 File name        Music Track   Battle Track   ...
+   81 Chateau Escape       ChateauEscape_mm9    8             3              ...
+   ```
+   *(Track numbers typically range from 1 to 18; for example, track `8` is Thjorgard, track `7` is Sturmford, and track `12` is Drangheim).*
+
 ## Issues to fix
  - CandleProp are not rendered in any level (examples: 1000TERRORS.DAT). CandleProps
    have visible = 0, so perhaps this is the intended behavior? Requires investigation.
  - Levels are mirrored between the editor and the game. Example: added an ExitTrigger
    to the left side of the peasant in the BOOTCAMP, but in the game it appears to the right side
- - In order to see the changes in the game, a new game hass to be started. It looks like the
-   saved game files store the level data state. Requires investigation.
+ - In order to see the changes in the game, a new game has to be started. It looks like the
+   saved game files store the level data state.
  - Interface improvements:
     - When an object is selected, don't display it's parameters right now (except position/rotation) - add "Edit params" button instead
     - Move the "Import prefab"/"Clone door" to a separate option

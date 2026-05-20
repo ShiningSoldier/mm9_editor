@@ -1936,6 +1936,40 @@ class View3D(tk.Frame if _HAS_TK else object):
         self._update_mode_buttons()
         self._canvas.focus_for_input()
 
+    def update_asset_directories(self, textures_dir: Optional[str] = None,
+                                 skins_dir: Optional[str] = None,
+                                 models_dir: Optional[str] = None) -> None:
+        """Update cache directories and rebuild texture/model caches if they changed."""
+        if not OPENGL_AVAILABLE:
+            return
+        if textures_dir is not None and textures_dir != self._textures_dir:
+            self._textures_dir = textures_dir
+            self._canvas._textures_dir = textures_dir
+            if self._canvas._ready:
+                try:
+                    from view3d.dtx import TextureCache
+                    self._canvas._tex_cache = TextureCache(textures_dir)
+                except Exception as exc:
+                    print(f"[view3d] textures cache update failed: {exc}", file=sys.stderr)
+        if skins_dir is not None and skins_dir != self._skins_dir:
+            self._skins_dir = skins_dir
+            self._canvas._skins_dir = skins_dir
+            if self._canvas._ready:
+                try:
+                    from view3d.dtx import TextureCache
+                    self._canvas._skin_cache = TextureCache(skins_dir)
+                except Exception as exc:
+                    print(f"[view3d] skins cache update failed: {exc}", file=sys.stderr)
+        if models_dir is not None and models_dir != self._models_dir:
+            self._models_dir = models_dir
+            self._canvas._models_dir = models_dir
+            if self._canvas._ready:
+                try:
+                    from view3d.gl_object_models import ObjectModelCache
+                    self._canvas._obj_model_cache = ObjectModelCache(models_dir)
+                except Exception as exc:
+                    print(f"[view3d] models cache update failed: {exc}", file=sys.stderr)
+
     def focus_for_input(self) -> None:
         """Focus the GL canvas so keyboard and wheel controls reach it."""
         if not OPENGL_AVAILABLE:

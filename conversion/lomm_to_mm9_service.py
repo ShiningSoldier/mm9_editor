@@ -16,7 +16,7 @@ import shutil
 import tempfile
 from datetime import datetime
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import _path_setup  # noqa: F401
 from core import rezmgr
@@ -36,6 +36,7 @@ REQUIRED_LOMM_ARCHIVES = REQUIRED_MM9_ARCHIVES
 OPTIONAL_ASSET_ARCHIVES = {
     "models": "MODELS.REZ",
     "skins": "SKINS.REZ",
+    "sounds": "SOUNDS.REZ",
 }
 
 
@@ -52,6 +53,7 @@ class Mm9Install:
     scripts_rez: str
     models_rez: Optional[str] = None
     skins_rez: Optional[str] = None
+    sounds_rez: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class LommInstall:
     scripts_rez: str
     models_rez: Optional[str] = None
     skins_rez: Optional[str] = None
+    sounds_rez: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +133,7 @@ def validate_mm9_root(root: str) -> Mm9Install:
 
     models_rez = _find_child_file(data_dir, OPTIONAL_ASSET_ARCHIVES["models"])
     skins_rez = _find_child_file(data_dir, OPTIONAL_ASSET_ARCHIVES["skins"])
+    sounds_rez = _find_child_file(data_dir, OPTIONAL_ASSET_ARCHIVES["sounds"])
     return Mm9Install(
         root=root_abs,
         data_dir=data_dir,
@@ -138,6 +142,7 @@ def validate_mm9_root(root: str) -> Mm9Install:
         scripts_rez=archives["scripts"],
         models_rez=models_rez,
         skins_rez=skins_rez,
+        sounds_rez=sounds_rez,
     )
 
 
@@ -172,6 +177,7 @@ def validate_lomm_root(root: str) -> LommInstall:
         scripts_rez=archives["scripts"],
         models_rez=_find_child_file(data_dir, OPTIONAL_ASSET_ARCHIVES["models"]),
         skins_rez=_find_child_file(data_dir, OPTIONAL_ASSET_ARCHIVES["skins"]),
+        sounds_rez=_find_child_file(data_dir, OPTIONAL_ASSET_ARCHIVES["sounds"]),
     )
 
 
@@ -286,9 +292,11 @@ def convert_level_to_bytes(request: ConvertLevelRequest) -> ConvertLevelResult:
                 input_basename=os.path.basename(source.virtual_path),
                 mm9_models_rez=mm9.models_rez,
                 mm9_skins_rez=mm9.skins_rez,
-                lomm_data_dir=None,
+                mm9_sounds_rez=mm9.sounds_rez,
+                lomm_data_dir=lomm.data_dir,
                 lomm_models_rez=lomm.models_rez,
                 lomm_skins_rez=lomm.skins_rez,
+                lomm_sounds_rez=lomm.sounds_rez,
             )
         except (LookupError, ValueError) as exc:
             raise ConversionServiceError(f"Conversion failed: {exc}") from exc
@@ -306,6 +314,120 @@ def convert_level_to_bytes(request: ConvertLevelRequest) -> ConvertLevelResult:
     )
 
 
+@dataclass
+class RezTransaction:
+    target_path: str
+    temp_path: str
+    backup_path: str
+    archive_name: str
+    updates: List[Tuple[str, bytes, int]]
+
+
+def _find_loose_asset(lomm_data_dir: Optional[str], subdir: str, stem: str) -> Optional[str]:
+    if not lomm_data_dir or not os.path.isdir(lomm_data_dir):
+        return None
+    target = None
+    try:
+        for child in os.listdir(lomm_data_dir):
+            if child.lower() == subdir.lower():
+                target = os.path.join(lomm_data_dir, child)
+                break
+    except OSError:
+        return None
+    if not target or not os.path.isdir(target):
+        return None
+    for root, _, files in os.walk(target):
+        rel = os.path.relpath(root, target).replace("\\", "/")
+        if rel == ".":
+            rel = ""
+        for fn in files:
+            p = f"{rel}/{fn}" if rel else fn
+            if converter._normalize_asset_path(p)[0] == stem:
+                return os.path.abspath(os.path.join(root, fn))
+    return None
+
+
+def _extract_asset(
+    lomm_data_dir: Optional[str],
+    subdir: str,
+    lomm_rez: Optional[str],
+    stem: str,
+) -> Optional[Tuple[str, bytes, int]]:
+    # 1. Search loose files
+    loose_path = _find_loose_asset(lomm_data_dir, subdir, stem)
+    if loose_path:
+        with open(loose_path, "rb") as f:
+            data = f.read()
+        # Find relative path to target dir
+        target_dir = None
+        for child in os.listdir(lomm_data_dir):
+            if child.lower() == subdir.lower():
+                target_dir = os.path.join(lomm_data_dir, child)
+                break
+        rel_path = os.path.relpath(loose_path, target_dir).replace("\\", "/")
+        if subdir.upper() == "SOUNDS":
+            # Strip extension for sounds
+            rel_path = os.path.splitext(rel_path)[0]
+        vpath = f"{subdir.upper()}/{rel_path.upper()}"
+        from core.rezmgr import _restype_for_filename
+        restype = _restype_for_filename(loose_path)
+        return vpath, data, restype
+
+    # 2. Search REZ
+    if lomm_rez and os.path.isfile(lomm_rez):
+        with rezmgr.RezReader(lomm_rez) as reader:
+            for p in reader.list_paths():
+                if converter._normalize_asset_path(p)[0] == stem:
+                    # Found it! Extract bytes and res_type
+                    entry = reader.find(p)
+                    if entry:
+                        return p, reader.extract_to_bytes(p), entry.res_type
+    return None
+
+
+def _verify_inserted_assets(rez_path: str, added_paths: List[str]) -> None:
+    with rezmgr.RezReader(rez_path) as reader:
+        for p in added_paths:
+            ent = reader.find(p)
+            if ent is None:
+                raise FileNotFoundError(f"{p!r} was not found in {os.path.basename(rez_path)} after install")
+            # Try to read a few bytes to verify it's readable
+            reader.peek_bytes(p, min(4, ent.size))
+
+
+def _write_conversion_log(
+    backup_dir: str,
+    copied_assets: dict,
+    log_lines: List[str],
+) -> str:
+    log_path = os.path.join(os.path.dirname(backup_dir), "conversion_log.txt")
+    lines = []
+    lines.append("=== LoMM to MM9 Conversion Log ===")
+    lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    
+    total_copied = 0
+    for subdir in ["MODELS", "SKINS", "SOUNDS"]:
+        assets = copied_assets.get(subdir, [])
+        lines.append(f"--- Copied {subdir} ({len(assets)}) ---")
+        if not assets:
+            lines.append("  (none)")
+        for ref, vpath, src_desc in assets:
+            lines.append(f"  Ref  : {ref}")
+            lines.append(f"  VPath: {vpath}")
+            lines.append(f"  From : {src_desc}")
+            lines.append("")
+            total_copied += 1
+            log_lines.append(f"copied asset to MM9: {vpath} (from {src_desc})")
+            
+    lines.append(f"Total assets copied: {total_copied}")
+    
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    return log_path
+
+
 def convert_and_insert_level(
     request: ConvertLevelRequest,
     backup_root: Optional[str] = None,
@@ -313,6 +435,7 @@ def convert_and_insert_level(
     """Convert a LoMM level and add it to MM9 WORLDS.REZ transactionally."""
     conversion = convert_level_to_bytes(request)
     mm9 = validate_mm9_root(request.mm9_root)
+    lomm = validate_lomm_root(request.lomm_root)
     _ensure_output_vpath_available_in_rez(mm9.worlds_rez, conversion.output_virtual_path)
 
     restype = rezmgr.restype_for_format_magic(conversion.dat_bytes[:4])
@@ -320,61 +443,153 @@ def convert_and_insert_level(
         raise ConversionServiceError("Converted level did not serialize as a DAT file.")
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    temp_output = os.path.join(
-        mm9.data_dir,
-        f".WORLDS.lomm_to_mm9_{stamp}_{os.getpid()}.REZ.tmp",
-    )
     backup_base = os.path.abspath(
         os.path.expanduser(backup_root)
         if backup_root
         else os.path.join(mm9.root, "mm9_editor", "backups")
     )
     backup_dir = os.path.join(backup_base, f"lomm_to_mm9_{stamp}", "data")
-    backup_path = os.path.join(backup_dir, "WORLDS.REZ")
     log: List[str] = []
 
-    try:
-        with rezmgr.RezWriter(mm9.worlds_rez, temp_output) as writer:
-            writer.add(conversion.output_virtual_path, conversion.dat_bytes, restype=restype)
-            writer.commit()
-        log.append(f"wrote temporary archive {temp_output}")
+    # 1. Identify missing models, skins, and sounds, and resolve them
+    missing_assets_configs = [
+        # (audit_list, subdir, target_rez_path, target_rez_name, lomm_rez_path)
+        (conversion.stats.audit_models.in_lomm_only, "MODELS", mm9.models_rez, "MODELS.REZ", lomm.models_rez),
+        (conversion.stats.audit_skins.in_lomm_only, "SKINS", mm9.skins_rez, "SKINS.REZ", lomm.skins_rez),
+        (conversion.stats.audit_sounds.in_lomm_only, "SOUNDS", mm9.sounds_rez, "SOUNDS.REZ", lomm.sounds_rez),
+    ]
 
-        os.makedirs(backup_dir, exist_ok=True)
-        shutil.copy2(mm9.worlds_rez, backup_path)
-        log.append(f"backed up original WORLDS.REZ to {backup_path}")
+    copied_assets_by_type = {
+        "MODELS": [],
+        "SKINS": [],
+        "SOUNDS": [],
+    }
 
-        os.replace(temp_output, mm9.worlds_rez)
-        log.append(f"installed converted level into {mm9.worlds_rez}")
+    updates_by_rez = {}
 
-        try:
-            _verify_inserted_level(mm9.worlds_rez, conversion.output_virtual_path)
-        except Exception as exc:
-            restore_tmp = temp_output + ".restore"
-            shutil.copy2(backup_path, restore_tmp)
-            os.replace(restore_tmp, mm9.worlds_rez)
+    for refs, subdir, target_rez_path, target_rez_name, lomm_rez_path in missing_assets_configs:
+        if not refs:
+            continue
+        if not target_rez_path or not os.path.isfile(target_rez_path):
             raise ConversionServiceError(
-                "Inserted WORLDS.REZ failed verification; the original archive "
-                f"was restored from {backup_path}."
-            ) from exc
+                f"Cannot copy missing assets of type {subdir} because the target "
+                f"archive {target_rez_name} is missing from the MM9 installation."
+            )
+        
+        for ref in refs:
+            stem, _ = converter._normalize_asset_path(ref)
+            extracted = _extract_asset(lomm.data_dir, subdir, lomm_rez_path, stem)
+            if extracted is None:
+                raise ConversionServiceError(
+                    f"Failed to find missing asset {ref!r} in LoMM files or archives."
+                )
+            vpath, data, restype_val = extracted
+            
+            is_loose = _find_loose_asset(lomm.data_dir, subdir, stem) is not None
+            source_desc = "loose file" if is_loose else f"archive {os.path.basename(lomm_rez_path)}"
+            copied_assets_by_type[subdir].append((ref, vpath, source_desc))
+            
+            if target_rez_path not in updates_by_rez:
+                updates_by_rez[target_rez_path] = []
+            updates_by_rez[target_rez_path].append((vpath, data, restype_val))
+
+    # 2. Build transactions
+    transactions: List[RezTransaction] = []
+    
+    # WORLDS.REZ is always present
+    temp_output_worlds = os.path.join(
+        mm9.data_dir,
+        f".WORLDS.lomm_to_mm9_{stamp}_{os.getpid()}.REZ.tmp",
+    )
+    backup_path_worlds = os.path.join(backup_dir, "WORLDS.REZ")
+    transactions.append(RezTransaction(
+        target_path=mm9.worlds_rez,
+        temp_path=temp_output_worlds,
+        backup_path=backup_path_worlds,
+        archive_name="WORLDS.REZ",
+        updates=[(conversion.output_virtual_path, conversion.dat_bytes, restype)]
+    ))
+
+    for target_rez_path, updates in updates_by_rez.items():
+        name = os.path.basename(target_rez_path)
+        temp_path = os.path.join(
+            mm9.data_dir,
+            f".{name}.lomm_to_mm9_{stamp}_{os.getpid()}.REZ.tmp",
+        )
+        backup_path = os.path.join(backup_dir, name)
+        transactions.append(RezTransaction(
+            target_path=target_rez_path,
+            temp_path=temp_path,
+            backup_path=backup_path,
+            archive_name=name,
+            updates=updates
+        ))
+
+    try:
+        # Step 1: Write and commit all temporary archives
+        for tx in transactions:
+            with rezmgr.RezWriter(tx.target_path, tx.temp_path) as writer:
+                for vpath, data, restype_val in tx.updates:
+                    writer.add(vpath, data, restype=restype_val)
+                writer.commit()
+            log.append(f"wrote temporary archive {tx.temp_path}")
+
+        # Step 2: Back up the original archives
+        os.makedirs(backup_dir, exist_ok=True)
+        for tx in transactions:
+            shutil.copy2(tx.target_path, tx.backup_path)
+            log.append(f"backed up original {tx.archive_name} to {tx.backup_path}")
+
+        # Step 3: Replace target archives
+        for tx in transactions:
+            os.replace(tx.temp_path, tx.target_path)
+            log.append(f"installed modified {tx.archive_name} into {tx.target_path}")
+
+        # Step 4: Verify all replaced archives
+        for tx in transactions:
+            if tx.archive_name == "WORLDS.REZ":
+                _verify_inserted_level(tx.target_path, conversion.output_virtual_path)
+            else:
+                _verify_inserted_assets(tx.target_path, [u[0] for u in tx.updates])
+            log.append(f"verified {tx.archive_name}")
+
+        # Step 5: Write log and manifest
+        try:
+            _write_conversion_log(backup_dir, copied_assets_by_type, log)
+        except Exception as exc:
+            log.append(f"warning: could not write conversion log: {exc}")
+
         try:
             manifest_path = _write_conversion_manifest(
                 request=request,
                 conversion=conversion,
                 mm9=mm9,
                 backup_dir=backup_dir,
-                backup_path=backup_path,
+                transactions=transactions,
                 stamp=stamp,
             )
             log.append(f"wrote conversion manifest {manifest_path}")
         except Exception as exc:
             manifest_path = ""
             log.append(f"warning: could not write conversion manifest: {exc}")
+
     except Exception as exc:
-        try:
-            if os.path.exists(temp_output):
-                os.remove(temp_output)
-        except OSError:
-            pass
+        log.append(f"error encountered: {exc}; rolling back modifications")
+        for tx in transactions:
+            if os.path.exists(tx.backup_path):
+                restore_tmp = tx.temp_path + ".restore"
+                try:
+                    shutil.copy2(tx.backup_path, restore_tmp)
+                    os.replace(restore_tmp, tx.target_path)
+                    log.append(f"restored original {tx.archive_name} from backup")
+                except Exception as restore_err:
+                    log.append(f"error restoring {tx.archive_name}: {restore_err}")
+            try:
+                if os.path.exists(tx.temp_path):
+                    os.remove(tx.temp_path)
+            except OSError:
+                pass
+        
         if isinstance(exc, ConversionServiceError):
             raise
         raise ConversionServiceError(f"Failed to install converted level: {exc}") from exc
@@ -382,10 +597,10 @@ def convert_and_insert_level(
     return InsertConvertedLevelResult(
         conversion=conversion,
         worlds_rez=mm9.worlds_rez,
-        backup_path=backup_path,
+        backup_path=backup_path_worlds,
         backup_dir=backup_dir,
         manifest_path=manifest_path,
-        temp_output_path=temp_output,
+        temp_output_path=temp_output_worlds,
         added_virtual_path=conversion.output_virtual_path,
         log=tuple(log),
     )
@@ -491,10 +706,19 @@ def _write_conversion_manifest(
     conversion: ConvertLevelResult,
     mm9: Mm9Install,
     backup_dir: str,
-    backup_path: str,
+    transactions: List[RezTransaction],
     stamp: str,
 ) -> str:
     path = os.path.join(os.path.dirname(backup_dir), "install_manifest.json")
+    archives_doc = []
+    for tx in transactions:
+        archives_doc.append({
+            "name": tx.archive_name,
+            "source_path": "",
+            "target_path": tx.target_path,
+            "backup_path": tx.backup_path,
+            "size": os.path.getsize(tx.backup_path),
+        })
     doc = {
         "version": 1,
         "installed_at": stamp,
@@ -502,15 +726,7 @@ def _write_conversion_manifest(
         "batch_dir": "",
         "game_data_dir": mm9.data_dir,
         "backup_dir": backup_dir,
-        "archives": [
-            {
-                "name": "WORLDS.REZ",
-                "source_path": "",
-                "target_path": mm9.worlds_rez,
-                "backup_path": backup_path,
-                "size": os.path.getsize(backup_path),
-            }
-        ],
+        "archives": archives_doc,
         "conversion": {
             "kind": "lomm_to_mm9",
             "mm9_root": mm9.root,
@@ -540,6 +756,7 @@ def _conversion_stats_dict(stats: converter.ConversionStats) -> dict:
         },
         "audit_models": _asset_audit_dict(stats.audit_models),
         "audit_skins": _asset_audit_dict(stats.audit_skins),
+        "audit_sounds": _asset_audit_dict(stats.audit_sounds),
     }
 
 

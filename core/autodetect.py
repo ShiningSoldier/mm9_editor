@@ -41,10 +41,11 @@ _ARCHIVE_FILENAMES: Dict[str, str] = {
     "skins": "SKINS.REZ",
     "models": "MODELS.REZ",
     "data": "DATA.REZ",
+    "sounds": "SOUNDS.REZ",
 }
 
 _REQUIRED_ARCHIVES = ("worlds", "rude", "scripts")
-_OPTIONAL_ARCHIVES = ("textures", "skins", "models", "data")
+_OPTIONAL_ARCHIVES = ("textures", "skins", "models", "data", "sounds")
 
 
 class GameNotFoundError(RuntimeError):

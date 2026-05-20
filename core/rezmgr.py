@@ -528,6 +528,28 @@ class RezWriter:
         parts = virtual_path.rsplit("/", 1)
         parent_vpath = parts[0] if len(parts) > 1 else ""
         name = parts[-1]
+
+        if parent_vpath:
+            import time as _time
+            now = int(_time.time())
+            dir_parts = parent_vpath.split("/")
+            curr = self._reader.root
+            for part in dir_parts:
+                part_upper = part.upper()
+                # Find case-insensitively
+                found = None
+                for sub_name, sub_dir in curr.subdirs.items():
+                    if sub_name.upper() == part_upper:
+                        found = sub_dir
+                        break
+                if found is None:
+                    new_dir = Directory(name=part, pos=0, size=0, time=now, parent=curr)
+                    curr.subdirs[part] = new_dir
+                    curr = new_dir
+                else:
+                    curr = found
+            parent_vpath = curr.virtual_path()
+
         self._additions.setdefault(parent_vpath, []).append(
             (name, new_bytes, restype))
 

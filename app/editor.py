@@ -556,6 +556,29 @@ class EditorApp:
         except Exception as e:
             messagebox.showerror("Open failed", str(e))
             return
+
+        if self.view3d is not None:
+            textures_dir = self._asset_dir(
+                archive_key="textures",
+                virtual_root="TEXTURES",
+                extensions=(".DTX",),
+            )
+            skins_dir = self._asset_dir(
+                archive_key="skins",
+                virtual_root="SKINS",
+                extensions=(".DTX",),
+            )
+            models_dir = self._asset_dir(
+                archive_key="models",
+                virtual_root="MODELS",
+                extensions=(".ABC",),
+            )
+            self.view3d.update_asset_directories(
+                textures_dir=textures_dir,
+                skins_dir=skins_dir,
+                models_dir=models_dir,
+            )
+
         names = [L.display_name for L in self.project.levels]
         self.level_combo["values"] = names
         self.level_var.set(L.display_name)
