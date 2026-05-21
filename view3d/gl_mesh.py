@@ -108,12 +108,15 @@ def _is_helper_solid_texture(tex_name: str) -> bool:
 
 def _is_helper_bsp_model(model) -> bool:  # type: ignore[type-arg]
     name = str(getattr(model, "name", "") or "").lower()
+    if name in {"physicsbsp", "visbsp"}:
+        return False
     if "_collision" in name:
         return True
     for tex_name in getattr(model, "texture_names", []) or []:
         if _is_helper_solid_texture(str(tex_name or "")):
             return True
     return False
+
 
 
 # ---------------------------------------------------------------------------

@@ -185,7 +185,6 @@ not all have the same shape:
 converted prefab DAT, classifies BSP model roles (`geometry`,
 `controller_geometry`, `physics`, `visibility`, `skybox`), reports object
 classes, bounds, polygon/point/texture counts, and carries BSP parse warnings.
-The editor exposes it through `Tools -> Inspect Prefab DAT...`.
 
 Stage 2 backend import is in place in `features/prefabs/import_static.py` and
 `project.ImportPrefabBspOp`:
@@ -358,9 +357,6 @@ Current support is intentionally conservative:
   `ACTOR`/`MONSTERS` resources.
   This fixes DAT placeholder filenames such as BATHHOUSE's `models\Honk.abc`
   Ebora/concubines and MOUNTAINPASS wolf objects with `models\sheep.abc`.
-- The renderer no longer keeps BATHHOUSE-specific model/skin path overrides;
-  DATA.REZ table rows now provide `models\ebora.abc`, `skins\ebora.dtx`,
-  `skins\Siren1.dtx`, shared Colloidal meshes, and Orbus/Oculus skins.
 - Unsupported models fall back to coloured handles, which remain selectable.
 - Full animation playback is out of scope.
 - Socket/attachment rendering is intentionally deferred.  Many accessories are

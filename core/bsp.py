@@ -180,7 +180,14 @@ class WorldModelMesh:
         sit far from the main level and the user almost never wants them on
         the map. Identified by name."""
         n = self.name.lower()
-        return n.startswith("skybox") or n.startswith("demosky") or "skybox" in n
+        return (
+            n.startswith("skybox")
+            or n.startswith("demosky")
+            or n.startswith("tod_sky")
+            or "skybox" in n
+            or "sky_box" in n
+        )
+
 
     def category(self) -> str:
         """Coarse classification used to colour edges on the map view."""

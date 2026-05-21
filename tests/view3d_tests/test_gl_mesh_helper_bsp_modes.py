@@ -72,6 +72,26 @@ class GlMeshHelperBspModeTests(unittest.TestCase):
         self.assertTrue(batch.items[0].wireframe)
         self.assertLess(batch.items[0].alpha, 1.0)
 
+    def test_physics_and_vis_bsp_are_not_helpers(self):
+        # Even if they use helper textures like Firethrough.dtx, PhysicsBSP and VisBSP
+        # are system meshes and must not be treated as helpers.
+        world = bsp.BspWorld(
+            version=66,
+            world_info="",
+            world_models=[
+                _mesh("PhysicsBSP", "TEXTURES\\LevelTextures\\Misc\\Firethrough.dtx"),
+                _mesh("VisBSP", "TEXTURES\\LevelTextures\\Misc\\Firethrough.dtx"),
+            ],
+        )
+
+        batch = gl_mesh.build_bsp_draw_batch(world, _FakeCache(), helper_bsp_mode="solid")
+
+        self.assertEqual(len(batch.items), 2)
+        for item in batch.items:
+            self.assertEqual(item.alpha, 1.0)
+            self.assertNotEqual(item.color, (0.95, 0.18, 0.62))  # helper tint
+
 
 if __name__ == "__main__":
     unittest.main()
+

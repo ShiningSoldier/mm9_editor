@@ -580,6 +580,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             data_rez_path=args.data_rez,
             data_dir=args.data_dir,
         )
+        os.makedirs(os.path.dirname(args.out), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(cat, f, indent=2)
         s = cat["summary"]
