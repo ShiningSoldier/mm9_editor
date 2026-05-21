@@ -7,6 +7,7 @@ from .builder import (
     build_catalog_from_rez,
     categorize,
     load_catalog,
+    save_catalog,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "build_catalog_from_rez",
     "categorize",
     "load_catalog",
+    "save_catalog",
 ]

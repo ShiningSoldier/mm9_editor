@@ -455,6 +455,14 @@ def load_catalog(path: str) -> Dict[str, Any]:
     """Load and return a previously built catalog.json."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+    
+def save_catalog(catalog: Dict[str, Any], path: str = DEFAULT_CATALOG_PATH) -> None:
+    """Write *catalog* to *path*, creating parent directories if needed."""
+    out_dir = os.path.dirname(path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(catalog, f, indent=2)
 
 
 # --------------------------------------------------------------------------
@@ -580,9 +588,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             data_rez_path=args.data_rez,
             data_dir=args.data_dir,
         )
-        os.makedirs(os.path.dirname(args.out), exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(cat, f, indent=2)
+        save_catalog(cat, args.out)
         s = cat["summary"]
         print(f"Wrote {args.out}")
         print(f"  levels:          {s['total_levels']}")
@@ -602,7 +608,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     return 2
-
 
 if __name__ == "__main__":
     sys.exit(main())
