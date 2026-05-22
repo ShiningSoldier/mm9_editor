@@ -3,6 +3,7 @@
 from .builder import (
     CATEGORY_COLORS,
     CATEGORY_RULES,
+    DEFAULT_CATALOG_PATH,
     build_catalog,
     build_catalog_from_rez,
     categorize,
@@ -13,6 +14,7 @@ from .builder import (
 __all__ = [
     "CATEGORY_COLORS",
     "CATEGORY_RULES",
+    "DEFAULT_CATALOG_PATH",
     "build_catalog",
     "build_catalog_from_rez",
     "categorize",
