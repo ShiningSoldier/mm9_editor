@@ -171,6 +171,7 @@ _AMBIENT_CREATURE_MODELS = {
 
 _NPC_CLASS_PREFIXES = (
     "Commoner",
+    "Honk",
     "Town",
     "Shopkeeper",
     "ShopKeeper",
@@ -363,6 +364,7 @@ def build_catalog(
     classes: Dict[str, Dict[str, Any]] = {}
     filenames: Dict[str, Dict[str, Any]] = {}
     max_npc_nbr = 0
+    # print(actor_visuals)
 
     dat_paths = sorted(glob.glob(os.path.join(worlds_dir, "*.DAT")))
     for path in dat_paths:

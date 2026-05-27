@@ -101,10 +101,9 @@ def _row_keys(monster_name: str, type_picture: str) -> List[str]:
 
 
 def object_actor_keys(type_str: str, object_name: str = "") -> List[str]:
-    """Return actor-table lookup keys for a DAT world object."""
     out: List[str] = []
     seen = set()
-    for raw in (_strip_instance_suffix(object_name), type_str):
+    for raw in (type_str, _strip_instance_suffix(object_name)):
         key = _token(raw)
         if key and key not in seen:
             out.append(key)

@@ -246,13 +246,21 @@ def _looks_like_civilian_class(text: str) -> bool:
 
 
 def _civilian_appearance_key(object_type: str = "", object_name: str = "") -> str:
-    name = str(object_name or "")
     typ = str(object_type or "")
-    if "child" in typ.lower() and _looks_like_civilian_class(typ):
-        return f"{typ} {name}" if _looks_like_civilian_class(name) else typ
-    if _looks_like_civilian_class(name):
-        return name
-    return typ if _looks_like_civilian_class(typ) else ""
+    name = str(object_name or "")
+
+    type_is_civilian = _looks_like_civilian_class(typ)
+    name_is_civilian = _looks_like_civilian_class(name)
+
+    if not type_is_civilian:
+        return name if name_is_civilian else ""
+
+    is_child_type = "child" in typ.lower()
+
+    if is_child_type and name_is_civilian:
+        return f"{typ} {name}"
+
+    return typ
 
 
 def _civilian_variant_number(appearance_key: str) -> str:

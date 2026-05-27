@@ -7,7 +7,8 @@ import _path_setup  # noqa: F401
 import mm9_patch as patcher
 
 import catalog
-from catalog.actor_visuals import parse_actor_visual_tables, resolve_actor_visual
+from catalog.actor_visuals import object_actor_keys, parse_actor_visual_tables, resolve_actor_visual
+from view3d.gl_object_models import _civilian_appearance_key, _civilian_preview_model
 
 
 TABLE_HEADER = (
@@ -83,6 +84,46 @@ class ActorVisualTests(unittest.TestCase):
         self.assertNotIn("models\\sheep.abc", cat["classes"]["RedWolf"]["filenames"])
         self.assertIn("skins\\wolfred.dtx", cat["classes"]["RedWolf"]["skins"])
         self.assertIn("models\\wolf.abc", cat["filenames"])
+
+    # ------------------------------------------------------------------
+    # Regression: class name must take priority over a misleading object
+    # name (BOOTCAMP.DAT ShopkeeperElfFemaleA1 / ShopkeeperDwarfMaleA).
+    # ------------------------------------------------------------------
+
+    def test_class_name_takes_priority_over_misleading_object_name_in_lookup(self):
+        """object_actor_keys must try the class before the object name."""
+        # Class first → dwarf-male key; elf-female key is only the fallback.
+        keys = object_actor_keys("ShopkeeperDwarfMaleA", "ShopkeeperElfFemaleA1")
+        self.assertEqual(keys[0], "shopkeeperdwarfmalea",
+                         "class key must be the first lookup candidate")
+        self.assertEqual(keys[1], "shopkeeperelffemalea",
+                         "object-name key must be the second (fallback) candidate")
+
+    def test_appearance_key_prefers_class_over_misleading_object_name(self):
+        """_civilian_appearance_key must return the class, not the wrong name."""
+        key = _civilian_appearance_key("ShopkeeperDwarfMaleA", "ShopkeeperElfFemaleA1")
+        self.assertEqual(key, "ShopkeeperDwarfMaleA",
+                         "class encodes the real race/gender; the object name is wrong")
+
+    def test_misnamed_shopkeeper_resolves_to_dwarf_male_model(self):
+        """End-to-end: ShopkeeperDwarfMaleA class must render as a dwarf male."""
+        key = _civilian_appearance_key("ShopkeeperDwarfMaleA", "ShopkeeperElfFemaleA1")
+        model = _civilian_preview_model(key)
+        self.assertIn("Dwarf", model,
+                      f"expected a dwarf model, got {model!r}")
+        self.assertNotIn("Female", model,
+                         f"must not resolve to a female model, got {model!r}")
+
+    def test_generic_class_still_uses_descriptive_object_name(self):
+        """When the class carries no race/gender info the object name is used."""
+        # "Commoner" alone has no race/gender word → fall through to name.
+        key = _civilian_appearance_key("Commoner", "CommonerDwarfFemaleB2")
+        self.assertEqual(key, "CommonerDwarfFemaleB2")
+
+    def test_non_civilian_class_falls_back_to_civilian_object_name(self):
+        """A non-civilian class should not block the object-name fallback."""
+        key = _civilian_appearance_key("SomeMonster", "CommonerHumanFemaleA1")
+        self.assertEqual(key, "CommonerHumanFemaleA1")
 
 
 if __name__ == "__main__":
