@@ -13,7 +13,5 @@ __pycache__/
 .tmp_world_serialise.dat
 .mm9w_*
 
-# Catalog files with all objects from MM9 and LoMM
-catalog.json
-catalog_lomm.json
+# Editor settings
 editor_settings.json
