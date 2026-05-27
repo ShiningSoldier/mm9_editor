@@ -56,7 +56,7 @@ from features.doors import clone as door_clone
 from features.doors import links as door_links
 from features.prefabs import import_static as prefab_import
 from features.prefabs import inspector as prefab_inspector
-from catalog import build_catalog_from_rez, load_catalog
+from catalog import build_catalog_from_rez, load_catalog, save_catalog
 from features.presets.manager import PresetStore
 
 # These imports pull in tkinter; they're deferred to _import_gui() below.
@@ -1876,8 +1876,7 @@ def main(argv=None):
                 file=sys.stderr,
             )
             return 2
-        with open(args.catalog, "w", encoding="utf-8") as f:
-            json.dump(cat_dict, f, indent=2)
+        save_catalog(cat_dict)
         print(f"  catalog saved to {args.catalog}")
     catalog = load_catalog(args.catalog)
 
