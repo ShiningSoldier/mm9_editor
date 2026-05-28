@@ -17,6 +17,12 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 _TABLE_FILENAMES = ("ACTOR.TXT", "MONSTERS.TXT")
 _GENERIC_TYPE_PREFIXES = {"peasant"}
+_HONK_VISUAL_KEYS = {
+    "Honk": "honkhonkworshippera",
+    "Honk2": "honkhonkworshipper2a",
+    "Accountant": "elderhonkhonkworshipper2b",
+    "ElderHonk": "honkseerhonkworshipperc"
+}
 
 
 @dataclass(frozen=True)
@@ -103,11 +109,19 @@ def _row_keys(monster_name: str, type_picture: str) -> List[str]:
 def object_actor_keys(type_str: str, object_name: str = "") -> List[str]:
     out: List[str] = []
     seen = set()
-    for raw in (type_str, _strip_instance_suffix(object_name)):
-        key = _token(raw)
+
+    def add(key: str) -> None:
+        key = _token(key)
         if key and key not in seen:
             out.append(key)
             seen.add(key)
+
+    for key in _honk_visual_keys(type_str, object_name):
+        add(key)
+
+    for raw in (type_str, _strip_instance_suffix(object_name)):
+        add(raw)
+
     return out
 
 
@@ -118,10 +132,13 @@ def resolve_actor_visual(
 ) -> Optional[ActorVisual]:
     if not visual_index:
         return None
+
     for key in object_actor_keys(type_str, object_name):
         visual = visual_index.get(key)
+
         if isinstance(visual, ActorVisual):
             return visual
+
         if isinstance(visual, dict):
             return ActorVisual(
                 key=key,
@@ -132,7 +149,19 @@ def resolve_actor_visual(
                 monster_name=str(visual.get("monster_name", "") or ""),
                 type_picture=str(visual.get("type_picture", "") or ""),
             )
+
     return None
+
+def _honk_visual_keys(type_str: str, object_name: str) -> List[str]:
+    candidates: List[str] = []
+
+    if object_name == "Accountant":
+        candidates.append(_HONK_VISUAL_KEYS["Accountant"])
+
+    if type_str in _HONK_VISUAL_KEYS:
+        candidates.append(_HONK_VISUAL_KEYS[type_str])
+
+    return candidates
 
 
 def parse_actor_visual_tables(

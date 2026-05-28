@@ -19942,7 +19942,7 @@
       "levels": [
         "LICHLAB.DAT"
       ],
-      "category": "world",
+      "category": "marker",
       "property_names": [
         "BoxPhysics",
         "Current",
@@ -22004,8 +22004,7 @@
         "WanderWaitMin"
       ],
       "filenames": [
-        "models\\honk.abc",
-        "models\\skeleton.abc"
+        "models\\honkfemale.abc"
       ],
       "template": {
         "source_level": "TEMPLEOFHONK.DAT",
@@ -22017,10 +22016,12 @@
         ]
       },
       "skins": [
-        "skins\\skeleton2.dtx"
+        "skins\\honkf1.dtx",
+        "skins\\honkf3.dtx"
       ],
       "actor_visual_sources": [
-        "ACTOR.TXT:135"
+        "MONSTERS.TXT:186",
+        "MONSTERS.TXT:217"
       ]
     },
     "Goose": {
@@ -22188,9 +22189,7 @@
         "WanderWaitMin"
       ],
       "filenames": [
-        "models\\honk.abc",
-        "models\\peasantmale.abc",
-        "models\\skeleton.abc"
+        "models\\honkmale.abc"
       ],
       "template": {
         "source_level": "TEMPLEOFHONK.DAT",
@@ -22202,10 +22201,10 @@
         ]
       },
       "skins": [
-        "skins\\skeleton2.dtx"
+        "skins\\honkm2.dtx"
       ],
       "actor_visual_sources": [
-        "ACTOR.TXT:135"
+        "MONSTERS.TXT:216"
       ]
     },
     "ElderHonk": {
@@ -22213,7 +22212,7 @@
       "levels": [
         "TEMPLEOFHONK.DAT"
       ],
-      "category": "monster",
+      "category": "npc_civilian",
       "property_names": [
         "AutoDeactivate",
         "BuryOnDeath",
@@ -22281,7 +22280,7 @@
         "WanderWaitMin"
       ],
       "filenames": [
-        "models\\skeleton.abc"
+        "models\\honkmale.abc"
       ],
       "template": {
         "source_level": "TEMPLEOFHONK.DAT",
@@ -22291,7 +22290,13 @@
           240.0,
           1328.0
         ]
-      }
+      },
+      "skins": [
+        "skins\\honkleader.dtx"
+      ],
+      "actor_visual_sources": [
+        "MONSTERS.TXT:188"
+      ]
     },
     "PickupItem": {
       "instance_count": 1,
@@ -23986,7 +23991,7 @@
       "levels": [
         "THRONHEIMCITY.DAT"
       ],
-      "category": "monster",
+      "category": "npc_civilian",
       "property_names": [
         "AutoDeactivate",
         "BuryOnDeath",
@@ -26000,7 +26005,7 @@
       ]
     },
     "models\\peasantmale.abc": {
-      "uses": 188,
+      "uses": 186,
       "classes": [
         "CommonerDwarfFemaleB",
         "CommonerDwarfMaleB",
@@ -26013,7 +26018,6 @@
         "CommonerHumanMaleA",
         "CommonerHumanMaleB",
         "ElderHonkFemale",
-        "Honk2",
         "PrisonerHumanMaleA",
         "ShopKeeperDwarfFemaleB",
         "ShopKeeperHalfOrcFemaleA",
@@ -27271,12 +27275,9 @@
       ]
     },
     "models\\skeleton.abc": {
-      "uses": 112,
+      "uses": 98,
       "classes": [
         "BoneThrasher",
-        "ElderHonk",
-        "Honk",
-        "Honk2",
         "Prop",
         "Skeletoid",
         "Skeleton",
@@ -27290,7 +27291,6 @@
         "INVENTASTORCA.DAT",
         "ISLEOFASHES.DAT",
         "RUINEDTEMPLE.DAT",
-        "TEMPLEOFHONK.DAT",
         "WIZARDSLAB.DAT"
       ]
     },
@@ -30287,14 +30287,24 @@
         "TASARACADEMY.DAT"
       ]
     },
-    "models\\honk.abc": {
-      "uses": 4,
+    "models\\honkfemale.abc": {
+      "uses": 9,
       "classes": [
-        "Honk",
-        "Honk2"
+        "Honk"
       ],
       "levels": [
         "TEMPLEOFHONK.DAT"
+      ]
+    },
+    "models\\honkmale.abc": {
+      "uses": 11,
+      "classes": [
+        "ElderHonk",
+        "Honk2"
+      ],
+      "levels": [
+        "TEMPLEOFHONK.DAT",
+        "THRONHEIMCITY.DAT"
       ]
     },
     "models\\props\\key2.abc": {

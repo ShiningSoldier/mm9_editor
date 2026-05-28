@@ -43,14 +43,13 @@ _CAT_COLORS: Dict[str, Tuple[float, float, float]] = {
     "other":       (0.50, 0.50, 0.50),   # neutral grey
 }
 _DEFAULT_COLOR = (0.50, 0.50, 0.50)
-_WORLD_HELPER_CATEGORIES = {"trigger", "sound", "marker", "world", "light", "door"}
+_WORLD_HELPER_CATEGORIES = {"trigger", "sound", "marker", "world"}
 _WORLD_HELPER_CLASSES = {
     "BlueWater", "StartPoint", "ScriptObject", "EffectsMgr", "WorldObject",
     "EarthQuake", "Ladder", "Switch", "Fire", "Camera", "DestructableBrush",
-    "WeatherMan", "Fog", "Spawner", "Button", "Shooter"
+    "WeatherMan", "Fog", "Spawner", "Button", "Shooter", "AiRail", "DirLight",
+    "AIBarrier", "Light", "ExitTrigger", "Door", "RotatingDoor", "StaticSunLight"
 }
-_EDITOR_HELPER_NAME_PREFIXES = ("AITrk",)
-
 
 def _cat_color(cat: str) -> Tuple[float, float, float]:
     return _CAT_COLORS.get(cat, _DEFAULT_COLOR)
@@ -59,13 +58,6 @@ def _cat_color(cat: str) -> Tuple[float, float, float]:
 def is_world_helper_billboard(obj, categorize) -> bool:
     """Return True for editor/control objects that are noisy as billboards."""
     if getattr(obj, "type_str", "") in _WORLD_HELPER_CLASSES:
-        return True
-    name = ""
-    try:
-        name = str(obj.get("Name") or "")
-    except Exception:
-        pass
-    if any(name.startswith(prefix) for prefix in _EDITOR_HELPER_NAME_PREFIXES):
         return True
     return categorize(obj.type_str) in _WORLD_HELPER_CATEGORIES
 

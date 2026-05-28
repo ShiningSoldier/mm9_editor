@@ -172,6 +172,7 @@ _AMBIENT_CREATURE_MODELS = {
 _NPC_CLASS_PREFIXES = (
     "Commoner",
     "Honk",
+    "ElderHonk",
     "Town",
     "Shopkeeper",
     "ShopKeeper",
@@ -287,7 +288,8 @@ CATEGORY_RULES = [
                      "BonePile","Cauldron","TreasureChest"),          "prop"),
     (lambda c: c in ("Marker","AIRail","AIBarrier",
                      "InvisibleBrush","DamageBrush",
-                     "PerceptionBrush","PortalZone"),                 "marker"),
+                     "PerceptionBrush","PortalZone",
+                     "VolumeBrush","HidingPlace"),                 "marker"),
     (lambda c: c == "WorldProperties" or c == "OutsideDef"
             or c == "TOD_Sky" or c == "SkyPointer"
             or c == "DemoSkyWorldModel" or c == "Terrain",            "world"),
