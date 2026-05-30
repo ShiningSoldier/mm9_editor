@@ -196,24 +196,6 @@ for reverse-engineering work, but the GUI editor workflow is REZ-only.
 
 ### Converting Legends of Might and Magic Levels
 
-`lomm_to_mm9.py` is a converter that takes a Legends of Might and Magic
-level from LoMM `WORLDS.REZ`, converts it to MM9-compatible DAT bytes,
-and transactionally adds it to MM9 `WORLDS.REZ` after backing up the
-original archive. Both games run on the same LithTech engine family and
-share the v66 DAT container, so the binary header, BSP, lightmap and PVS
-regions transfer cleanly. The converter only rewrites the WorldObject
-section, applying three kinds of rules:
-
-1. **Drop unknown classes.** Any WorldObject whose class is not present in
-   MM9's class registry (`catalog.json`) is removed. This handles
-   LoMM-only classes such as `CandleWall`, `Orc`, `GoodKingRescueZone`,
-   `BuyZone`, and `Timer`.
-2. **Patch shared classes.** Adds missing properties to existing objects.
-    By default this adds `MovePlayerToFloor = 1` to every `StartPoint`
-    and `CanSaveGame = 1` plus `CanMiniSaveGame = 1` to
-    `WorldProperties` so the player can save in the converted level.
-3. **Copy missing assets.** If the level references models (`.abc`), skins (`.dtx`), or sounds (`.wav`) that are missing from MM9's active archives but exist in LoMM, they are automatically copied into MM9's `MODELS.REZ`, `SKINS.REZ`, and `SOUNDS.REZ`. A `conversion_log.txt` is created inside the backup folder detailing what was copied.
-
 In the editor, select **LoMM to MM9** from the **Conversion** dropdown menu, choose the
 LoMM install folder, pick a LoMM level from its `WORLDS.REZ`, and enter the
 new MM9 level name. The editor uses the same transactional backup and
@@ -222,28 +204,6 @@ level from MM9 `WORLDS.REZ` for inspection. The last successful LoMM install
 folder is remembered in `editor_settings.json` and offered automatically the
 next time you open the conversion dialog. The selected LoMM install must have
 `data/WORLDS.REZ`, `data/RUDE.REZ`, and `data/SCRIPTS.REZ`.
-
-#### Usage
-
-```sh
-python lomm_to_mm9.py \
-    --mm9_root "C:\Path\To\Might and Magic 9" \
-    --lomm_root "C:\Path\To\Legends of Might and Magic" \
-    --level_to_convert CHATEAUESCAPE \
-    --converted_level_name CHATEAUESCAPE_MM9
-
-# Preview only; MM9 WORLDS.REZ is not modified
-python lomm_to_mm9.py \
-    --mm9_root "C:\Path\To\Might and Magic 9" \
-    --lomm_root "C:\Path\To\Legends of Might and Magic" \
-    --level_to_convert CHATEAUESCAPE \
-    --converted_level_name CHATEAUESCAPE_MM9 \
-    --dry-run
-
-# Different rule set, or force a fresh class scan instead of catalog.json
-python lomm_to_mm9.py ... --config my_rules.yaml
-python lomm_to_mm9.py ... --catalog ""
-```
 
 The converter prints a per-stage summary, writes a complete temporary
 `WORLDS.REZ`, backs up the original archive under
@@ -282,50 +242,3 @@ convert_class:
     new_type: Brazier
     preserve: [Name, Pos, Rotation, Filename, Skin, ...]
 ```
-
-Property `code` values match the LithTech v66 DAT type codes:
-
-| code | type            |
-|------|-----------------|
-| 0    | LT string       |
-| 1, 2 | vec3 (3 floats) |
-| 3    | float32         |
-| 5    | bool (1 byte)   |
-| 6    | uint32          |
-| 7    | quaternion      |
-
-#### Porting LoMM enemies to MM9
-
-Each rule there clones an MM9 host class instance (which
-brings MM9-compatible stats, AI, sound table, and animation state
-machine). The default rule set covers Orc, Goblin, LizardMan, LizardWarrior,
-Dwarf, Soldier, Mummy, Wight, EvilEye, and EvilEyeTerror. Add your own
-rules in the YAML; each rule may use:
-
-- `template` and `new_type` - which MM9 host class to clone.
-- `preserve` - source fields to copy onto the clone.
-- `overrides` - update existing template fields with absolute values
-  (the prop code is auto-detected from the template; if the field
-  isn't on the template it's added as a string).
-- `add_props` - add new fields not on the template, with explicit
-  `code` and `value`.
-
-#### Asset audit
-
-After conversion, the script walks every remaining object's
-`Filename` (`.abc`/`.lta`/`.ltb`), `Skin` (`.dtx`), and referenced sounds (`.wav`), reporting a
-three-way classification:
-
-- **in MM9** - resolves inside the MM9 install's `MODELS.REZ` /
-  `SKINS.REZ` / `SOUNDS.REZ`. Nothing to do.
-- **in LoMM only** - found inside the LoMM archives but not in MM9. These are automatically extracted and merged into the MM9 archives during conversion.
-- **missing** - not found in either MM9 or LoMM assets. Either provide the file
-  or substitute a different asset in the YAML.
-
-The audit prints the punch list under the conversion summary every
-run; pass `--dry-run` to preview without writing the output DAT.
-
-The editor's static-pose ABC preview assumes single-weight skinning,
-so heavily multi-weighted LoMM characters such as `Goblin.abc` render
-as imploded shards in the viewport even though the game executable
-displays them correctly at runtime. See `HANDOFF.md` for details.

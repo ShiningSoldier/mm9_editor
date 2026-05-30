@@ -1,220 +1,462 @@
-# Legends of Might and Magic Interop
+# LoMM to MM9 Conversion Reference
 
-The editor and patcher were tested against `CHATEAUESCAPE.DAT` from
-Legends of Might and Magic (LoMM, 2001). LoMM is built on the same LithTech
-engine family as MM9 and its DAT files use the same v66 container, which
-makes large parts of a LoMM level directly reusable. The findings below
-are the basis of the `lomm_to_mm9.py` converter and of the editor's preview behaviour
-for LoMM content.
+## Purpose
 
-## Container Compatibility
+`lomm_to_mm9.py` converts a Legends of Might and Magic level from LoMM `WORLDS.REZ` into MM9-compatible DAT bytes and inserts the converted level into MM9 `WORLDS.REZ` using a transactional archive replacement flow.
 
-- LoMM `.DAT` files are version 66 with the same 44-byte header layout
-  (version, obj_pos, ren_pos, 32 zero bytes).
-- `World.load()` parses the file without modification, and
-  `serialize_objects()` round-trips byte-identical
-  (3,132,910 bytes for `CHATEAUESCAPE.DAT`). This means the BSP,
-  lightmap, and PVS regions transfer to MM9 unchanged.
-- Property type codes, Pascal string layout, byte-reversed REZ type
-  tags, and the float-bits-in-LongInt quirk all match.
+The converter is available in two forms:
 
-## Class Differences
+- Standalone CLI launcher: `lomm_to_mm9.py`
+- Editor workflow: `Conversion -> LoMM to MM9`
 
-In `CHATEAUESCAPE.DAT` (742 objects, 29 classes), 5 classes are not
-registered in MM9 and account for 46 objects. They must be removed or
-retyped before the level loads cleanly in MM9:
+The editor workflow uses the same conversion service as the CLI, then opens the converted level from MM9 `WORLDS.REZ` for inspection.
 
-| LoMM class | Count | LoMM purpose | MM9 nearest match |
-|---|---|---|---|
+## Tested Baseline
+
+The implementation and findings were tested against `CHATEAUESCAPE.DAT` from Legends of Might and Magic.
+
+Key observed facts for this level:
+
+- 742 WorldObjects
+- 29 classes
+- 16 `StartPoint`s clustered around two arrival areas
+- 0 `ExitTrigger`s
+- No custom `ScriptName` values, so no `SCRIPTS.REZ` patching is required for this level to load
+
+## Required Game Archives
+
+The MM9 install must include:
+
+- `data/WORLDS.REZ`
+- `data/RUDE.REZ`
+- `data/SCRIPTS.REZ`
+
+For normal editor operation, the broader MM9 editor also uses:
+
+- `data/TEXTURES.REZ`
+- `data/SKINS.REZ`
+- `data/MODELS.REZ`
+- `data/DATA.REZ`
+
+For LoMM conversion, the selected LoMM install must include:
+
+- `data/WORLDS.REZ`
+- `data/RUDE.REZ`
+- `data/SCRIPTS.REZ`
+
+Asset copying may also use LoMM `MODELS.REZ`, `SKINS.REZ`, and `SOUNDS.REZ` when LoMM-only assets need to be copied into MM9.
+
+## DAT Container Compatibility
+
+LoMM and MM9 use closely related LithTech engine formats. LoMM `.DAT` files are version 66 and share the same 44-byte header layout:
+
+- version
+- `obj_pos`
+- `ren_pos`
+- 32 zero bytes
+
+The following regions transfer cleanly to MM9 without being rewritten:
+
+- binary header
+- BSP data
+- lightmaps
+- PVS data
+
+`World.load()` can parse the LoMM DAT directly, and `serialize_objects()` round-trips the object section byte-identically for the tested `CHATEAUESCAPE.DAT` payload of 3,132,910 bytes.
+
+Additional compatible details:
+
+- property type codes match
+- Pascal string layout matches
+- byte-reversed REZ type tags match
+- the float-bits-in-`LongInt` quirk matches
+
+## Conversion Pipeline
+
+The current pipeline is YAML-driven and implemented by `conversion/lomm_to_mm9.py` plus `conversion/lomm_to_mm9_service.py`. The root `lomm_to_mm9.py` remains a compatibility launcher.
+
+Pipeline stages:
+
+1. **Convert classes via templates**
+   - Runs first.
+   - Replaces matching source objects, including LoMM-only enemies such as `Orc`, with clones of named MM9 template objects.
+   - Retyped objects survive the later unknown-class removal stage.
+
+2. **Drop unknown classes**
+   - Removes any WorldObject whose class is not registered in the MM9 catalog and was not converted by a rule.
+
+3. **Patch shared classes**
+   - Adds missing MM9 properties to shared classes such as `StartPoint` and `WorldProperties`.
+
+4. **Audit and copy assets**
+   - Walks each remaining object's model, skin, and sound references.
+   - Classifies each referenced asset as `in MM9`, `in LoMM only`, or `missing`.
+   - Copies LoMM-only assets transactionally into MM9 `MODELS.REZ`, `SKINS.REZ`, or `SOUNDS.REZ`.
+
+5. **Write and verify archives**
+   - Writes a complete temporary `WORLDS.REZ`.
+   - Creates a backup under `<mm9_root>/mm9_editor/backups/lomm_to_mm9_<timestamp>/data/`.
+   - Replaces archives using `os.replace()`.
+   - Verifies that the new level can be read back.
+
+The backup folder also receives:
+
+- `install_manifest.json`, including a `conversion` section with the LoMM source level and new MM9 entry
+- `conversion_log.txt`, describing copied assets and conversion actions
+
+## Standalone CLI Usage
+
+```sh
+python lomm_to_mm9.py \
+    --mm9_root "C:\Path\To\Might and Magic IX" \
+    --lomm_root "C:\Path\To\Legends of Might and Magic" \
+    --level_to_convert CHATEAUESCAPE \
+    --converted_level_name CHATEAUESCAPE_MM9
+```
+
+Preview without modifying MM9 archives:
+
+```sh
+python lomm_to_mm9.py \
+    --mm9_root "C:\Path\To\Might and Magic IX" \
+    --lomm_root "C:\Path\To\Legends of Might and Magic" \
+    --level_to_convert CHATEAUESCAPE \
+    --converted_level_name CHATEAUESCAPE_MM9 \
+    --dry-run
+```
+
+Use a different rule file:
+
+```sh
+python lomm_to_mm9.py ... --config my_rules.yaml
+```
+
+Force a fresh class scan instead of using `catalog.json`:
+
+```sh
+python lomm_to_mm9.py ... --catalog ""
+```
+
+Both install roots are validated before conversion. The requested LoMM source level must exist in LoMM `WORLDS.REZ`, and the requested converted MM9 level name must not already exist in MM9 `WORLDS.REZ`, whether looked up with or without `.DAT`.
+
+`_Mm9Catalog.load_level()` accepts the level path with or without `.DAT` and transparently retries the alternate form if the literal lookup fails.
+
+`RezWriter.add()` uses a DAT restype inferred from the converted payload magic. This matters because MM9 world entries are usually extensionless, such as `WORLDS/BOOTCAMP`, rather than `WORLDS/BOOTCAMP.DAT`.
+
+## Editor Workflow
+
+In the editor:
+
+1. Open the `Conversion` dropdown.
+2. Choose `LoMM to MM9`.
+3. Select the LoMM install folder.
+4. Pick a LoMM level from its `WORLDS.REZ`.
+5. Enter the new MM9 level name.
+6. Confirm the live archive replacement.
+
+After success, the editor:
+
+- remembers the last successful LoMM install folder in `editor_settings.json`
+- offers that folder the next time the dialog opens
+- writes an automatic conversion backup of all modified archives
+- writes `install_manifest.json` and `conversion_log.txt`
+- opens the newly inserted MM9 level for inspection
+- refreshes the viewport cache so newly copied models and skins render immediately
+
+## Class Compatibility
+
+In `CHATEAUESCAPE.DAT`, 5 classes are not registered in MM9. They account for 46 objects and must be removed or retyped before the level loads cleanly in MM9.
+
+| LoMM class | Count | LoMM purpose | MM9 nearest match / action |
+|---|---:|---|---|
 | `CandleWall` | 24 | wall candle prop with engine-driven flame | `CandleProp` or `WallTorch` |
-| `Orc` | 17 | LoMM enemy AI; instances use `models\Goblin.abc` | `HalfOrcSoldier`, `LizardOrc`, or any MM9 monster |
-| `GoodKingRescueZone` | 2 | LoMM multiplayer "rescue the king" volume | none — delete |
-| `BuyZone` | 2 | LoMM Counter-Strike-style buy region | none — delete |
-| `Timer` | 1 | LoMM scripted timer | none — delete |
+| `Orc` | 17 | LoMM enemy AI using `models\Goblin.abc` | `HalfOrcSoldier`, `LizardOrc`, or another MM9 monster |
+| `GoodKingRescueZone` | 2 | multiplayer rescue-the-king volume | delete |
+| `BuyZone` | 2 | Counter-Strike-style buy region | delete |
+| `Timer` | 1 | scripted timer | delete |
 
-The remaining 24 classes (`AIRail`, `Door`, `Prop`, `Light`,
-`DirLight`, `AmbientSound`, `StartPoint`, `WorldObject`, `BlueWater`,
-`OutsideDef`, `TreasureChest`, `Brazier`, `Fire`, etc.) are all
-registered in MM9.
+The remaining 24 observed classes are registered in MM9, including:
 
-## Property Differences Within Shared Classes
+- `AIRail`
+- `Door`
+- `Prop`
+- `Light`
+- `DirLight`
+- `AmbientSound`
+- `StartPoint`
+- `WorldObject`
+- `BlueWater`
+- `OutsideDef`
+- `TreasureChest`
+- `Brazier`
+- `Fire`
 
-The parser keys properties by name, so unknown properties are silently
-dropped by the engine and missing properties fall back to engine
-defaults. The differences that matter in practice:
+## Shared-Class Property Differences
 
-- `StartPoint` is missing MM9's `MovePlayerToFloor`. Without it the
-  player may spawn floating or below the floor. Always add this with
-  value `1` during conversion.
-- `WorldProperties` is missing MM9's `CanSaveGame` and
-  `CanMiniSaveGame`. Without them the player cannot save in the level.
-  Add both with value `1` during conversion.
-- `WorldProperties` carries LoMM-only `MusicDirectory`,
-  `InstrumentFiles`, `AmbientList`, `CruisingList`, `HarddrivingList`,
-  `CDTrack`, and `ScenarioNbr`. They are harmless; MM9 ignores them.
-- `Brazier` and `Fire` in LoMM use a single `Type` field instead of
-  MM9's full `Fire*`/`Smoke*`/`Light*` particle parameter set. Without
-  conversion, the fire and smoke effects do not render.
-- `TreasureChest` in LoMM uses `KeyItemId` and `SpawnItem`. MM9
-  expects `Random`, `Gold`, `GoldOnly`, `Item1`..`Item5`, `TrapLevel`,
-  `TreasureLevel`, `TreasureOptions`, `TreasureType0_7`, plus AI
-  reachability fields. Without conversion the chest opens but is
-  empty.
-- `Cow` in LoMM has `PickRandomWeapon`, `TeamNbr`, `WeaponItemNbr`
-  (LoMM faction combat) and is missing the MM9 AI rail / wander /
-  range-attack / repopulation stack. The cow loads but is inert.
-- Most other shared classes (`Door`, `Prop`, `AIRail`, `AIBarrier`,
-  `AmbientSound`, water variants, `WorldObject`, `Ladder`) are
-  missing MM9's engine-level additions: `Alpha`, `BoxPhysics`,
-  `DisableFog`, `NeedsTick`, `TouchNotify`, `ShouldMiniSave`,
-  `OneTimeDamage`, `DamageAIOnly`, `DamagePlayerOnly`. All harmless —
-  engine defaults apply.
-- `StartPoint.PlayerNbr` in CHATEAUESCAPE is stored as the IEEE-754
-  float bit pattern of the slot number (for example `1090519040 = 8.0`
-  bits). MM9 reads `PlayerNbr` as raw `uint32`. MM9 is single-player
-  so non-zero `PlayerNbr` values are usually irrelevant; the converter
-  leaves them as-is.
+The parser keys properties by name. Unknown properties are silently dropped by the engine, and missing properties fall back to engine defaults.
 
-## Asset Compatibility
+Differences that matter during conversion:
 
-`CHATEAUESCAPE.DAT` references 32 distinct `Filename` values and 29
-distinct `Skin` values. Resolving them against MM9's `MODELS.REZ`
-(case- and extension-insensitive) shows:
+- `StartPoint` is missing MM9's `MovePlayerToFloor`.
+  - Add `MovePlayerToFloor = 1` so the player does not spawn floating or below the floor.
 
-- 29 of 32 models exist in MM9. Missing: `Barrel02`, `Chest-Lacquer`,
-  `Painting_Rectangle`, `Goblin`
-- 24 of 29 skins exist. Missing: `Barrel02`, `Chest-Lacquer`,
-  `HorseStatue2` (MM9 has `HorseStatue` without the `2`),
-  `Painting_Rectangle5`, `Chest-Rusty01` (MM9 ships the matching
-  model but under a different skin name), `Goblin`
-- Ambient sound paths (`Sounds/Ambient/...`) were not verifiable against
-  the unavailable `SOUNDS.REZ` / `DATA.REZ` in the test workspace, but
-  missing sounds are silent rather than fatal.
+- `WorldProperties` is missing MM9's `CanSaveGame` and `CanMiniSaveGame`.
+  - Add both with value `1` so the player can save in the converted level.
 
-The level references no custom `ScriptName` values, so no
-`SCRIPTS.REZ` patching is needed for the level to load.
+- `Brazier` and `Fire` in LoMM use a single `Type` field instead of MM9's full particle parameter set.
+  - Without conversion, fire and smoke effects do not render.
+
+- `TreasureChest` in LoMM uses `KeyItemId` and `SpawnItem`.
+  - MM9 expects fields such as `Random`, `Gold`, `GoldOnly`, `Item1` through `Item5`, `TrapLevel`, `TreasureLevel`, `TreasureOptions`, `TreasureType0_7`, and AI reachability fields.
+  - Without conversion, the chest opens but is empty.
+
+- `Cow` in LoMM has faction-combat fields such as `PickRandomWeapon`, `TeamNbr`, and `WeaponItemNbr`.
+  - It lacks MM9 AI rail, wander, range-attack, and repopulation fields.
+  - The cow loads but is inert.
+
+Harmless differences:
+
+- `WorldProperties` carries LoMM-only `MusicDirectory`, `InstrumentFiles`, `AmbientList`, `CruisingList`, `HarddrivingList`, `CDTrack`, and `ScenarioNbr`; MM9 ignores them.
+- Many shared classes are missing MM9 engine-level additions such as `Alpha`, `BoxPhysics`, `DisableFog`, `NeedsTick`, `TouchNotify`, `ShouldMiniSave`, `OneTimeDamage`, `DamageAIOnly`, and `DamagePlayerOnly`; engine defaults apply.
+- `StartPoint.PlayerNbr` in `CHATEAUESCAPE` is stored as the IEEE-754 float bit pattern of the slot number, for example `1090519040 = 8.0` bits. MM9 reads `PlayerNbr` as raw `uint32`. Because MM9 is single-player, non-zero values are usually irrelevant, and the converter leaves them unchanged.
+
+## Default YAML Rule Structure
+
+Default rules live in `conversion/lomm_to_mm9.yaml`.
+
+Top-level sections:
+
+```yaml
+remove_unknown_classes: true
+extra_remove_classes: []
+keep_classes: []
+
+patch_class:
+  StartPoint:
+    add_props:
+      MovePlayerToFloor: { code: 5, value: 1 }
+  WorldProperties:
+    add_props:
+      CanSaveGame:     { code: 5, value: 1 }
+      CanMiniSaveGame: { code: 5, value: 1 }
+
+convert_class:
+  TreasureChest:
+    template: "WORLDS/1000TERRORS.DAT::TreasureChest4"
+    preserve: [Name, Pos, Rotation, Filename, Skin]
+  Fire:
+    template: "WORLDS/1000TERRORS.DAT::Brazier46"
+    new_type: Brazier
+    preserve: [Name, Pos, Rotation, Filename, Skin]
+```
+
+Meaning of major rule fields:
+
+- `remove_unknown_classes`: drop classes not registered in the MM9 catalog.
+- `extra_remove_classes`: explicitly drop additional classes.
+- `keep_classes`: exempt custom classes from unknown-class removal.
+- `patch_class`: add or override properties on classes that remain shared.
+- `convert_class`: clone MM9 template objects to replace LoMM objects.
+- `template`: MM9 source object to clone.
+- `new_type`: replacement class type.
+- `preserve`: source fields copied onto the clone.
+- `overrides`: update existing template fields with absolute values.
+- `add_props`: add fields not present on the template.
+
+If PyYAML is unavailable, the config loader falls back to JSON parsing.
+
+## DAT Property Type Codes
+
+| Code | Type |
+|---:|---|
+| 0 | LT string |
+| 1, 2 | vec3, three floats |
+| 3 | float32 |
+| 5 | bool, one byte |
+| 6 | uint32 |
+| 7 | quaternion |
+
+## Enemy Porting
+
+Enemy conversion rules clone MM9 host class instances. This brings MM9-compatible stats, AI, sound tables, and animation state machines.
+
+The default rule set covers:
+
+- `Orc`
+- `Goblin`
+- `LizardMan`
+- `LizardWarrior`
+- `Dwarf`
+- `Soldier`
+- `Mummy`
+- `Wight`
+- `EvilEye`
+- `EvilEyeTerror`
+
+Custom enemy conversion rules can be added in YAML using `template`, `new_type`, `preserve`, `overrides`, and `add_props`.
+
+## Asset Compatibility and Audit
+
+The converter audits references from each remaining object:
+
+- `Filename` values for `.abc`, `.lta`, and `.ltb`
+- `Skin` values for `.dtx`
+- referenced sounds for `.wav`
+- `AmbientSound` `.wav` paths
+
+Each asset is classified as:
+
+- **in MM9**: already exists in MM9 archives, so no action is needed
+- **in LoMM only**: exists in LoMM and is copied into the corresponding MM9 archive
+- **missing**: absent from both MM9 and LoMM; provide the file or substitute a different asset in the YAML
+
+For the tested `CHATEAUESCAPE.DAT`:
+
+- 32 distinct `Filename` values were observed.
+- 29 distinct `Skin` values were observed.
+- 29 of 32 models exist in MM9.
+- Missing model names: `Barrel02`, `Chest-Lacquer`, `Painting_Rectangle`, `Goblin`.
+- 24 of 29 skins exist in MM9.
+- Missing skin names: `Barrel02`, `Chest-Lacquer`, `HorseStatue2`, `Painting_Rectangle5`, `Chest-Rusty01`, `Goblin`.
+- `HorseStatue2` has a near MM9 match named `HorseStatue`.
+- `Chest-Rusty01` has a matching model in MM9 but a different skin name.
+- Ambient sound paths could not be verified against unavailable `SOUNDS.REZ` / `DATA.REZ` in the test workspace, but missing sounds are silent rather than fatal.
+
+The audit summary is printed on every conversion run. Use `--dry-run` to preview it without writing the output DAT or replacing archives.
 
 ## Goblin ABC Preview Notes
 
-`Goblin.abc` (`MODELS/GOBLIN`, 985,190 bytes, 17 parent animations,
-68 nodes, 3 pieces, `nVerts = 602`, `nVertWeights = 1863`) is a valid
-LithTech ABC. LoMM's Goblin uses true multi-weight vertex records, so
-the editor must not walk its vertex array at the older fixed 48-byte
-stride. The observed vertex record layout is:
+`Goblin.abc` is a valid LithTech ABC model:
+
+- path: `MODELS/GOBLIN`
+- size: 985,190 bytes
+- 17 parent animations
+- 68 nodes
+- 3 pieces
+- `nVerts = 602`
+- `nVertWeights = 1863`
+
+LoMM Goblin uses true multi-weight vertex records, so the editor must not parse it using the older fixed 48-byte stride.
+
+Observed vertex record layout:
 
 - `uint16 n_weights`
 - `uint16 weight_set_index_or_flags`
-- `n_weights` entries of `uint32 bone_index`, `float x`, `float y`,
-  `float z`, `float weight`
-- `float x`, `float y`, `float z` saved model-space vertex position
-- `float nx`, `float ny`, `float nz` saved model-space normal
+- `n_weights` entries of:
+  - `uint32 bone_index`
+  - `float x`
+  - `float y`
+  - `float z`
+  - `float weight`
+- saved model-space vertex position: `float x`, `float y`, `float z`
+- saved model-space normal: `float nx`, `float ny`, `float nz`
 
-Total record size is therefore `28 + 20 * n_weights`; single-weight
-records remain 48 bytes. For static editor previews, multi-weight
-characters should use the saved model-space position and normal instead
-of reconstructing bind pose from the weight list. The weight list is
-still useful for future animated/skinned preview work, but reconstructing
-from the current node matrices is slightly wrong on Goblin and visibly
-flattens details such as the head.
+Record size formula:
+
+```text
+28 + 20 * n_weights
+```
+
+Single-weight records remain 48 bytes.
+
+For static editor previews, multi-weight characters should use the saved model-space position and normal instead of reconstructing bind pose from the weight list. Reconstructing from the current node matrices is slightly wrong on Goblin and visibly flattens details such as the head.
+
+Heavily multi-weighted LoMM characters such as `Goblin.abc` may render as imploded shards in the editor viewport even though the game executable displays them correctly at runtime.
 
 ## Level Connectivity
 
-`CHATEAUESCAPE.DAT` has 16 `StartPoint`s clustered around two arrival
-areas and **0** `ExitTrigger`s. The level has no DAT-driven exit back
-to the rest of the world. To wire it into MM9's world graph, add an
-`ExitTrigger` whose `DestinationWorld` is the source MM9 level and add
-a matching `StartPoint` there. The transition wizard described in the
-"Level Transitions" section above applies.
+`CHATEAUESCAPE.DAT` has no DAT-driven exit back to the MM9 world graph.
 
-## Converter Pipeline
+To connect it to MM9 gameplay:
 
-`conversion/lomm_to_mm9.py` implements the findings above as a YAML-driven
-pipeline (`conversion/lomm_to_mm9.yaml`). The root `lomm_to_mm9.py` remains a
-compatibility launcher, while `conversion/lomm_to_mm9_service.py` provides the
-shared install-root validation, LoMM level listing, conversion-to-bytes, and
-transactional multi-archive insertion (updating `WORLDS.REZ`, `MODELS.REZ`,
-`SKINS.REZ`, and `SOUNDS.REZ`) used by both the CLI and editor:
+1. Add an `ExitTrigger` to the converted LoMM level.
+2. Set its `DestinationWorld` to the source MM9 level.
+3. Add a matching `StartPoint` in the destination/source MM9 level.
 
-1. **Convert classes via templates.** Replaces instances of a class
-   (including LoMM-only enemies like `Orc`) with a clone of a named MM9
-   template. This stage runs first so retyped objects survive the
-   unknown-class drop.
-2. **Drop unknown classes.** Any WorldObject whose class is still not
-   in MM9's catalog (and wasn't retyped in stage 1) is removed.
-3. **Add missing properties** to shared classes (`StartPoint`,
-   `WorldProperties`).
-4. **Asset audit** walks every remaining object's `Filename` (`.abc`/`.lta`/`.ltb`),
-   `Skin` (`.dtx`), and `AmbientSound` (`.wav`) properties and three-way classifies:
-   in MM9, in LoMM only, or missing entirely. The "in LoMM only" bucket (which includes
-   loose files and entries inside LoMM's `MODELS.REZ`, `SKINS.REZ`, and `SOUNDS.REZ`)
-   is transactionally copied into MM9's respective archives (`MODELS.REZ`, `SKINS.REZ`,
-   and `SOUNDS.REZ`) so the level renders and plays correctly.
+The editor's transition wizard can apply this kind of transition setup.
 
-The standalone CLI now takes install roots rather than loose/debug data paths:
+## LoMM Catalog for Rule Research
 
-```text
-python lomm_to_mm9.py \
-  --mm9_root "C:\Path\To\Might and Magic IX" \
-  --lomm_root "C:\Path\To\Legends of Might and Magic" \
-  --level_to_convert CHATEAUESCAPE \
-  --converted_level_name CHATEAUESCAPE_MM9
-```
+A separate LoMM catalog can be generated for experimental conversion-rule design:
 
-Both roots are validated before conversion. MM9 requires `data/WORLDS.REZ`,
-`data/RUDE.REZ`, and `data/SCRIPTS.REZ`; LoMM uses the same required archive
-set. The requested source level must exist in LoMM `WORLDS.REZ`, and the
-requested converted level name must not already exist in MM9 `WORLDS.REZ`
-under either extensionless or `.DAT` lookup forms.
-
-`_Mm9Catalog.load_level()` accepts the level path with or without the
-`.DAT` suffix, so the loader transparently retries the alternate form
-when the literal lookup fails.
-
-The converter reuses `mm9_patcher.mm9_patch` so its output round-trips through
-the MM9 parser. `RezWriter.add()` is used with a DAT restype inferred from the
-converted payload magic, which is important because MM9 world entries are
-usually extensionless (`WORLDS/BOOTCAMP`, not `WORLDS/BOOTCAMP.DAT`).
-
-The editor exposes the same workflow through the dropdown
-`Conversion -> LoMM to MM9` menu item. The dialog remembers the last successful
-LoMM install folder in `editor_settings.json`, loads LoMM levels into a
-combobox, confirms the live archive replacement, writes an automatic conversion
-backup of all modified archives plus `install_manifest.json` and `conversion_log.txt`,
-and opens the newly inserted MM9 level for inspection after success (triggering a
-dynamic viewport cache refresh so copied models and skins render immediately).
-
-A separate `catalog/data/catalog_lomm.json` can still be built from a LoMM
-`WORLDS.REZ` for conversion-rule research, for example:
-
-```text
+```sh
 python catalog.py build-from-rez "C:\Path\To\LoMM\data\WORLDS.REZ" \
   --out catalog/data/catalog_lomm.json
 ```
 
-It mirrors `catalog/data/catalog.json`'s shape but indexes the LoMM levels.
-It's useful when designing experimental conversion rules: each LoMM-only class
-entry includes the `template` (source level + instance) you can clone from, the
-union of `property_names` actually observed on instances, and the set of
-`filenames` (model paths) the class uses across LoMM levels.
+`catalog_lomm.json` mirrors the shape of MM9's `catalog/data/catalog.json` but indexes LoMM levels.
 
+For each LoMM-only class entry, it can expose:
 
-# Music
+- source template level and instance
+- observed `property_names`
+- model filenames used across LoMM levels
 
-There are fundamental differences in how music is configured between LoMM and MM9:
+## Music Conversion Notes
 
-- **Legends of Might and Magic (LoMM):** Level music configurations reside directly inside the level `.DAT` files on the `WorldProperties` object (via properties such as `MusicDirectory`, `InstrumentFiles`, `AmbientList`, `CruisingList`, `HarddrivingList`, `CDTrack`, and `ScenarioNbr`). However, in all shipping LoMM levels, these fields are left as empty strings, and the level relies entirely on placement of environmental `AmbientSound` objects.
-- **Might and Magic IX (MM9):** Background level music is completely decoupled from the level `.DAT` files. Instead, the game engine uses a global lookup table in the game configuration file MAPSTATS.TXT (located in `data.rez/DATA/MAPSTATS.TXT`). This table maps the map's file name to a **Music Track** index and **Battle Track** index.
+LoMM and MM9 configure music differently.
 
-## How to Add Music to a Newly Converted Level
+### LoMM
 
-Since converted levels are not part of the original MM9 campaign, they lack an entry in MM9's MAPSTATS.TXT. Consequently, the game client plays no background music when loading them.
+LoMM stores level music-related fields directly in the level `.DAT` on `WorldProperties`, including:
 
-To assign music to a converted level:
-1. Open the active MM9 game configuration file `data.rez/DATA/MAPSTATS.TXT`.
-2. Add a new row mapping your converted level's filename to your desired track index. For example, if your converted level file name is `ChateauEscape_mm9`, append a new entry:
-   ```text
-   #  Name                 File name        Music Track   Battle Track   ...
-   81 Chateau Escape       ChateauEscape_mm9    8             3              ...
-   ```
-   *(Track numbers typically range from 1 to 18; for example, track `8` is Thjorgard, track `7` is Sturmford, and track `12` is Drangheim).*
+- `MusicDirectory`
+- `InstrumentFiles`
+- `AmbientList`
+- `CruisingList`
+- `HarddrivingList`
+- `CDTrack`
+- `ScenarioNbr`
 
+In shipping LoMM levels, these fields are empty strings. LoMM relies on environmental `AmbientSound` object placement instead.
+
+### MM9
+
+MM9 background music is decoupled from level DAT files. The engine uses `data.rez/DATA/MAPSTATS.TXT` to map a map filename to:
+
+- `Music Track`
+- `Battle Track`
+
+Converted LoMM levels are not part of the original MM9 campaign, so they have no `MAPSTATS.TXT` entry and therefore no background music by default.
+
+To assign music (UNCOMFIRMED):
+
+1. Open the active MM9 configuration file `data.rez/DATA/MAPSTATS.TXT`.
+2. Add a row for the converted level filename.
+
+Example:
+
+```text
+#  Name                 File name          Music Track   Battle Track   ...
+81 Chateau Escape       ChateauEscape_mm9  8             3              ...
+```
+
+Example track notes from the source material:
+
+- track `8`: Thjorgard
+- track `7`: Sturmford
+- track `12`: Drangheim
+
+## Practical Conversion Checklist
+
+Before conversion:
+
+- Verify both MM9 and LoMM install roots.
+- Confirm required archives exist.
+- Choose a converted level name that does not already exist in MM9 `WORLDS.REZ`.
+- Run `--dry-run` when testing a new rule set.
+
+During rule tuning:
+
+- Retype important LoMM-only gameplay objects before unknown-class removal.
+- Drop multiplayer-only volumes such as `GoodKingRescueZone` and `BuyZone` unless a custom MM9 replacement exists.
+- Patch `StartPoint` and `WorldProperties` every time.
+- Convert `TreasureChest`, `Fire`, and `Brazier` where gameplay or visuals matter.
+- Review the asset audit for `missing` entries.
+
+After conversion:
+
+- Inspect the converted level in the editor.
+- Add exits and matching start points if the level should connect to the campaign.
+- Add a `MAPSTATS.TXT` entry if background music is desired.
+- Test in a new game or appropriate fresh load path, because some changes may not appear in previously saved games.
