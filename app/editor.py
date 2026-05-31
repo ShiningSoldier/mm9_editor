@@ -275,7 +275,15 @@ class EditorApp:
 
         self._view_object_helpers_var = tk.BooleanVar(value=False)
         self._view_world_helpers_var = tk.BooleanVar(value=False)
-        self._view_collision_bsp_var = tk.StringVar(value="solid")
+        self._view_helper_bsp_mode_var = tk.StringVar(value="normal")
+        self._view_helper_role_vars = {
+            "aiRail": tk.BooleanVar(value=True),
+            "collision": tk.BooleanVar(value=True),
+            "water": tk.BooleanVar(value=True),
+            "trigger": tk.BooleanVar(value=True),
+            "sound": tk.BooleanVar(value=True),
+            "skyVisibility": tk.BooleanVar(value=True),
+        }
 
         m_view = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="View", menu=m_view)
@@ -289,14 +297,33 @@ class EditorApp:
             variable=self._view_world_helpers_var,
             command=self.cmd_toggle_world_helpers,
         )
-        m_collision = tk.Menu(m_view, tearoff=0)
-        m_view.add_cascade(label="Collision BSP", menu=m_collision)
-        for mode in ("hidden", "solid", "wireframe", "raw"):
-            m_collision.add_radiobutton(
-                label=mode,
-                value=mode,
-                variable=self._view_collision_bsp_var,
-                command=self.cmd_set_collision_bsp_mode,
+        m_helpers = tk.Menu(m_view, tearoff=0)
+        m_view.add_cascade(label="Helper BSP", menu=m_helpers)
+        m_helpers.add_radiobutton(
+            label="Normal",
+            value="normal",
+            variable=self._view_helper_bsp_mode_var,
+            command=self.cmd_set_helper_bsp_mode,
+        )
+        m_helpers.add_radiobutton(
+            label="Helpers translucent",
+            value="helpers",
+            variable=self._view_helper_bsp_mode_var,
+            command=self.cmd_set_helper_bsp_mode,
+        )
+        m_helpers.add_separator()
+        for role, label in (
+            ("aiRail", "AI rails"),
+            ("collision", "Collision / Firethrough"),
+            ("water", "Water volumes"),
+            ("trigger", "Triggers"),
+            ("sound", "Sound"),
+            ("skyVisibility", "Sky / Visibility"),
+        ):
+            m_helpers.add_checkbutton(
+                label=label,
+                variable=self._view_helper_role_vars[role],
+                command=self.cmd_set_helper_role_groups,
             )
 
         m_conversion = tk.Menu(menubar, tearoff=0)
@@ -718,11 +745,23 @@ class EditorApp:
             bool(self._view_world_helpers_var.get())
         )
 
-    def cmd_set_collision_bsp_mode(self) -> None:
+    def cmd_set_helper_bsp_mode(self) -> None:
         """Apply the selected helper BSP preview mode."""
         if self.view3d is None:
             return
-        self.view3d.set_helper_bsp_mode(self._view_collision_bsp_var.get())
+        self.view3d.set_helper_bsp_mode(self._view_helper_bsp_mode_var.get())
+        self.cmd_set_helper_role_groups()
+
+    def cmd_set_helper_role_groups(self) -> None:
+        """Apply selected helper BSP role groups."""
+        if self.view3d is None:
+            return
+        groups = {
+            role
+            for role, var in self._view_helper_role_vars.items()
+            if bool(var.get())
+        }
+        self.view3d.set_helper_role_groups(groups)
 
     def cmd_lomm_to_mm9_conversion(self) -> None:
         """Open the LoMM-to-MM9 conversion workflow."""

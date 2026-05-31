@@ -31,8 +31,12 @@ Orbit mode is the editing mode:
 - `View -> Toggle world helpers` toggles editor/service billboards such as
   AI rails/barriers, ambient sounds, triggers, weather/world markers, doors,
   lights, and `BlueWater` markers.
-- `View -> Collision BSP` controls helper BSP preview mode with `hidden`,
-  `solid`, `wireframe`, and `raw`.
+- `View -> Helper BSP` controls helper BSP overlays. `Normal` hides helper
+  materials while keeping real art and water substitutes; `Helpers
+  translucent` shows selected helper roles as colour-coded translucent
+  geometry.
+- `View -> Helper BSP` role toggles control AI rails, collision/firethrough,
+  water volumes, triggers, sound, and sky/visibility helpers.
 - Drag selected object: move X/Z while preserving current Y.
 - Arrow keys: nudge selected object X/Z relative to camera.
 - `PageUp` / `PageDown`, or `E` / `Q`: adjust selected object height.
@@ -131,13 +135,15 @@ Implementation summary:
    - default: off
    - on: show all world/service helper billboards
    - off: hide helper/control billboard classes above unless selected.
-4. Added `View -> Collision BSP` and moved the helper BSP mode selector out of
-   the viewport toolbar. The four modes remain `hidden`, `solid`,
-   `wireframe`, and `raw`.
+4. Added `View -> Helper BSP` and moved helper BSP controls out of the
+   viewport toolbar. The menu exposes `Normal`, `Helpers translucent`, and
+   role toggles for AI rails, collision/firethrough, water volumes, triggers,
+   sound, and sky/visibility helpers.
 5. State is split on `_GLCanvas`:
    - `_show_object_helper_billboards = False`
    - `_show_world_helper_billboards = False`
-   - `_helper_bsp_mode = "solid"`
+   - `_helper_bsp_mode = "normal"`
+   - `_helper_role_groups = all helper role groups`
 6. Filtering happens in two places:
    - world/service helpers are filtered at sprite-upload time in
      `view3d/gl_objects.py` via `_build_arrays()` / `upload_objects()` with

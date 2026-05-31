@@ -37,7 +37,7 @@ upload_model / draw_mesh / delete_mesh / draw_bsp after GL is initialised.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -55,6 +55,7 @@ _NON_RENDER_TEXTURE_TOKENS = (
     "/LEVELTEXTURES/MISC/RAIL.DTX",
     "/LEVELTEXTURES/MISC/SOUNDONLY.DTX",
     "/LEVELTEXTURES/MISC/INVISIBLE.DTX",
+    "/LEVELTEXTURES/MISC/GREENSCREEN.DTX",
     "/LEVELTEXTURES/INVISIBLE.DTX",
     "/SKYBOX/SKYMARKER.DTX",
 )
@@ -64,6 +65,25 @@ _HELPER_SOLID_TEXTURE_TOKENS = (
 )
 
 _WATER_PLACEHOLDER_TEXTURE = "TEXTURES\\LevelTextures\\Terrain\\Ocean.dtx"
+
+HELPER_ROLE_GROUPS = (
+    "aiRail",
+    "collision",
+    "water",
+    "trigger",
+    "sound",
+    "skyVisibility",
+)
+DEFAULT_HELPER_ROLE_GROUPS = frozenset(HELPER_ROLE_GROUPS)
+
+_HELPER_ROLE_COLORS: Dict[str, Tuple[float, float, float]] = {
+    "aiRail": (1.0, 0.82, 0.13),
+    "collision": (1.0, 0.20, 0.65),
+    "water": (0.0, 0.78, 1.0),
+    "trigger": (0.0, 1.0, 0.30),
+    "sound": (0.20, 0.50, 1.0),
+    "skyVisibility": (0.35, 0.45, 1.0),
+}
 
 
 def _normalise_texture_name(tex_name: str) -> str:
@@ -92,18 +112,36 @@ def _render_texture_name(tex_name: str) -> str:
     return tex_name
 
 
+def _helper_role_group_for_texture(tex_name: str) -> Optional[str]:
+    """Return the editor helper overlay group for *tex_name*, if any."""
+    norm = _normalise_texture_name(tex_name)
+    if "/LEVELTEXTURES/MISC/RAIL.DTX" in norm:
+        return "aiRail"
+    if ("/LEVELTEXTURES/MISC/FIRETHROUGH.DTX" in norm
+            or "/LEVELTEXTURES/MISC/INVISIBLE.DTX" in norm
+            or "/LEVELTEXTURES/INVISIBLE.DTX" in norm):
+        return "collision"
+    if ("/LEVELTEXTURES/TERRAIN/WATERMARKER.DTX" in norm
+            or "/SPRITES/WATER/" in norm
+            or "/SPRITETEXTURES/WATER/" in norm):
+        return "water"
+    if "/LEVELTEXTURES/MISC/GREENSCREEN.DTX" in norm:
+        return "trigger"
+    if "/LEVELTEXTURES/MISC/SOUNDONLY.DTX" in norm:
+        return "sound"
+    if "/SKYBOX/SKYMARKER.DTX" in norm or norm.endswith(".SPR"):
+        return "skyVisibility"
+    return None
+
+
 def _is_non_render_texture(tex_name: str) -> bool:
     """True for LithTech editor/helper BSP materials the game does not draw."""
-    norm = _normalise_texture_name(tex_name)
-    if norm.endswith(".SPR"):
-        return True
-    return any(token in norm for token in _NON_RENDER_TEXTURE_TOKENS)
+    return _helper_role_group_for_texture(tex_name) is not None
 
 
 def _is_helper_solid_texture(tex_name: str) -> bool:
     """True for helper materials that should draw as plain editor geometry."""
-    norm = _normalise_texture_name(tex_name)
-    return any(token in norm for token in _HELPER_SOLID_TEXTURE_TOKENS)
+    return _helper_role_group_for_texture(tex_name) == "collision"
 
 
 def _is_helper_bsp_model(model) -> bool:  # type: ignore[type-arg]
@@ -116,6 +154,50 @@ def _is_helper_bsp_model(model) -> bool:  # type: ignore[type-arg]
         if _is_helper_solid_texture(str(tex_name or "")):
             return True
     return False
+
+
+def _model_helper_role_group(model) -> Optional[str]:  # type: ignore[type-arg]
+    name = str(getattr(model, "name", "") or "").lower()
+    if "_collision" in name:
+        return "collision"
+    return None
+
+
+def _is_visibility_bsp_model(model) -> bool:  # type: ignore[type-arg]
+    """True for BSP records used by the engine as visibility/PVS data."""
+    name = str(getattr(model, "name", "") or "").lower()
+    return name == "visbsp"
+
+
+def _is_physics_world_ceiling_cap(model, pv: np.ndarray) -> bool:  # type: ignore[type-arg]
+    """
+    True for huge PhysicsBSP top-boundary caps that close the collision world.
+
+    STURMFORD ships one of these with a normal terrain texture instead of a
+    helper material, so texture-based filtering cannot identify it.
+    """
+    name = str(getattr(model, "name", "") or "").lower()
+    if name != "physicsbsp" or pv.shape[0] < 3:
+        return False
+
+    min_box = getattr(model, "min_box", None)
+    max_box = getattr(model, "max_box", None)
+    if not min_box or not max_box:
+        return False
+
+    max_y = float(max_box[1])
+    if float(np.max(np.abs(pv[:, 1] - max_y))) > 2.0:
+        return False
+
+    bounds_x = abs(float(max_box[0]) - float(min_box[0]))
+    bounds_z = abs(float(max_box[2]) - float(min_box[2]))
+    bounds_area = bounds_x * bounds_z
+    if bounds_area <= 1.0:
+        return False
+
+    span_x = float(np.max(pv[:, 0]) - np.min(pv[:, 0]))
+    span_z = float(np.max(pv[:, 2]) - np.min(pv[:, 2]))
+    return (span_x * span_z) >= bounds_area * 0.5
 
 
 
@@ -143,6 +225,7 @@ class GpuMesh:
     # block.  Empty list means no surface data was available (fall back to solid
     # colour tint).
     tex_ranges: List[Tuple[str, int, int]] = field(default_factory=list)
+    helper_role: Optional[str] = None
 
     # CPU-side triangle positions: shape (T, 3, 3) float32 where axis 1 indexes
     # vertex 0/1/2 and axis 2 is XYZ.  Retained after GPU upload so ray-triangle
@@ -171,6 +254,7 @@ class BspDrawRange:
     texture_id: int
     byte_offset: int
     index_count: int
+    alpha_mode: str = "opaque"  # "opaque", "cutout", or "blend"
 
 
 @dataclass
@@ -193,6 +277,56 @@ class BspDrawBatch:
     triangles_drawn: int
 
 
+_BSP_ALPHA_BLEND_TOKENS = (
+    "glass",
+    "window",
+    "mirror",
+    "cloud",
+    "fog",
+    "smoke",
+    "steam",
+)
+
+
+def _bsp_alpha_mode_for_texture(tex_name: str, tex_cache=None) -> str:
+    """Classify one BSP texture for depth/blend ordering."""
+    if not tex_name or tex_cache is None or not hasattr(tex_cache, "alpha_info"):
+        return "opaque"
+
+    info = tex_cache.alpha_info(tex_name)
+    if info is None or not getattr(info, "has_useful_alpha", False):
+        return "opaque"
+
+    key = _normalise_texture_name(tex_name).lower()
+    mid = float(getattr(info, "mid_fraction", 0.0))
+    transparent = float(getattr(info, "transparent_fraction", 0.0))
+
+    if any(token in key for token in _BSP_ALPHA_BLEND_TOKENS):
+        return "blend"
+    if mid > 0.05 and mid >= transparent:
+        return "blend"
+    if transparent > 0.02:
+        return "cutout"
+    return "opaque"
+
+
+def _resolved_bsp_ranges(gm: GpuMesh, tex_cache=None) -> List[BspDrawRange]:
+    """Resolve texture IDs and alpha modes for a BSP mesh once per batch."""
+    ranges: List[BspDrawRange] = []
+    if tex_cache is None or not gm.tex_ranges:
+        return ranges
+
+    for tex_name, byte_off, count in gm.tex_ranges:
+        tex_id = tex_cache.get(tex_name) if tex_name else 0
+        ranges.append(BspDrawRange(
+            texture_id=int(tex_id or 0),
+            byte_offset=int(byte_off),
+            index_count=int(count),
+            alpha_mode=_bsp_alpha_mode_for_texture(tex_name, tex_cache),
+        ))
+    return ranges
+
+
 # ---------------------------------------------------------------------------
 # Triangulation  (pure numpy, no GL dependency)
 # ---------------------------------------------------------------------------
@@ -200,6 +334,8 @@ class BspDrawBatch:
 def _triangulate_model(
     mesh,
     tex_cache=None,
+    helper_mode: str = "normal",
+    helper_roles: Optional[Set[str]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[Tuple[str, int, int]]]:  # type: ignore[type-arg]
     """
     Convert a bsp.WorldModelMesh into flat numpy arrays ready for GPU upload.
@@ -232,11 +368,15 @@ def _triangulate_model(
     if n_pts < 3 or not mesh.polygons:
         return _empty
 
+    helper_mode = str(helper_mode or "normal").lower()
+    helper_roles = set(helper_roles or DEFAULT_HELPER_ROLE_GROUPS)
+
     pts_np        = np.asarray(pts, dtype=np.float32)   # (P, 3)
     surfaces      = getattr(mesh, "surfaces",      [])   # bsp.Surface list
     texture_names = getattr(mesh, "texture_names", [])   # List[str]
     n_surfaces    = len(surfaces)
     n_textures    = len(texture_names)
+    model_helper_role = _model_helper_role_group(mesh)
     texture_sizes: Dict[str, Tuple[int, int]] = {}
 
     def _texture_size(tex_name: str) -> Tuple[int, int]:
@@ -268,6 +408,8 @@ def _triangulate_model(
         pv = pts_np[vis]   # (V, 3)
         if np.any(np.abs(pv) > _COORD_SANITY):
             continue
+        if _is_physics_world_ceiling_cap(mesh, pv):
+            continue
 
         # ── resolve surface + texture for this polygon ─────────────────
         si   = poly.surface_index
@@ -279,11 +421,21 @@ def _triangulate_model(
                 and 0 <= surf.texture_index < n_textures):
             tex_name = texture_names[surf.texture_index]
 
-        tex_name = _render_texture_name(tex_name)
-        if _is_non_render_texture(tex_name):
-            continue
-        if _is_helper_solid_texture(tex_name):
+        helper_role = _helper_role_group_for_texture(tex_name) or model_helper_role
+        if helper_mode == "helpers":
+            if helper_role is None or helper_role not in helper_roles:
+                continue
             tex_name = ""
+        elif helper_mode == "raw":
+            tex_name = _render_texture_name(tex_name)
+        else:
+            if helper_role is not None:
+                if helper_role == "water":
+                    tex_name = _render_texture_name(tex_name)
+                else:
+                    continue
+            else:
+                tex_name = _render_texture_name(tex_name)
 
         # ── per-vertex UV from LithTech OPQ surface projection ─────────
         if surf is not None:
@@ -401,6 +553,9 @@ def triangulation_stats(mesh) -> dict:  # type: ignore[type-arg]
         if np.any(np.abs(pv) > _COORD_SANITY):
             dropped_polys += 1
             continue
+        if _is_physics_world_ceiling_cap(mesh, pv):
+            dropped_polys += 1
+            continue
 
         poly_ok = False
         for k in range(1, n_vis - 1):
@@ -424,7 +579,12 @@ def triangulation_stats(mesh) -> dict:  # type: ignore[type-arg]
 # GPU upload / draw / delete
 # ---------------------------------------------------------------------------
 
-def upload_model(mesh, tex_cache=None) -> Optional[GpuMesh]:  # type: ignore[type-arg]
+def upload_model(
+    mesh,
+    tex_cache=None,
+    helper_mode: str = "normal",
+    helper_roles: Optional[Set[str]] = None,
+) -> Optional[GpuMesh]:  # type: ignore[type-arg]
     """
     Triangulate *mesh* and upload it to the GPU.
     Returns None if the model has no valid geometry after filtering.
@@ -432,7 +592,13 @@ def upload_model(mesh, tex_cache=None) -> Optional[GpuMesh]:  # type: ignore[typ
     """
     from OpenGL import GL  # type: ignore
 
-    verts, indices, tex_ranges = _triangulate_model(mesh, tex_cache=tex_cache)
+    roles = set(helper_roles or [])
+    verts, indices, tex_ranges = _triangulate_model(
+        mesh,
+        tex_cache=tex_cache,
+        helper_mode=helper_mode,
+        helper_roles=roles or None,
+    )
     n_verts = verts.shape[0]
     n_tris  = len(indices) // 3
 
@@ -493,6 +659,7 @@ def upload_model(mesh, tex_cache=None) -> Optional[GpuMesh]:  # type: ignore[typ
         category=mesh.category(),
         model_name=mesh.name,
         tex_ranges=tex_ranges,
+        helper_role=next(iter(roles), None) if helper_mode == "helpers" and len(roles) == 1 else None,
         tri_positions=tri_pos,
     )
 
@@ -631,7 +798,12 @@ def _draw_mesh_textured(gpu_mesh: GpuMesh, prog, tex_cache) -> None:
     GL.glBindVertexArray(0)
 
 
-def _draw_mesh_resolved_ranges(gpu_mesh: GpuMesh, ranges: List[BspDrawRange], prog) -> None:
+def _draw_mesh_resolved_ranges(
+    gpu_mesh: GpuMesh,
+    ranges: List[BspDrawRange],
+    prog,
+    alpha_modes: Optional[Set[str]] = None,
+) -> None:
     """
     Draw a textured BSP mesh using texture IDs resolved during cache build.
 
@@ -644,12 +816,16 @@ def _draw_mesh_resolved_ranges(gpu_mesh: GpuMesh, ranges: List[BspDrawRange], pr
     GL.glActiveTexture(GL.GL_TEXTURE0)
 
     for item in ranges:
+        if alpha_modes is not None and item.alpha_mode not in alpha_modes:
+            continue
         if item.texture_id:
             GL.glBindTexture(GL.GL_TEXTURE_2D, item.texture_id)
             prog.set_int("uHasTex", 1)
+            prog.set_int("uUseTexAlpha", 1 if item.alpha_mode != "opaque" else 0)
         else:
             GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
             prog.set_int("uHasTex", 0)
+            prog.set_int("uUseTexAlpha", 0)
         GL.glDrawElements(
             GL.GL_TRIANGLES,
             item.index_count,
@@ -659,6 +835,7 @@ def _draw_mesh_resolved_ranges(gpu_mesh: GpuMesh, ranges: List[BspDrawRange], pr
 
     GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
     GL.glBindVertexArray(0)
+    prog.set_int("uUseTexAlpha", 0)
 
 
 # Category colour table (linear RGB 0-1) used by draw_bsp
@@ -678,7 +855,8 @@ def build_bsp_draw_batch(
     show_submodels: bool = True,
     show_skybox: bool = False,
     show_terrain: bool = True,
-    helper_bsp_mode: str = "solid",
+    helper_bsp_mode: str = "normal",
+    helper_role_groups: Optional[Set[str]] = None,
 ) -> BspDrawBatch:
     """Upload visible static BSP meshes and precompute their draw ranges."""
     if bsp_world is None:
@@ -687,48 +865,65 @@ def build_bsp_draw_batch(
     items: List[BspDrawItem] = []
     tris_drawn = 0
 
-    helper_mode = str(helper_bsp_mode or "solid").lower()
+    helper_mode = str(helper_bsp_mode or "normal").lower()
+    if helper_mode in {"hidden"}:
+        helper_mode = "normal"
+    elif helper_mode in {"solid", "wireframe", "helpers", "translucent"}:
+        helper_mode = "helpers"
+    elif helper_mode != "raw":
+        helper_mode = "normal"
+    helper_roles = set(helper_role_groups or DEFAULT_HELPER_ROLE_GROUPS)
+
     for model in bsp_world.world_models:
-        is_helper = _is_helper_bsp_model(model)
-        if is_helper and helper_mode == "hidden":
-            continue
         cat = model.category()
-        if cat == "skybox" and not show_skybox:
+        if cat == "skybox" and not show_skybox and helper_mode != "helpers":
             continue
         if cat == "submodel" and not show_submodels:
             continue
         if cat == "terrain" and not show_terrain:
             continue
 
-        gm = cache.get_or_upload(model, tex_cache=tex_cache)
-        if gm is None or gm.is_empty():
+        if helper_mode == "raw":
+            gm = cache.get_or_upload(model, tex_cache=tex_cache, helper_mode="raw")
+            if gm is None or gm.is_empty():
+                continue
+            items.append(BspDrawItem(
+                mesh=gm,
+                color=_MODEL_COLORS.get(gm.category, _MODEL_COLOR_DEFAULT),
+                ranges=_resolved_bsp_ranges(gm, tex_cache),
+            ))
+            tris_drawn += gm.triangle_count
             continue
 
-        color = _MODEL_COLORS.get(gm.category, _MODEL_COLOR_DEFAULT)
-        alpha = 1.0
-        wireframe = False
-        ranges: List[BspDrawRange] = []
-        if is_helper and helper_mode in {"solid", "wireframe"}:
-            color = (0.95, 0.18, 0.62)
-            alpha = 0.35 if helper_mode == "solid" else 0.85
-            wireframe = helper_mode == "wireframe"
-        elif tex_cache is not None and gm.tex_ranges:
-            for tex_name, byte_off, count in gm.tex_ranges:
-                tex_id = tex_cache.get(tex_name) if tex_name else 0
-                ranges.append(BspDrawRange(
-                    texture_id=int(tex_id or 0),
-                    byte_offset=int(byte_off),
-                    index_count=int(count),
+        if not _is_visibility_bsp_model(model):
+            gm = cache.get_or_upload(model, tex_cache=tex_cache, helper_mode="normal")
+            if gm is not None and not gm.is_empty():
+                items.append(BspDrawItem(
+                    mesh=gm,
+                    color=_MODEL_COLORS.get(gm.category, _MODEL_COLOR_DEFAULT),
+                    ranges=_resolved_bsp_ranges(gm, tex_cache),
                 ))
+                tris_drawn += gm.triangle_count
 
-        items.append(BspDrawItem(
-            mesh=gm,
-            color=color,
-            ranges=ranges,
-            alpha=alpha,
-            wireframe=wireframe,
-        ))
-        tris_drawn += gm.triangle_count
+        if helper_mode == "helpers":
+            for role in HELPER_ROLE_GROUPS:
+                if role not in helper_roles:
+                    continue
+                gm = cache.get_or_upload(
+                    model,
+                    tex_cache=tex_cache,
+                    helper_mode="helpers",
+                    helper_roles={role},
+                )
+                if gm is None or gm.is_empty():
+                    continue
+                items.append(BspDrawItem(
+                    mesh=gm,
+                    color=_HELPER_ROLE_COLORS.get(role, _MODEL_COLOR_DEFAULT),
+                    alpha=0.38,
+                    wireframe=False,
+                ))
+                tris_drawn += gm.triangle_count
 
     return BspDrawBatch(
         items=items,
@@ -748,6 +943,26 @@ def draw_bsp_batch(
     fog_color: Tuple[float, float, float] = (0.055, 0.063, 0.086),
 ) -> Tuple[int, int]:
     """Draw a precomputed static BSP batch."""
+    def _draw_item(item: BspDrawItem, prog, alpha_modes: Optional[Set[str]] = None) -> None:
+        prog.set_vec3("uColor", item.color)
+        prog.set_float("uAlpha", float(item.alpha))
+        if item.wireframe:
+            from OpenGL import GL  # type: ignore
+            GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_LINE)
+            try:
+                prog.set_int("uHasTex", 0)
+                prog.set_int("uUseTexAlpha", 0)
+                draw_mesh(item.mesh)
+            finally:
+                GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_FILL)
+        elif item.ranges:
+            _draw_mesh_resolved_ranges(item.mesh, item.ranges, prog, alpha_modes=alpha_modes)
+        else:
+            prog.set_int("uHasTex", 0)
+            prog.set_int("uUseTexAlpha", 0)
+            draw_mesh(item.mesh)
+        prog.set_float("uAlpha", 1.0)
+
     with solid_prog as prog:
         prog.set_mat4("uMVP", mvp)
         prog.set_vec3("uLightDir", light_dir)
@@ -759,25 +974,24 @@ def draw_bsp_batch(
         prog.set_vec3("uFogColor", fog_color)
 
         prog.set_int("uTex", 0)
-        prog.set_int("uUseTexAlpha", 1)
+        prog.set_int("uUseTexAlpha", 0)
 
         for item in batch.items:
-            prog.set_vec3("uColor", item.color)
-            prog.set_float("uAlpha", float(item.alpha))
-            if item.wireframe:
-                from OpenGL import GL  # type: ignore
-                GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_LINE)
-                try:
-                    prog.set_int("uHasTex", 0)
-                    draw_mesh(item.mesh)
-                finally:
-                    GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_FILL)
-            elif item.ranges:
-                _draw_mesh_resolved_ranges(item.mesh, item.ranges, prog)
-            else:
-                prog.set_int("uHasTex", 0)
-                draw_mesh(item.mesh)
-            prog.set_float("uAlpha", 1.0)
+            if item.alpha < 1.0:
+                continue
+            _draw_item(item, prog, alpha_modes={"opaque", "cutout"})
+
+        from OpenGL import GL  # type: ignore
+        GL.glDepthMask(GL.GL_FALSE)
+        try:
+            for item in batch.items:
+                if item.alpha < 1.0:
+                    _draw_item(item, prog)
+                elif item.ranges and any(r.alpha_mode == "blend" for r in item.ranges):
+                    _draw_item(item, prog, alpha_modes={"blend"})
+        finally:
+            GL.glDepthMask(GL.GL_TRUE)
+            prog.set_int("uUseTexAlpha", 0)
 
     return batch.models_drawn, batch.triangles_drawn
 
@@ -875,10 +1089,27 @@ class MeshCache:
     def __init__(self) -> None:
         self._cache: Dict[Tuple[int, Optional[int]], Optional[GpuMesh]] = {}
 
-    def get_or_upload(self, mesh, tex_cache=None) -> Optional[GpuMesh]:  # type: ignore[type-arg]
-        key = (id(mesh), id(tex_cache) if tex_cache is not None else None)
+    def get_or_upload(
+        self,
+        mesh,
+        tex_cache=None,
+        helper_mode: str = "normal",
+        helper_roles: Optional[Set[str]] = None,
+    ) -> Optional[GpuMesh]:  # type: ignore[type-arg]
+        roles_key = tuple(sorted(helper_roles or ()))
+        key = (
+            id(mesh),
+            id(tex_cache) if tex_cache is not None else None,
+            str(helper_mode or "normal").lower(),
+            roles_key,
+        )
         if key not in self._cache:
-            self._cache[key] = upload_model(mesh, tex_cache=tex_cache)
+            self._cache[key] = upload_model(
+                mesh,
+                tex_cache=tex_cache,
+                helper_mode=helper_mode,
+                helper_roles=set(helper_roles or ()),
+            )
         return self._cache[key]
 
     def invalidate(self) -> None:
@@ -893,11 +1124,11 @@ class MeshCache:
 
     def retain_models(self, meshes, tex_cache=None) -> None:
         """Drop cached meshes that are not part of the current BSP preview."""
-        tex_id = id(tex_cache) if tex_cache is not None else None
         keep_model_ids = {id(mesh) for mesh in meshes or []}
         for key, gm in list(self._cache.items()):
-            model_id, cached_tex_id = key
-            if model_id in keep_model_ids and cached_tex_id == tex_id:
+            model_id = key[0]
+            cached_tex_id = key[1]
+            if model_id in keep_model_ids and cached_tex_id == (id(tex_cache) if tex_cache is not None else None):
                 continue
             if gm is not None:
                 try:

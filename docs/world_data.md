@@ -275,13 +275,11 @@ Stage 2 backend import is in place in `features/prefabs/import_static.py` and
   `InvisibleBrush` WorldObject controller, and the segment length is persisted
   as `ImportPrefabBspOp.collision_segment_length` in `.mm9mod` format version
   7.
-- Stage 4 helper BSP preview modes are in place under
-  `View -> Collision BSP` as `hidden`, `solid`, `wireframe`, and `raw`.
-  Helper BSPs are detected by
-  `_Collision` model names or helper textures such as `Firethrough.dtx`.
-  `hidden` skips them, `solid` draws a translucent magenta helper, `wireframe`
-  draws a magenta wire overlay, and `raw` uses normal BSP texture/range
-  handling.
+- Helper BSP preview is in place under `View -> Helper BSP`. `Normal` hides
+  helper materials while rendering real art and water substitutes; `Helpers
+  translucent` draws selected helper roles as colour-coded translucent
+  overlays. Role toggles cover AI rails, collision/firethrough, water volumes,
+  triggers, sound, and sky/visibility helpers.
 - Stage 5 save-time validation now warns when a static prefab import has
   visible geometry but no collision helper, and checks generated
   `collision_box` helpers for suspicious dimensions: extremely thin brushes,

@@ -109,7 +109,8 @@ if OPENGL_AVAILABLE:
     from view3d.gl_shader import SOLID_VERT, SOLID_FRAG
     from view3d.gl_shader import BILLBOARD_VERT, BILLBOARD_GEOM, BILLBOARD_FRAG
     from view3d.gl_mesh   import (MeshCache, draw_mesh, raycast_mesh_array,
-                                  build_bsp_draw_batch, draw_bsp_batch)
+                                  build_bsp_draw_batch, draw_bsp_batch,
+                                  DEFAULT_HELPER_ROLE_GROUPS)
     from view3d.gl_objects import (upload_objects, draw_sprites,
                                    decode_pick_color, delete_sprites,
                                    ObjectSprites,
@@ -173,6 +174,7 @@ class _PlaceholderView(tk.Frame if _HAS_TK else object):
     def set_show_object_helper_billboards(self, enabled): pass
     def set_show_world_helper_billboards(self, enabled): pass
     def set_helper_bsp_mode(self, mode): pass
+    def set_helper_role_groups(self, groups): pass
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +228,8 @@ if OPENGL_AVAILABLE:
             self._fog_enabled: bool = False
             self._show_object_helper_billboards: bool = False
             self._show_world_helper_billboards: bool = False
-            self._helper_bsp_mode: str = "solid"
+            self._helper_bsp_mode: str = "normal"
+            self._helper_role_groups = set(DEFAULT_HELPER_ROLE_GROUPS)
 
             # Deferred level load: when set_active_level() is called before
             # initgl() has fired (widget not yet shown), we queue the args
@@ -772,6 +775,7 @@ if OPENGL_AVAILABLE:
                     self._mesh_cache,
                     tex_cache=self._tex_cache,
                     helper_bsp_mode=self._helper_bsp_mode,
+                    helper_role_groups=self._helper_role_groups,
                 )
 
             # Fit camera to the BSP bounding box (ignoring skyboxes)
@@ -833,6 +837,7 @@ if OPENGL_AVAILABLE:
                     self._mesh_cache,
                     tex_cache=self._tex_cache,
                     helper_bsp_mode=self._helper_bsp_mode,
+                    helper_role_groups=self._helper_role_groups,
                 )
 
             if objects:
@@ -865,7 +870,7 @@ if OPENGL_AVAILABLE:
             self.set_show_object_helper_billboards(enabled)
 
         def set_helper_bsp_mode(self, mode: str) -> None:
-            self._helper_bsp_mode = str(mode or "solid").lower()
+            self._helper_bsp_mode = str(mode or "normal").lower()
             if not self._ready:
                 return
             if self._bsp_world is not None:
@@ -874,6 +879,21 @@ if OPENGL_AVAILABLE:
                     self._mesh_cache,
                     tex_cache=self._tex_cache,
                     helper_bsp_mode=self._helper_bsp_mode,
+                    helper_role_groups=self._helper_role_groups,
+                )
+            self._request_render()
+
+        def set_helper_role_groups(self, groups) -> None:
+            self._helper_role_groups = set(groups or ())
+            if not self._ready:
+                return
+            if self._bsp_world is not None:
+                self._bsp_draw_batch = build_bsp_draw_batch(
+                    self._bsp_world,
+                    self._mesh_cache,
+                    tex_cache=self._tex_cache,
+                    helper_bsp_mode=self._helper_bsp_mode,
+                    helper_role_groups=self._helper_role_groups,
                 )
             self._request_render()
 
@@ -1288,6 +1308,7 @@ if OPENGL_AVAILABLE:
                 if (gm is None
                         or gm.is_empty()
                         or gm.tri_positions is None
+                        or gm.helper_role is not None
                         or gm.category == "skybox"):
                     continue
                 result = raycast_mesh_array(gm.tri_positions, ray_o, ray_d)
@@ -1931,6 +1952,12 @@ class View3D(tk.Frame if _HAS_TK else object):
         if not OPENGL_AVAILABLE:
             return
         self._canvas.set_helper_bsp_mode(mode)
+
+    def set_helper_role_groups(self, groups) -> None:
+        """Set visible helper BSP role groups."""
+        if not OPENGL_AVAILABLE:
+            return
+        self._canvas.set_helper_role_groups(groups)
 
     def set_camera_mode(self, mode: str) -> None:
         """Switch between 'orbit' and 'fly' programmatically."""
