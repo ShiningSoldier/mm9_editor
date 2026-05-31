@@ -24,6 +24,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from view3d.coords import game_to_display_point
+
 # Colour table (RGB 0..1) — mirrors CATEGORY_COLORS from catalog.py but as
 # float triples so we don't need to parse hex strings at upload time.
 _CAT_COLORS: Dict[str, Tuple[float, float, float]] = {
@@ -149,7 +151,8 @@ def _build_arrays(
 
         cat = categorize(obj.type_str)
         r, g, b = _cat_color(cat)
-        rows.append(np.array([x, y, z, r, g, b], dtype=np.float32))
+        dx, dy, dz = game_to_display_point((x, y, z))
+        rows.append(np.array([dx, dy, dz, r, g, b], dtype=np.float32))
         w_idxs.append(world_idx)
 
     if not rows:

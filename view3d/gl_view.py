@@ -105,6 +105,7 @@ if OPENGL_AVAILABLE:
     import numpy as np
     from pyopengltk import OpenGLFrame          # type: ignore
     from view3d.camera    import Camera
+    from view3d.coords    import display_to_game_point, game_to_display_bounds
     from view3d.gl_shader import ShaderProgram
     from view3d.gl_shader import SOLID_VERT, SOLID_FRAG
     from view3d.gl_shader import BILLBOARD_VERT, BILLBOARD_GEOM, BILLBOARD_FRAG
@@ -603,7 +604,7 @@ if OPENGL_AVAILABLE:
         def _post_status(self) -> None:
             if self._on_status_cb is None:
                 return
-            eye  = self._camera.eye
+            eye  = display_to_game_point(self._camera.eye)
             mode = self._camera.mode.capitalize()
             n    = self._obj_count
             md   = getattr(self, "_last_models_drawn", 0)
@@ -788,7 +789,8 @@ if OPENGL_AVAILABLE:
                     hi = (max(m.max_box[0] for m in visible),
                           max(m.max_box[1] for m in visible),
                           max(m.max_box[2] for m in visible))
-                    self._camera.fit_to_bounds(lo, hi)
+                    display_lo, display_hi = game_to_display_bounds(lo, hi)
+                    self._camera.fit_to_bounds(display_lo, display_hi)
 
             self._request_render()
 
@@ -946,7 +948,12 @@ if OPENGL_AVAILABLE:
             if 0 <= world_index < len(self._objects):
                 obj = self._objects[world_index]
                 try:
-                    obj.set("Pos", [float(xyz[0]), float(xyz[1]), float(xyz[2])])
+                    game_xyz = display_to_game_point(xyz)
+                    obj.set("Pos", [
+                        float(game_xyz[0]),
+                        float(game_xyz[1]),
+                        float(game_xyz[2]),
+                    ])
                 except Exception:
                     pass
 
@@ -995,11 +1002,12 @@ if OPENGL_AVAILABLE:
             self, world_index: int, xyz: np.ndarray, delay_ms: int = 120
         ) -> None:
             """Commit the latest exact position after rapid input settles."""
+            game_xyz = display_to_game_point(xyz)
             self._pending_move_xyz = (
                 world_index,
-                float(xyz[0]),
-                float(xyz[1]),
-                float(xyz[2]),
+                float(game_xyz[0]),
+                float(game_xyz[1]),
+                float(game_xyz[2]),
             )
             self._pending_move_xz = None
             self._pending_elevation = None
@@ -1009,7 +1017,12 @@ if OPENGL_AVAILABLE:
             self, world_index: int, wx: float, wz: float, delay_ms: int = 120
         ) -> None:
             """Fallback commit for callers that only accept X/Z movement."""
-            self._pending_move_xz = (world_index, float(wx), float(wz))
+            game_xyz = display_to_game_point((float(wx), 0.0, float(wz)))
+            self._pending_move_xz = (
+                world_index,
+                float(game_xyz[0]),
+                float(game_xyz[2]),
+            )
             self._pending_move_xyz = None
             self._pending_elevation = None
             self._schedule_transform_commit(delay_ms)
@@ -1319,9 +1332,10 @@ if OPENGL_AVAILABLE:
                         best_hit = hit
 
             if best_hit is not None:
-                wx = float(best_hit[0])
-                wy = float(best_hit[1])
-                wz = float(best_hit[2])
+                game_hit = display_to_game_point(best_hit)
+                wx = float(game_hit[0])
+                wy = float(game_hit[1])
+                wz = float(game_hit[2])
                 if self._on_place_xyz_cb:
                     self._on_place_xyz_cb(wx, wy, wz)
                 elif self._on_place_cb:
@@ -1417,18 +1431,23 @@ if OPENGL_AVAILABLE:
                             self._3d_drag_wx, self._3d_drag_wz = result
                             self._3d_drag_moved = True
                     if self._3d_drag_moved:
+                        game_xyz = display_to_game_point((
+                            self._3d_drag_wx,
+                            self._3d_drag_plane_y,
+                            self._3d_drag_wz,
+                        ))
                         if self._on_move_xyz_cb is not None:
                             self._on_move_xyz_cb(
                                 self._3d_drag_index,
-                                self._3d_drag_wx,
-                                self._3d_drag_plane_y,
-                                self._3d_drag_wz,
+                                float(game_xyz[0]),
+                                float(game_xyz[1]),
+                                float(game_xyz[2]),
                             )
                         elif self._on_move_cb is not None:
                             self._on_move_cb(
                                 self._3d_drag_index,
-                                self._3d_drag_wx,
-                                self._3d_drag_wz,
+                                float(game_xyz[0]),
+                                float(game_xyz[2]),
                             )
                     else:
                         self._restore_3d_drag_position()

@@ -24,6 +24,7 @@ import numpy as np
 from catalog.actor_visuals import resolve_actor_visual
 from view3d.abc_loader import load_abc, upload_abc_model
 from view3d.gl_mesh import GpuMesh, delete_mesh, draw_mesh
+from view3d.coords import game_to_display_matrix
 
 
 _DEFAULT_COLOR: Tuple[float, float, float] = (0.55, 0.62, 0.58)
@@ -962,7 +963,7 @@ def _object_matrix(obj, y_override: Optional[float] = None) -> Optional[np.ndarr
     trans[1, 3] = float(y_override) if y_override is not None else y
     trans[2, 3] = z
 
-    return (trans @ rot @ scale).astype(np.float32)
+    return (game_to_display_matrix() @ trans @ rot @ scale).astype(np.float32)
 
 
 class ObjectModelCache:

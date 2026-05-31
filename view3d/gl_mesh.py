@@ -405,11 +405,13 @@ def _triangulate_model(
             continue
 
         # ── coordinate sanity ─────────────────────────────────────────
-        pv = pts_np[vis]   # (V, 3)
-        if np.any(np.abs(pv) > _COORD_SANITY):
+        pv_game = pts_np[vis]   # (V, 3)
+        if np.any(np.abs(pv_game) > _COORD_SANITY):
             continue
-        if _is_physics_world_ceiling_cap(mesh, pv):
+        if _is_physics_world_ceiling_cap(mesh, pv_game):
             continue
+        pv = pv_game.copy()
+        pv[:, 0] *= -1.0
 
         # ── resolve surface + texture for this polygon ─────────────────
         si   = poly.surface_index
@@ -440,9 +442,9 @@ def _triangulate_model(
         # ── per-vertex UV from LithTech OPQ surface projection ─────────
         if surf is not None:
             tex_w, tex_h = _texture_size(tex_name)
-            uvs = [surf.compute_uv((float(pv[i, 0]),
-                                    float(pv[i, 1]),
-                                    float(pv[i, 2])),
+            uvs = [surf.compute_uv((float(pv_game[i, 0]),
+                                    float(pv_game[i, 1]),
+                                    float(pv_game[i, 2])),
                                    float(tex_w),
                                    float(tex_h)) for i in range(n_vis)]
         else:

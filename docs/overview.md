@@ -120,9 +120,8 @@ Import/refactor rules:
 
 1. Optional finer-grained pending-add history if editing newly added objects
    before save becomes a common workflow.
-2. Because the editor parses and uploads the raw coordinates (x, y, z) directly
-   from the .DAT file without applying a coordinate system transformation
-   (such as inverting the X or Z axis to translate between left-handed and right-handed spaces),
-   the rendered level in the editor is a mathematical mirror image of the level in the game.
-   Ideally we'd like to fix that, but it would require huge refactoring, so let's just keep it in mind for now.
+2. The OpenGL viewport renders DAT coordinates through a display-space X-axis
+   reflection so level orientation matches the game.  Editing and saving still
+   use the original MM9 game-space coordinates; placement and move callbacks
+   convert display hits back before mutating object `Pos`.
 
