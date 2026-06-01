@@ -16,6 +16,7 @@ from typing import List, Sequence, Tuple
 
 import _path_setup  # noqa: F401
 from core import bsp
+from features.dat_editing import bsp_compile
 from . import clone as door_clone
 import mm9_patch as patcher
 
@@ -354,7 +355,7 @@ def serialize_world_with_bsp_clones(
     source_dat: bytes,
     materialized: patcher.World,
     bsp_world: bsp.BspWorld,
-    clones: Sequence[door_clone.DoorSubmodelClone],
+    clones: Sequence[object],
 ) -> bytes:
     """
     Serialize *materialized* while inserting copied/renamed BSP world models.
@@ -365,7 +366,7 @@ def serialize_world_with_bsp_clones(
     """
     clones = list(clones or [])
     if not clones:
-        return _serialize_world(materialized)
+        return _serialize_world_from_source(source_dat, materialized)
 
     header = patcher.Header.parse(source_dat)
     pre_objects = bytearray(source_dat[HEADER_SIZE:header.obj_pos])
@@ -388,7 +389,7 @@ def serialize_world_with_bsp_clones(
         raw_start = insert_at + sum(len(record) for record in cloned_records)
         # Temporarily use zero; final next pointer depends on this record's
         # post-rename length, so patch after building once.
-        record = build_cloned_world_model_record(submodel, raw_start, 0)
+        record = _build_insert_record(submodel, raw_start, 0)
         if index < len(clones) - 1:
             next_item = raw_start + len(record)
         else:
@@ -396,7 +397,7 @@ def serialize_world_with_bsp_clones(
             # parsed model, clones must point to that shifted record rather
             # than straight to ObjectDataPos.  Bootcamp depends on this tail.
             next_item = insert_at + sum(len(r) for r in cloned_records) + len(record)
-        record = build_cloned_world_model_record(submodel, raw_start, next_item)
+        record = _build_insert_record(submodel, raw_start, next_item)
         cloned_records.append(record)
 
     if cloned_records:
@@ -433,6 +434,12 @@ def serialize_world_with_bsp_clones(
     return new_header.pack() + bytes(pre_objects) + object_section + render_data
 
 
+def _build_insert_record(submodel: object, raw_start: int, next_world_item: int) -> bytes:
+    if isinstance(submodel, bsp_compile.CompiledWorldModelRecord):
+        return bsp_compile.patch_next_world_item(submodel, next_world_item)
+    return build_cloned_world_model_record(submodel, raw_start, next_world_item)
+
+
 def _clone_insert_offset(header: patcher.Header, bsp_world: bsp.BspWorld) -> int:
     last_model = max(
         (m for m in bsp_world.world_models if m.raw_start is not None),
@@ -450,3 +457,14 @@ def _serialize_world(world: patcher.World) -> bytes:
     new_ren_pos = new_obj_pos + len(object_section)
     header = patcher.Header(world.header.version, new_obj_pos, new_ren_pos, world.header.dummy)
     return header.pack() + world.pre_objects + object_section + world.render_data
+
+
+def _serialize_world_from_source(source_dat: bytes, world: patcher.World) -> bytes:
+    source_header = patcher.Header.parse(source_dat)
+    pre_objects = source_dat[HEADER_SIZE:source_header.obj_pos]
+    object_section = patcher.serialize_objects(world.objects)
+    render_data = source_dat[source_header.ren_pos:]
+    new_obj_pos = HEADER_SIZE + len(pre_objects)
+    new_ren_pos = new_obj_pos + len(object_section)
+    header = patcher.Header(source_header.version, new_obj_pos, new_ren_pos, source_header.dummy)
+    return header.pack() + pre_objects + object_section + render_data

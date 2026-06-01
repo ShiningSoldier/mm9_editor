@@ -304,6 +304,21 @@ Exit criteria:
 - Small standalone submodels load and render correctly in-game.
 - The editor can roll back the operation from project metadata.
 
+### Stage 6: Output DAT Validation
+
+Validate the final DAT bytes produced by geometry-editing operations before
+committing them into the output REZ.
+
+Exit criteria:
+
+- Header offsets, object-section parsing, and BSP parsing are checked after
+  the final bytes are assembled.
+- Required imported/replaced BSP model names are verified in the output.
+- Invalid world-model links, ranges, bounds, polygon indices, and unexpected
+  object-count changes fail the save before a patched REZ is written.
+- Non-fatal parser quirks are surfaced as validation warnings in the save
+  manifest.
+
 ## Design Recommendation
 
 Do not start with "Blender to full DAT." Start with "Blender mesh to additive

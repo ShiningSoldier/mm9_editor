@@ -54,6 +54,8 @@ from core import project as P
 from core import project_io
 from features.doors import clone as door_clone
 from features.doors import links as door_links
+from features.dat_editing import export_roundtrip as dat_roundtrip_export
+from features.dat_editing import mesh_import as dat_mesh_import
 from features.prefabs import import_static as prefab_import
 from features.prefabs import inspector as prefab_inspector
 from catalog import build_catalog_from_rez, load_catalog, save_catalog
@@ -66,10 +68,10 @@ OPENGL_AVAILABLE = False
 _view3d_missing: list = []   # packages still needed; populated by _import_gui()
 
 
-def _ask_prefab_collision_options(parent) -> Optional[Dict[str, Any]]:
+def _ask_prefab_collision_options(parent, title: str = "Prefab Collision") -> Optional[Dict[str, Any]]:
     """Return collision import options, or None if the user cancels."""
     win = tk.Toplevel(parent)
-    win.title("Prefab Collision")
+    win.title(title)
     win.configure(bg="#11151c")
     win.resizable(False, False)
     win.transient(parent)
@@ -337,6 +339,15 @@ class EditorApp:
                             command=self.cmd_clone_physical_door)
         m_tools.add_command(label="Import Static Prefab BSP...",
                             command=self.cmd_import_static_prefab_bsp)
+        m_tools.add_separator()
+        m_tools.add_command(label="Export DAT Geometry for Blender...",
+                            command=self.cmd_export_dat_geometry_roundtrip)
+        m_tools.add_command(label="Import Blender OBJ Geometry...",
+                            command=self.cmd_import_blender_obj_geometry)
+        m_tools.add_command(label="Import Blender Vertex Edits...",
+                            command=self.cmd_import_blender_vertex_edits)
+        m_tools.add_command(label="Import Blender Submodel Replacement...",
+                            command=self.cmd_import_blender_submodel_replacement)
 
         m_presets = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Presets", menu=m_presets)
@@ -1047,6 +1058,229 @@ class EditorApp:
 
 
 
+    def cmd_export_dat_geometry_roundtrip(self) -> None:
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        L = self.active
+        bsp_world = L.get_bsp()
+        if bsp_world is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+
+        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
+        output_dir = filedialog.askdirectory(
+            title="Export DAT geometry for Blender",
+            initialdir=editor_dir,
+        )
+        if not output_dir:
+            return
+
+        try:
+            source_name = L.display_name or L.rez_vpath or L.path or "level"
+            base_name = os.path.splitext(os.path.basename(source_name))[0] or "level"
+            result = dat_roundtrip_export.export_roundtrip(
+                bsp_world,
+                L.source_bytes(),
+                output_dir,
+                source_path=source_name,
+                base_name=base_name,
+                objects=L.materialize().objects if L.world is not None else None,
+            )
+        except Exception as e:
+            messagebox.showerror("Export failed", str(e))
+            return
+
+        messagebox.showinfo(
+            "Export complete",
+            "Wrote Blender round-trip files:\n\n"
+            f"{result.obj_path}\n"
+            f"{result.mtl_path}\n"
+            f"{result.meta_path}\n\n"
+            f"Models: {result.model_count}; polygons: {result.polygon_count}",
+        )
+
+
+    def cmd_import_blender_obj_geometry(self) -> None:
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        L = self.active
+        bsp_world = L.get_bsp()
+        if bsp_world is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+
+        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
+        obj_path = filedialog.askopenfilename(
+            title="Import Blender OBJ geometry",
+            initialdir=editor_dir,
+            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")],
+        )
+        if not obj_path:
+            return
+        default_meta = dat_mesh_import._default_meta_path(obj_path)
+        if os.path.exists(default_meta):
+            meta_path = default_meta
+        else:
+            meta_path = filedialog.askopenfilename(
+                title="Select DAT sidecar metadata",
+                initialdir=os.path.dirname(os.path.abspath(obj_path)),
+                filetypes=[("DAT metadata", "*.datmeta.json"), ("JSON files", "*.json"), ("All files", "*.*")],
+            )
+            if not meta_path:
+                return
+
+        try:
+            default_name = dat_mesh_import.suggest_import_name(L.preview_bsp() or bsp_world, obj_path)
+        except Exception:
+            default_name = os.path.splitext(os.path.basename(obj_path))[0] or "MeshImport"
+        name = simpledialog.askstring(
+            "Import Blender OBJ Geometry",
+            "New BSP model name prefix:",
+            initialvalue=default_name,
+            parent=self.root,
+        )
+        if name is None:
+            return
+        name = str(name).strip()
+        if not name:
+            messagebox.showerror("Mesh import failed", "The BSP model name cannot be empty.")
+            return
+
+        collision_options = _ask_prefab_collision_options(self.root, title="Mesh Collision")
+        if collision_options is None:
+            return
+        collision_mode = str(collision_options.get("collision_mode", "none"))
+        collision_thickness = float(collision_options.get("collision_thickness", 8.0))
+        collision_segment_length = float(collision_options.get("collision_segment_length", 512.0))
+
+        op = P.ImportMeshBspOp(
+            obj_path=obj_path,
+            meta_path=meta_path,
+            new_name=name,
+            collision_mode=collision_mode,
+            collision_thickness=collision_thickness,
+            collision_segment_length=collision_segment_length,
+        )
+        try:
+            op.build_plan(L)
+        except Exception as e:
+            messagebox.showerror("Mesh import failed", str(e))
+            return
+
+        L.append_op(op)
+        mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
+        helper_index = next(
+            (i for i, obj in enumerate(mat.objects) if (obj.get("Name") or "") == name),
+            len(mat.objects) - 1,
+        )
+        self._selected_world_index = helper_index
+        self._refresh_after_edit(helper_index)
+        messagebox.showinfo(
+            "Mesh imported for preview",
+            "Imported OBJ geometry into the editor preview.\n\n"
+            "DAT save uses an experimental minimal BSP compiler. Reopen the "
+            "output DAT and validate in-game before relying on it.",
+        )
+
+
+    def cmd_import_blender_vertex_edits(self) -> None:
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        L = self.active
+        if L.get_bsp() is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+
+        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
+        obj_path = filedialog.askopenfilename(
+            title="Import Blender vertex edits",
+            initialdir=editor_dir,
+            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")],
+        )
+        if not obj_path:
+            return
+        default_meta = dat_mesh_import._default_meta_path(obj_path)
+        if os.path.exists(default_meta):
+            meta_path = default_meta
+        else:
+            meta_path = filedialog.askopenfilename(
+                title="Select DAT sidecar metadata",
+                initialdir=os.path.dirname(os.path.abspath(obj_path)),
+                filetypes=[("DAT metadata", "*.datmeta.json"), ("JSON files", "*.json"), ("All files", "*.*")],
+            )
+            if not meta_path:
+                return
+
+        op = P.EditBspVerticesOp(obj_path=obj_path, meta_path=meta_path)
+        try:
+            plan = op.build_plan(L)
+        except Exception as e:
+            messagebox.showerror("Vertex edit import failed", str(e))
+            return
+        L.append_op(op)
+        self._refresh_after_edit(None)
+        model_names = ", ".join(item.name for item in plan.models[:8])
+        extra = "" if len(plan.models) <= 8 else f" (+{len(plan.models) - 8} more)"
+        messagebox.showinfo(
+            "Vertex edits imported",
+            "Imported topology-preserving BSP vertex edits.\n\n"
+            f"Edited model(s): {model_names}{extra}\n\n"
+            "Save will patch existing BSP records in place; test the output in-game.",
+        )
+
+
+    def cmd_import_blender_submodel_replacement(self) -> None:
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        L = self.active
+        if L.get_bsp() is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+
+        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
+        obj_path = filedialog.askopenfilename(
+            title="Import Blender submodel replacement",
+            initialdir=editor_dir,
+            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")],
+        )
+        if not obj_path:
+            return
+        default_meta = dat_mesh_import._default_meta_path(obj_path)
+        if os.path.exists(default_meta):
+            meta_path = default_meta
+        else:
+            meta_path = filedialog.askopenfilename(
+                title="Select DAT sidecar metadata",
+                initialdir=os.path.dirname(os.path.abspath(obj_path)),
+                filetypes=[("DAT metadata", "*.datmeta.json"), ("JSON files", "*.json"), ("All files", "*.*")],
+            )
+            if not meta_path:
+                return
+
+        op = P.ReplaceBspSubmodelOp(obj_path=obj_path, meta_path=meta_path)
+        try:
+            plan = op.build_plan(L)
+        except Exception as e:
+            messagebox.showerror("Submodel replacement failed", str(e))
+            return
+        L.append_op(op)
+        self._refresh_after_edit(None)
+        model_names = ", ".join(item.name for item in plan.models[:8])
+        extra = "" if len(plan.models) <= 8 else f" (+{len(plan.models) - 8} more)"
+        messagebox.showinfo(
+            "Submodel replacement imported",
+            "Imported BSP submodel topology replacement.\n\n"
+            f"Replaced model(s): {model_names}{extra}\n\n"
+            "PhysicsBSP, VisBSP, and skyboxes are blocked. Save will rebuild "
+            "the selected BSP records with the experimental compiler; test "
+            "the output in-game.",
+        )
+
+
     def cmd_import_static_prefab_bsp(self) -> None:
         if not getattr(self, "active", None):
             messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
@@ -1493,6 +1727,18 @@ class EditorApp:
                 self._refresh_after_edit(None)
                 return
 
+            mesh_op = L.mesh_import_for_materialized(selected_idx)
+            if mesh_op is not None:
+                try:
+                    L.ops.remove(mesh_op)
+                except ValueError:
+                    pass
+                L.clear_redo()
+                self.props_panel.show(None)
+                self._selected_world_index = None
+                self._refresh_after_edit(None)
+                return
+
             baseline_idx = L.existing_index_for_materialized(selected_idx)
             if baseline_idx is not None:
                 L.append_op(P.DeleteOp(target_index=baseline_idx))
@@ -1552,28 +1798,33 @@ class EditorApp:
             prefab_op.target_pos = new_pos
             L.clear_redo()
             refresh_clone_preview = True
-        elif baseline_idx is not None:
-            L.coalesce_move_op(baseline_idx, new_pos=new_pos)
         else:
-            pending = L.pending_add_offset_for_materialized(world_index)
-            if pending is not None:
-                pending_op, object_offset = pending
-                if isinstance(pending_op, P.CloneDoorOp):
-                    pending_op.retarget_from_object(
-                        L,
-                        L.objects_before_op(pending_op),
-                        object_offset,
-                        new_pos,
-                    )
-                    L.clear_redo()
-                    refresh_clone_preview = True
-                else:
-                    add_offset = L.add_offset_for_materialized(world_index)
-                    adds = [op for op in L.ops if isinstance(op, P.AddOp)]
-                    if add_offset is not None and add_offset < len(adds):
-                        adds[add_offset].overrides["Pos"] = list(new_pos)
+            mesh_op = L.mesh_import_for_materialized(world_index)
+            if mesh_op is not None:
+                mesh_op.target_pos = new_pos
+                L.clear_redo()
+                refresh_clone_preview = True
+            elif baseline_idx is not None:
+                L.coalesce_move_op(baseline_idx, new_pos=new_pos)
+            else:
+                pending = L.pending_add_offset_for_materialized(world_index)
+                if pending is not None:
+                    pending_op, object_offset = pending
+                    if isinstance(pending_op, P.CloneDoorOp):
+                        pending_op.retarget_from_object(
+                            L,
+                            L.objects_before_op(pending_op),
+                            object_offset,
+                            new_pos,
+                        )
                         L.clear_redo()
-
+                        refresh_clone_preview = True
+                    else:
+                        add_offset = L.add_offset_for_materialized(world_index)
+                        adds = [op for op in L.ops if isinstance(op, P.AddOp)]
+                        if add_offset is not None and add_offset < len(adds):
+                            adds[add_offset].overrides["Pos"] = list(new_pos)
+                            L.clear_redo()
         if refresh_clone_preview:
             self._refresh_after_edit(world_index)
             return
@@ -1595,35 +1846,40 @@ class EditorApp:
             prefab_op.target_yaw = float(rot[1])
             L.clear_redo()
             refresh_clone_preview = True
-        elif baseline_idx is not None:
-            mat = L.materialize()
-            if not (0 <= world_index < len(mat.objects)):
-                return
-            old_pos = mat.objects[world_index].get("Pos")
-            if old_pos is None:
-                return
-            pos = (float(old_pos[0]), float(old_pos[1]), float(old_pos[2]))
-            L.coalesce_move_op(baseline_idx, new_pos=pos, new_rot=rot)
         else:
-            pending = L.pending_add_offset_for_materialized(world_index)
-            if pending is not None:
-                pending_op, object_offset = pending
-                if isinstance(pending_op, P.CloneDoorOp):
-                    pending_op.rerotate_from_object(
-                        L,
-                        L.objects_before_op(pending_op),
-                        object_offset,
-                        rot,
-                    )
-                    L.clear_redo()
-                    refresh_clone_preview = True
-                else:
-                    add_offset = L.add_offset_for_materialized(world_index)
-                    adds = [op for op in L.ops if isinstance(op, P.AddOp)]
-                    if add_offset is not None and add_offset < len(adds):
-                        adds[add_offset].overrides["Rotation"] = list(rot)
+            mesh_op = L.mesh_import_for_materialized(world_index)
+            if mesh_op is not None:
+                mesh_op.target_yaw = float(rot[1])
+                L.clear_redo()
+                refresh_clone_preview = True
+            elif baseline_idx is not None:
+                mat = L.materialize()
+                if not (0 <= world_index < len(mat.objects)):
+                    return
+                old_pos = mat.objects[world_index].get("Pos")
+                if old_pos is None:
+                    return
+                pos = (float(old_pos[0]), float(old_pos[1]), float(old_pos[2]))
+                L.coalesce_move_op(baseline_idx, new_pos=pos, new_rot=rot)
+            else:
+                pending = L.pending_add_offset_for_materialized(world_index)
+                if pending is not None:
+                    pending_op, object_offset = pending
+                    if isinstance(pending_op, P.CloneDoorOp):
+                        pending_op.rerotate_from_object(
+                            L,
+                            L.objects_before_op(pending_op),
+                            object_offset,
+                            rot,
+                        )
                         L.clear_redo()
-
+                        refresh_clone_preview = True
+                    else:
+                        add_offset = L.add_offset_for_materialized(world_index)
+                        adds = [op for op in L.ops if isinstance(op, P.AddOp)]
+                        if add_offset is not None and add_offset < len(adds):
+                            adds[add_offset].overrides["Rotation"] = list(rot)
+                            L.clear_redo()
         if refresh_clone_preview:
             self._refresh_after_edit(world_index)
             return
@@ -1649,40 +1905,53 @@ class EditorApp:
             prefab_op.target_pos = (float(old[0]), float(new_y), float(old[2]))
             L.clear_redo()
             refresh_clone_preview = True
-        elif baseline_idx is not None:
-            mat = L.materialize()
-            if not (0 <= world_index < len(mat.objects)):
-                return
-            old_pos = mat.objects[world_index].get("Pos")
-            if old_pos is None:
-                return
-            new_pos = (float(old_pos[0]), float(new_y), float(old_pos[2]))
-            L.coalesce_move_op(baseline_idx, new_pos=new_pos)
         else:
-            # Pending added object: update the AddOp/CloneDoorOp target position.
-            pending = L.pending_add_offset_for_materialized(world_index)
-            if pending is not None:
-                pending_op, object_offset = pending
-                if isinstance(pending_op, P.CloneDoorOp):
+            mesh_op = L.mesh_import_for_materialized(world_index)
+            if mesh_op is not None:
+                old = mesh_op.target_pos
+                if old is None:
                     mat = L.materialize()
+                    if not (0 <= world_index < len(mat.objects)):
+                        return
                     old = mat.objects[world_index].get("Pos")
-                    if old is not None:
-                        pending_op.retarget_from_object(
-                            L,
-                            L.objects_before_op(pending_op),
-                            object_offset,
-                            (float(old[0]), float(new_y), float(old[2])),
-                        )
-                        L.clear_redo()
-                        refresh_clone_preview = True
-                else:
-                    add_offset = L.add_offset_for_materialized(world_index)
-                    adds = [op for op in L.ops if isinstance(op, P.AddOp)]
-                    if add_offset is not None and add_offset < len(adds):
-                        ov  = adds[add_offset].overrides
-                        old = ov.get("Pos", [0.0, 0.0, 0.0])
-                        ov["Pos"] = [float(old[0]), float(new_y), float(old[2])]
-                        L.clear_redo()
+                if old is not None:
+                    mesh_op.target_pos = (float(old[0]), float(new_y), float(old[2]))
+                    L.clear_redo()
+                    refresh_clone_preview = True
+            elif baseline_idx is not None:
+                mat = L.materialize()
+                if not (0 <= world_index < len(mat.objects)):
+                    return
+                old_pos = mat.objects[world_index].get("Pos")
+                if old_pos is None:
+                    return
+                new_pos = (float(old_pos[0]), float(new_y), float(old_pos[2]))
+                L.coalesce_move_op(baseline_idx, new_pos=new_pos)
+            else:
+                # Pending added object: update the AddOp/CloneDoorOp target position.
+                pending = L.pending_add_offset_for_materialized(world_index)
+                if pending is not None:
+                    pending_op, object_offset = pending
+                    if isinstance(pending_op, P.CloneDoorOp):
+                        mat = L.materialize()
+                        old = mat.objects[world_index].get("Pos")
+                        if old is not None:
+                            pending_op.retarget_from_object(
+                                L,
+                                L.objects_before_op(pending_op),
+                                object_offset,
+                                (float(old[0]), float(new_y), float(old[2])),
+                            )
+                            L.clear_redo()
+                            refresh_clone_preview = True
+                    else:
+                        add_offset = L.add_offset_for_materialized(world_index)
+                        adds = [op for op in L.ops if isinstance(op, P.AddOp)]
+                        if add_offset is not None and add_offset < len(adds):
+                            ov  = adds[add_offset].overrides
+                            old = ov.get("Pos", [0.0, 0.0, 0.0])
+                            ov["Pos"] = [float(old[0]), float(new_y), float(old[2])]
+                            L.clear_redo()
 
         if refresh_clone_preview:
             self._refresh_after_edit(world_index)

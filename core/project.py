@@ -32,9 +32,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
+from core import bsp
 from features.doors import bsp_writer as door_bsp_writer
 from features.doors import clone as door_clone
 from features.doors import validation as door_clone_validation
+from features.dat_editing import bsp_compile
+from features.dat_editing import mesh_import
+from features.dat_editing import output_validation
+from features.dat_editing import replace_submodel
+from features.dat_editing import vertex_edit
 from features.prefabs import import_static as prefab_import
 from features.prefabs import validation as prefab_import_validation
 
@@ -319,6 +325,116 @@ class ImportPrefabBspOp:
         )
 
 
+@dataclass
+class ImportMeshBspOp:
+    obj_path: str
+    meta_path: str
+    new_name: str
+    target_pos: Optional[Tuple[float, float, float]] = None
+    target_yaw: float = 0.0
+    collision_mode: str = "none"
+    collision_thickness: float = 8.0
+    collision_segment_length: float = 512.0
+
+    def build_plan(self, level: "LevelEdit") -> mesh_import.MeshBspImportPlan:
+        bsp_world = level.get_bsp()
+        if bsp_world is None:
+            raise ValueError("mesh BSP import requires parsed target BSP geometry")
+        return mesh_import.build_mesh_import_plan(
+            bsp_world,
+            self.obj_path,
+            meta_path=self.meta_path,
+            new_name=self.new_name,
+            target_pos=self.target_pos,
+            target_yaw=self.target_yaw,
+            collision_mode=self.collision_mode,
+            collision_thickness=self.collision_thickness,
+            collision_segment_length=self.collision_segment_length,
+        )
+
+    def apply_to(self, world: patcher.World, level: Optional["LevelEdit"] = None) -> List[patcher.WorldObject]:
+        if level is None:
+            raise ValueError("mesh BSP import requires the target level")
+        plan = self.build_plan(level)
+        wanted = {name.lower() for name, _pos in mesh_import.object_specs(plan)}
+        for obj in world.objects:
+            obj_name = (obj.get("Name") or "").lower()
+            if obj_name in wanted:
+                raise ValueError(f"object named {obj.get('Name')!r} already exists")
+        template = _find_static_worldobject_template(world)
+        collision_template = _find_object_template(world, "InvisibleBrush") or template
+        created: List[patcher.WorldObject] = []
+        for item in plan.models:
+            name = item.name
+            pos = _bounds_center(item.mesh.min_box, item.mesh.max_box)
+            collision = mesh_import.is_collision_model(item)
+            new_obj = _make_prefab_worldobject(
+                collision_template if collision else template,
+                name,
+                pos,
+                0.0 if collision else self.target_yaw,
+                visible=0 if collision else 1,
+                type_str="InvisibleBrush" if collision else "WorldObject",
+            )
+            created.append(new_obj)
+            world.objects.append(new_obj)
+        return created
+
+    def summary(self) -> str:
+        target = "" if self.target_pos is None else (
+            f" at ({self.target_pos[0]:.0f}, {self.target_pos[1]:.0f}, {self.target_pos[2]:.0f})"
+        )
+        yaw = "" if abs(float(self.target_yaw)) < 1.0e-6 else f" yaw {self.target_yaw:.2f}"
+        collision = "" if str(self.collision_mode or "none").lower() in {"none", "off", "false", "0"} else f" collision={self.collision_mode}"
+        return f"+ import Blender OBJ {os.path.basename(self.obj_path)} -> {self.new_name}{target}{yaw}{collision}"
+
+
+@dataclass
+class EditBspVerticesOp:
+    obj_path: str
+    meta_path: str
+
+    def build_plan(self, level: "LevelEdit") -> vertex_edit.VertexEditPlan:
+        bsp_world = level.get_bsp()
+        if bsp_world is None:
+            raise ValueError("BSP vertex edit requires parsed target BSP geometry")
+        return vertex_edit.build_vertex_edit_plan(
+            bsp_world,
+            level.source_bytes(),
+            self.obj_path,
+            meta_path=self.meta_path,
+        )
+
+    def apply_to(self, world: patcher.World, level: Optional["LevelEdit"] = None) -> List[patcher.WorldObject]:
+        return []
+
+    def summary(self) -> str:
+        return f"~ edit BSP vertices from {os.path.basename(self.obj_path)}"
+
+
+@dataclass
+class ReplaceBspSubmodelOp:
+    obj_path: str
+    meta_path: str
+
+    def build_plan(self, level: "LevelEdit") -> replace_submodel.ReplaceSubmodelPlan:
+        bsp_world = level.get_bsp()
+        if bsp_world is None:
+            raise ValueError("BSP submodel replacement requires parsed target BSP geometry")
+        return replace_submodel.build_replace_submodel_plan(
+            bsp_world,
+            level.source_bytes(),
+            self.obj_path,
+            meta_path=self.meta_path,
+        )
+
+    def apply_to(self, world: patcher.World, level: Optional["LevelEdit"] = None) -> List[patcher.WorldObject]:
+        return []
+
+    def summary(self) -> str:
+        return f"~ replace BSP submodel topology from {os.path.basename(self.obj_path)}"
+
+
 def _find_static_worldobject_template(world: patcher.World) -> patcher.WorldObject:
     for obj in world.objects:
         if obj.type_str == "WorldObject":
@@ -434,8 +550,8 @@ class LevelEdit:
                     self.display_name = self.rez_vpath
                 return
             # Use a tempfile so mm9_patch.World.load (which only takes a path) works.
-            tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               f".tmp_rez_{_timestamp()}.dat")
+            fd, tmp = tempfile.mkstemp(prefix="mm9_rez_", suffix=".DAT")
+            os.close(fd)
             with open(tmp, "wb") as f: f.write(data)
             try:
                 self.world = patcher.World.load(tmp)
@@ -495,6 +611,12 @@ class LevelEdit:
                 op.apply_to(self, w)
             elif isinstance(op, ImportPrefabBspOp):
                 op.apply_to(w, self)
+            elif isinstance(op, ImportMeshBspOp):
+                op.apply_to(w, self)
+            elif isinstance(op, EditBspVerticesOp):
+                op.apply_to(w, self)
+            elif isinstance(op, ReplaceBspSubmodelOp):
+                op.apply_to(w, self)
             else:
                 op.apply_to(w)
         for idx in sorted(deletes, reverse=True):
@@ -524,6 +646,15 @@ class LevelEdit:
                 w.objects.extend(copy.deepcopy(plan.objects))
                 continue
             if isinstance(op, ImportPrefabBspOp):
+                op.apply_to(w, self)
+                continue
+            if isinstance(op, ImportMeshBspOp):
+                op.apply_to(w, self)
+                continue
+            if isinstance(op, EditBspVerticesOp):
+                op.apply_to(w, self)
+                continue
+            if isinstance(op, ReplaceBspSubmodelOp):
                 op.apply_to(w, self)
                 continue
             op.apply_to(w)
@@ -557,6 +688,69 @@ class LevelEdit:
             working_bsp = prefab_import.build_preview_bsp(working_bsp, [plan])
         return plans
 
+    def mesh_import_plans(self) -> List[mesh_import.MeshBspImportPlan]:
+        """Return preview plans for pending Blender OBJ mesh imports."""
+        base = self.get_bsp()
+        if base is None:
+            return []
+        working_bsp = base
+        plans: List[mesh_import.MeshBspImportPlan] = []
+        for op in self.ops:
+            if not isinstance(op, ImportMeshBspOp):
+                continue
+            plan = mesh_import.build_mesh_import_plan(
+                working_bsp,
+                op.obj_path,
+                meta_path=op.meta_path,
+                new_name=op.new_name,
+                target_pos=op.target_pos,
+                target_yaw=op.target_yaw,
+                collision_mode=op.collision_mode,
+                collision_thickness=op.collision_thickness,
+                collision_segment_length=op.collision_segment_length,
+            )
+            plans.append(plan)
+            working_bsp = mesh_import.build_preview_bsp(working_bsp, [plan])
+        return plans
+
+    def vertex_edit_plans(self) -> List[vertex_edit.VertexEditPlan]:
+        base = self.get_bsp()
+        if base is None:
+            return []
+        working_bsp = base
+        plans: List[vertex_edit.VertexEditPlan] = []
+        for op in self.ops:
+            if not isinstance(op, EditBspVerticesOp):
+                continue
+            plan = vertex_edit.build_vertex_edit_plan(
+                working_bsp,
+                self.source_bytes(),
+                op.obj_path,
+                meta_path=op.meta_path,
+            )
+            plans.append(plan)
+            working_bsp = vertex_edit.build_preview_bsp(working_bsp, [plan])
+        return plans
+
+    def replace_submodel_plans(self) -> List[replace_submodel.ReplaceSubmodelPlan]:
+        base = self.get_bsp()
+        if base is None:
+            return []
+        working_bsp = base
+        plans: List[replace_submodel.ReplaceSubmodelPlan] = []
+        for op in self.ops:
+            if not isinstance(op, ReplaceBspSubmodelOp):
+                continue
+            plan = replace_submodel.build_replace_submodel_plan(
+                working_bsp,
+                self.source_bytes(),
+                op.obj_path,
+                meta_path=op.meta_path,
+            )
+            plans.append(plan)
+            working_bsp = replace_submodel.build_preview_bsp(working_bsp, [plan])
+        return plans
+
     def preview_bsp(self):
         """Return BSP geometry plus pending physical door clone previews."""
         base = self.get_bsp()
@@ -564,11 +758,20 @@ class LevelEdit:
             return None
         plans = self.door_clone_plans()
         prefab_plans = self.prefab_import_plans()
+        mesh_plans = self.mesh_import_plans()
+        vertex_plans = self.vertex_edit_plans()
+        replace_plans = self.replace_submodel_plans()
         preview = base
+        if vertex_plans:
+            preview = vertex_edit.build_preview_bsp(preview, vertex_plans)
+        if replace_plans:
+            preview = replace_submodel.build_preview_bsp(preview, replace_plans)
         if plans:
             preview = door_clone.build_preview_bsp(preview, plans)
         if prefab_plans:
             preview = prefab_import.build_preview_bsp(preview, prefab_plans)
+        if mesh_plans:
+            preview = mesh_import.build_preview_bsp(preview, mesh_plans)
         return preview
 
     def materialized_existing_indices(self) -> List[int]:
@@ -611,6 +814,10 @@ class LevelEdit:
                 created = op.apply_to(w, self)
                 counts.append(len(created))
                 continue
+            if isinstance(op, ImportMeshBspOp):
+                created = op.apply_to(w, self)
+                counts.append(len(created))
+                continue
             if isinstance(op, AddOp):
                 op.apply_to(w)
                 counts.append(1)
@@ -635,6 +842,9 @@ class LevelEdit:
             if isinstance(op, ImportPrefabBspOp):
                 op.apply_to(w, self)
                 continue
+            if isinstance(op, ImportMeshBspOp):
+                op.apply_to(w, self)
+                continue
             op.apply_to(w)
         return w.objects
 
@@ -642,7 +852,7 @@ class LevelEdit:
         offset = world_index - len(self.materialized_existing_indices())
         if offset < 0:
             return None
-        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))]
+        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp, ImportMeshBspOp))]
         cursor = 0
         for op, count in zip(add_ops, self._pending_add_counts()):
             if cursor <= offset < cursor + count:
@@ -656,7 +866,7 @@ class LevelEdit:
             return None
         import_index = 0
         cursor = 0
-        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))]
+        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp, ImportMeshBspOp))]
         for op, count in zip(add_ops, self._pending_add_counts()):
             if cursor <= offset < cursor + count:
                 return import_index if isinstance(op, ImportPrefabBspOp) else None
@@ -672,6 +882,28 @@ class LevelEdit:
         imports = [op for op in self.ops if isinstance(op, ImportPrefabBspOp)]
         return imports[offset] if offset < len(imports) else None
 
+    def mesh_import_offset_for_materialized(self, world_index: int) -> Optional[int]:
+        offset = world_index - len(self.materialized_existing_indices())
+        if offset < 0:
+            return None
+        import_index = 0
+        cursor = 0
+        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp, ImportMeshBspOp))]
+        for op, count in zip(add_ops, self._pending_add_counts()):
+            if cursor <= offset < cursor + count:
+                return import_index if isinstance(op, ImportMeshBspOp) else None
+            if isinstance(op, ImportMeshBspOp):
+                import_index += 1
+            cursor += count
+        return None
+
+    def mesh_import_for_materialized(self, world_index: int) -> Optional[ImportMeshBspOp]:
+        offset = self.mesh_import_offset_for_materialized(world_index)
+        if offset is None:
+            return None
+        imports = [op for op in self.ops if isinstance(op, ImportMeshBspOp)]
+        return imports[offset] if offset < len(imports) else None
+
     def add_offset_for_materialized(self, world_index: int) -> Optional[int]:
         offset = world_index - len(self.materialized_existing_indices())
         if offset < 0:
@@ -679,7 +911,7 @@ class LevelEdit:
         add_index = 0
         cursor = 0
         for op, count in zip(
-            [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))],
+            [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp, ImportMeshBspOp))],
             self._pending_add_counts(),
         ):
             if cursor <= offset < cursor + count:
@@ -868,6 +1100,9 @@ class Project:
             materialized = L.materialize()
             door_clones = L.door_clone_plans()
             prefab_imports = L.prefab_import_plans()
+            mesh_imports = L.mesh_import_plans()
+            vertex_edits = L.vertex_edit_plans()
+            replaced_submodels = L.replace_submodel_plans()
             validation_warnings: List[str] = []
             if door_clones and getattr(L, "_raw_bytes", None):
                 bsp_world = L.get_bsp()
@@ -887,6 +1122,22 @@ class Project:
                             prefab_imports,
                         )
                     )
+            if mesh_imports:
+                validation_warnings.append(
+                    "Blender OBJ mesh imports use an experimental minimal BSP compiler; "
+                    "reopen the output DAT and validate in-game before relying on it"
+                )
+            if vertex_edits:
+                validation_warnings.append(
+                    "BSP vertex edits patch existing world-model records in place; "
+                    "topology changes are blocked, but in-game validation is still required"
+                )
+            if replaced_submodels:
+                validation_warnings.append(
+                    "BSP submodel replacements rebuild existing world-model records with an "
+                    "experimental compiler; PhysicsBSP/VisBSP/skyboxes are blocked, but "
+                    "in-game validation is required"
+                )
             plan.dats.append(DatWrite(
                 source_path=L.path,
                 output_path=L.output_path(self.work_dir, batch_id),
@@ -896,6 +1147,9 @@ class Project:
                 backup_path=L.backup_path,
                 door_clones=door_clones,
                 prefab_imports=prefab_imports,
+                mesh_imports=mesh_imports,
+                vertex_edits=vertex_edits,
+                replaced_submodels=replaced_submodels,
                 validation_warnings=validation_warnings,
             ))
             for op in L.ops:
@@ -1012,22 +1266,68 @@ class Project:
                 pass
 
     def _dat_write_to_bytes(self, d: "DatWrite") -> bytes:
+        L = d.level_edit
+        source_dat = L._raw_bytes if L is not None and getattr(L, "_raw_bytes", None) else None
+        bsp_world = L.get_bsp() if L is not None else None
+        if d.vertex_edits:
+            if source_dat is None or bsp_world is None:
+                raise ValueError("BSP vertex edit save requires source DAT bytes and parsed BSP geometry")
+            source_dat = vertex_edit.apply_vertex_edit_plans(source_dat, bsp_world, d.vertex_edits)
+            bsp_world = bsp.parse(source_dat)
+        if d.replaced_submodels:
+            if source_dat is None or bsp_world is None:
+                raise ValueError("BSP submodel replacement save requires source DAT bytes and parsed BSP geometry")
+            source_dat = replace_submodel.apply_replace_submodel_plans(
+                source_dat,
+                bsp_world,
+                d.replaced_submodels,
+            )
+            bsp_world = bsp.parse(source_dat)
         bsp_clones = [sub for plan in d.door_clones for sub in plan.submodels]
         bsp_clones.extend(sub for plan in d.prefab_imports for sub in plan.submodels)
+        bsp_clones.extend(
+            bsp_compile.compile_world_model_record(item.mesh)
+            for plan in d.mesh_imports
+            for item in plan.models
+        )
         if not bsp_clones:
+            if source_dat is not None and (d.vertex_edits or d.replaced_submodels):
+                data = door_bsp_writer.serialize_world_with_bsp_clones(
+                    source_dat,
+                    d.materialized,
+                    bsp_world,
+                    [],
+                )
+                return self._validate_geometry_dat_bytes(d, data)
             return self._world_to_bytes(d.materialized)
-        L = d.level_edit
-        if L is None or not getattr(L, "_raw_bytes", None):
+        if source_dat is None:
             raise ValueError("BSP clone save requires source DAT bytes")
-        bsp_world = L.get_bsp()
         if bsp_world is None:
             raise ValueError("BSP clone save requires parsed BSP geometry")
-        return door_bsp_writer.serialize_world_with_bsp_clones(
-            L._raw_bytes,
+        data = door_bsp_writer.serialize_world_with_bsp_clones(
+            source_dat,
             d.materialized,
             bsp_world,
             bsp_clones,
         )
+        return self._validate_geometry_dat_bytes(d, data)
+
+    def _validate_geometry_dat_bytes(self, d: "DatWrite", data: bytes) -> bytes:
+        required_names: List[str] = []
+        required_names.extend(sub.new_name for plan in d.door_clones for sub in plan.submodels)
+        required_names.extend(sub.new_name for plan in d.prefab_imports for sub in plan.submodels)
+        required_names.extend(item.name for plan in d.mesh_imports for item in plan.models)
+        required_names.extend(item.name for plan in d.replaced_submodels for item in plan.models)
+        validation = output_validation.validate_geometry_dat(
+            data,
+            expected_object_count=len(d.materialized.objects),
+            required_bsp_names=required_names,
+        )
+        validation.raise_for_errors()
+        for warning in validation.warnings:
+            if warning not in d.validation_warnings:
+                d.validation_warnings.append(warning)
+        return data
 
     def _write_changed_entry_copy(self, archive_output: str,
                                   virtual_path: str,
@@ -1085,6 +1385,9 @@ class Project:
                         "objects_after": d.stats()["objects_after"],
                         "door_clones": d.stats()["door_clones"],
                         "prefab_imports": d.stats()["prefab_imports"],
+                        "mesh_imports": d.stats()["mesh_imports"],
+                        "vertex_edits": d.stats()["vertex_edits"],
+                        "submodel_replacements": d.stats()["submodel_replacements"],
                         "ops_summary": d.ops_summary,
                         "validation_warnings": d.validation_warnings,
                     }
@@ -1281,6 +1584,9 @@ class DatWrite:
     backup_path: Optional[str] = None
     door_clones: List[door_clone.DoorClonePlan] = field(default_factory=list)
     prefab_imports: List[prefab_import.PrefabBspImportPlan] = field(default_factory=list)
+    mesh_imports: List[mesh_import.MeshBspImportPlan] = field(default_factory=list)
+    vertex_edits: List[vertex_edit.VertexEditPlan] = field(default_factory=list)
+    replaced_submodels: List[replace_submodel.ReplaceSubmodelPlan] = field(default_factory=list)
     validation_warnings: List[str] = field(default_factory=list)
 
     def stats(self) -> Dict[str, int]:
@@ -1289,6 +1595,12 @@ class DatWrite:
             "door_clones": len(self.door_clones),
             "prefab_imports": len(self.prefab_imports),
             "prefab_bsp_models": sum(len(plan.submodels) for plan in self.prefab_imports),
+            "mesh_imports": len(self.mesh_imports),
+            "mesh_bsp_models": sum(len(plan.models) for plan in self.mesh_imports),
+            "vertex_edits": len(self.vertex_edits),
+            "vertex_edit_models": sum(len(plan.models) for plan in self.vertex_edits),
+            "submodel_replacements": len(self.replaced_submodels),
+            "replaced_bsp_models": sum(len(plan.models) for plan in self.replaced_submodels),
         }
 
 
