@@ -244,6 +244,102 @@ class EditorResourceWorkflowTests(unittest.TestCase):
 
         self.assertEqual(errors[0][0], "MM9 game folder not detected")
 
+    def test_collision_export_command_uses_python_and_paths(self):
+        cmd = mm9_editor_app.build_collision_export_command(
+            r"C:\tools\mm9_export_collision.py",
+            r"C:\pkg\BOOTCAMP_static_world_package.json",
+            r"C:\tmp\BOOTCAMP.DAT",
+            editor_root=r"C:\editor",
+            out_mesh=r"C:\pkg\BOOTCAMP.collisionmeshbin",
+        )
+
+        self.assertEqual(cmd[0], sys.executable)
+        self.assertIn("--manifest", cmd)
+        self.assertIn(os.path.abspath(r"C:\pkg\BOOTCAMP_static_world_package.json"), cmd)
+        self.assertIn("--dat", cmd)
+        self.assertIn(os.path.abspath(r"C:\tmp\BOOTCAMP.DAT"), cmd)
+        self.assertIn("--editor-root", cmd)
+        self.assertIn(os.path.abspath(r"C:\editor"), cmd)
+        self.assertIn("--out-mesh", cmd)
+
+    def test_generate_collision_sidecar_runs_exporter_and_loads_overlay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter = os.path.join(tmp, "mm9_export_collision.py")
+            manifest = os.path.join(tmp, "BOOTCAMP_static_world_package.json")
+            dat_path = os.path.join(tmp, "active.DAT")
+            sidecar = os.path.join(tmp, "BOOTCAMP_static_world_package.collisionmeshbin")
+            for path in (exporter, manifest, dat_path):
+                with open(path, "wb") as f:
+                    f.write(b"")
+
+            class FakeFileDialog:
+                @staticmethod
+                def askopenfilename(**_kwargs):
+                    return manifest
+
+            infos = []
+            errors = []
+
+            class FakeMessagebox:
+                @staticmethod
+                def showinfo(title, body):
+                    infos.append((title, body))
+
+                @staticmethod
+                def showerror(title, body):
+                    errors.append((title, body))
+
+                @staticmethod
+                def showwarning(title, body):
+                    errors.append((title, body))
+
+            loaded = {}
+            app = self._dummy_app({}, {"classes": {}, "filenames": {}})
+            app.active = object()
+            app.view3d = types.SimpleNamespace(
+                set_collision_overlay_path=lambda path, manifest_path=None: loaded.update(
+                    path=path,
+                    manifest_path=manifest_path,
+                )
+            )
+            app._flush_view_transforms = lambda: None
+            app._write_active_level_temp_dat = lambda: dat_path
+
+            def fake_run(cmd, **kwargs):
+                with open(sidecar, "wb") as f:
+                    f.write(b"sidecar")
+                loaded["cmd"] = cmd
+                loaded["run_kwargs"] = kwargs
+                return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            method_globals = mm9_editor_app.EditorApp.cmd_generate_collision_sidecar.__globals__
+            old_exporter = method_globals["DEFAULT_COLLISION_EXPORTER"]
+            old_filedialog = method_globals.get("filedialog")
+            old_messagebox = method_globals.get("messagebox")
+            old_run = method_globals["subprocess"].run
+            try:
+                method_globals["DEFAULT_COLLISION_EXPORTER"] = exporter
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["subprocess"].run = fake_run
+
+                mm9_editor_app.EditorApp.cmd_generate_collision_sidecar(app)
+            finally:
+                method_globals["DEFAULT_COLLISION_EXPORTER"] = old_exporter
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["subprocess"].run = old_run
+
+            self.assertFalse(errors)
+            self.assertEqual(loaded["path"], sidecar)
+            self.assertEqual(loaded["manifest_path"], manifest)
+            self.assertEqual(loaded["cmd"][0], sys.executable)
+            self.assertIn("--manifest", loaded["cmd"])
+            self.assertIn(manifest, loaded["cmd"])
+            self.assertIn("--dat", loaded["cmd"])
+            self.assertIn(dat_path, loaded["cmd"])
+            self.assertTrue(infos)
+
 
 if __name__ == "__main__":
     unittest.main()

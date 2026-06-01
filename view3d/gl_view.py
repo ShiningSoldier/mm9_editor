@@ -118,6 +118,14 @@ if OPENGL_AVAILABLE:
                                    should_draw_billboard_for_modeled_object)
     from view3d.gl_object_models import (ObjectModelCache, build_render_items,
                                          draw_object_model_items)
+    from view3d.gl_baked_props import (delete_baked_prop_batch,
+                                       draw_baked_prop_batch,
+                                       upload_baked_prop_batch)
+    from view3d.collision_sidecar import read_collision_sidecar
+    from view3d.gl_collision_overlay import (DEFAULT_COLLISION_ROLES,
+                                            delete_collision_overlay,
+                                            draw_collision_overlay,
+                                            upload_collision_overlay)
     import _path_setup     # type: ignore  # noqa: F401
     from catalog import categorize
 
@@ -176,6 +184,8 @@ class _PlaceholderView(tk.Frame if _HAS_TK else object):
     def set_show_world_helper_billboards(self, enabled): pass
     def set_helper_bsp_mode(self, mode): pass
     def set_helper_role_groups(self, groups): pass
+    def set_collision_overlay_path(self, path, manifest_path=None): pass
+    def clear_collision_overlay(self): pass
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +230,8 @@ if OPENGL_AVAILABLE:
             self._objects:     list = []
             self._obj_count    = 0
             self._object_model_items: list = []
+            self._baked_props_enabled: bool = os.environ.get("MM9_EDITOR_BAKED_PROPS") == "1"
+            self._baked_prop_batch = None
 
             self._selected_index = -1
 
@@ -231,6 +243,9 @@ if OPENGL_AVAILABLE:
             self._show_world_helper_billboards: bool = False
             self._helper_bsp_mode: str = "normal"
             self._helper_role_groups = set(DEFAULT_HELPER_ROLE_GROUPS)
+            self._collision_sidecar = None
+            self._collision_overlay_batch = None
+            self._collision_overlay_roles = set(DEFAULT_COLLISION_ROLES)
 
             # Deferred level load: when set_active_level() is called before
             # initgl() has fired (widget not yet shown), we queue the args
@@ -500,6 +515,22 @@ if OPENGL_AVAILABLE:
                 )
             timings["bsp"] = (time.perf_counter() - t0) * 1000.0
 
+            # --- Optional collision sidecar overlay ---
+            self._last_collision_ranges_drawn = 0
+            self._last_collision_tris_drawn = 0
+            t0 = time.perf_counter()
+            if self._solid_prog and self._collision_overlay_batch is not None:
+                (
+                    self._last_collision_ranges_drawn,
+                    self._last_collision_tris_drawn,
+                ) = draw_collision_overlay(
+                    self._collision_overlay_batch,
+                    self._solid_prog,
+                    mvp,
+                    roles=self._collision_overlay_roles,
+                )
+            timings["coll"] = (time.perf_counter() - t0) * 1000.0
+
             # --- Supported WorldObject ABC meshes ---
             self._last_obj_models_drawn = 0
             self._last_obj_tris_drawn   = 0
@@ -510,10 +541,44 @@ if OPENGL_AVAILABLE:
                 if self._drag_mode == "3d_drag" and self._3d_drag_index >= 0
                 else None
             )
+            baked_drawn_indices = set()
+            baked_drawn = 0
+            baked_tris = 0
+            if (
+                self._solid_prog
+                and self._baked_prop_batch is not None
+                and drag_world_index is None
+            ):
+                cam_far = self._camera.far
+                fog_near = cam_far * 0.20
+                fog_far = cam_far * 0.80
+                excluded = set()
+                if self._selected_index >= 0:
+                    excluded.add(self._selected_index)
+                baked_drawn, baked_tris, baked_drawn_indices = draw_baked_prop_batch(
+                    self._baked_prop_batch,
+                    self._solid_prog,
+                    light_dir=_LIGHT_DIR,
+                    fog_enabled=self._fog_enabled,
+                    fog_near=fog_near,
+                    fog_far=fog_far,
+                    fog_color=_FOG_COLOR,
+                    excluded_world_indices=excluded,
+                )
             if self._solid_prog and self._object_model_items:
                 cam_far   = self._camera.far
                 fog_near  = cam_far * 0.20
                 fog_far   = cam_far * 0.80
+                include_world_indices = None
+                if self._baked_prop_batch is not None:
+                    include_world_indices = {
+                        item.world_index for item in self._object_model_items
+                        if item.world_index not in self._baked_prop_batch.world_indices
+                    }
+                    if self._selected_index >= 0:
+                        include_world_indices.add(self._selected_index)
+                    if drag_world_index is not None:
+                        include_world_indices.add(drag_world_index)
                 (
                     self._last_obj_models_drawn,
                     self._last_obj_tris_drawn,
@@ -531,7 +596,11 @@ if OPENGL_AVAILABLE:
                         fog_far=fog_far,
                         fog_color=_FOG_COLOR,
                         only_world_index=drag_world_index,
+                        include_world_indices=include_world_indices,
                     )
+            self._last_obj_models_drawn += baked_drawn
+            self._last_obj_tris_drawn += baked_tris
+            self._modeled_world_indices |= baked_drawn_indices
             timings["abc"] = (time.perf_counter() - t0) * 1000.0
 
             # Flush any pending sprite-position VBO patches.
@@ -716,6 +785,80 @@ if OPENGL_AVAILABLE:
                     pass
                 self._sprites = None
 
+        def _delete_baked_props(self) -> None:
+            if self._baked_prop_batch is not None:
+                delete_baked_prop_batch(self._baked_prop_batch)
+                self._baked_prop_batch = None
+
+        def _delete_collision_overlay(self) -> None:
+            if self._collision_overlay_batch is not None:
+                delete_collision_overlay(self._collision_overlay_batch)
+                self._collision_overlay_batch = None
+
+        def set_collision_overlay_path(self, path: str, manifest_path: Optional[str] = None) -> None:
+            self._delete_collision_overlay()
+            self._collision_sidecar = None
+            if not path:
+                self._request_render()
+                return
+            try:
+                self._collision_sidecar = read_collision_sidecar(path, manifest_path=manifest_path)
+                self._collision_overlay_batch = upload_collision_overlay(
+                    self._collision_sidecar,
+                    roles=self._collision_overlay_roles,
+                )
+                counts = self._collision_sidecar.role_counts()
+                print(
+                    "[view3d] collision sidecar loaded - "
+                    + ", ".join(f"{role}={count}" for role, count in sorted(counts.items())),
+                    file=sys.stderr,
+                )
+            except Exception as exc:
+                self._collision_sidecar = None
+                self._collision_overlay_batch = None
+                print(f"[view3d] collision sidecar load failed: {exc}", file=sys.stderr)
+                raise
+            finally:
+                self._request_render()
+
+        def clear_collision_overlay(self) -> None:
+            self._delete_collision_overlay()
+            self._collision_sidecar = None
+            self._request_render()
+
+        def _rebuild_object_models(self, objects, bsp_world=None) -> None:
+            self._delete_baked_props()
+            self._object_model_items = []
+            if not objects or self._obj_model_cache is None:
+                return
+            self._object_model_items = build_render_items(
+                objects,
+                self._obj_model_cache,
+                skin_cache=self._skin_cache,
+                tex_cache=self._tex_cache,
+                bsp_world=bsp_world,
+                actor_visuals=self._actor_visuals,
+            )
+            if self._baked_props_enabled and self._object_model_items:
+                try:
+                    self._baked_prop_batch = upload_baked_prop_batch(
+                        self._object_model_items,
+                        self._obj_model_cache,
+                        skin_cache=self._skin_cache,
+                        tex_cache=self._tex_cache,
+                        actor_visuals=self._actor_visuals,
+                    )
+                    if self._baked_prop_batch is not None:
+                        print(
+                            f"[view3d] baked prop batch ready - "
+                            f"{len(self._baked_prop_batch.world_indices)} objects, "
+                            f"{self._baked_prop_batch.mesh.triangle_count:,} tris",
+                            file=sys.stderr,
+                        )
+                except Exception as exc:
+                    self._baked_prop_batch = None
+                    print(f"[view3d] baked prop batch failed: {exc}", file=sys.stderr)
+
         def _rebuild_sprites(self) -> None:
             self._delete_sprites()
             self._sprite_position_pending.clear()
@@ -746,6 +889,9 @@ if OPENGL_AVAILABLE:
             self._mesh_cache.invalidate()
             self._bsp_draw_batch = None
             self._delete_sprites()
+            self._delete_baked_props()
+            self._delete_collision_overlay()
+            self._collision_sidecar = None
 
             self._level      = level
             self._bsp_world  = bsp_world
@@ -759,15 +905,7 @@ if OPENGL_AVAILABLE:
             self._sprite_position_pending.clear()   # stale patches must not apply to new VBO
 
             if objects:
-                if self._obj_model_cache is not None:
-                    self._object_model_items = build_render_items(
-                        objects,
-                        self._obj_model_cache,
-                        skin_cache=self._skin_cache,
-                        tex_cache=self._tex_cache,
-                        bsp_world=bsp_world,
-                        actor_visuals=self._actor_visuals,
-                    )
+                self._rebuild_object_models(objects, bsp_world=bsp_world)
                 self._rebuild_sprites()
 
             if bsp_world is not None:
@@ -801,17 +939,10 @@ if OPENGL_AVAILABLE:
             self._sprite_position_pending.clear()   # new VBO; old patches are invalid
             self._objects   = objects
             self._obj_count = len(objects)
+            self._delete_baked_props()
             self._object_model_items = []
             if objects:
-                if self._obj_model_cache is not None:
-                    self._object_model_items = build_render_items(
-                        objects,
-                        self._obj_model_cache,
-                        skin_cache=self._skin_cache,
-                        tex_cache=self._tex_cache,
-                        bsp_world=self._bsp_world,
-                        actor_visuals=self._actor_visuals,
-                    )
+                self._rebuild_object_models(objects, bsp_world=self._bsp_world)
                 self._rebuild_sprites()
             self._request_render()
 
@@ -823,6 +954,7 @@ if OPENGL_AVAILABLE:
             self._objects = objects
             self._obj_count = len(objects)
             self._object_model_items = []
+            self._delete_baked_props()
             self._bsp_world = bsp_world
 
             if bsp_world is not None:
@@ -843,15 +975,7 @@ if OPENGL_AVAILABLE:
                 )
 
             if objects:
-                if self._obj_model_cache is not None:
-                    self._object_model_items = build_render_items(
-                        objects,
-                        self._obj_model_cache,
-                        skin_cache=self._skin_cache,
-                        tex_cache=self._tex_cache,
-                        bsp_world=bsp_world,
-                        actor_visuals=self._actor_visuals,
-                    )
+                self._rebuild_object_models(objects, bsp_world=bsp_world)
                 self._rebuild_sprites()
             self._request_render()
 
@@ -1978,6 +2102,18 @@ class View3D(tk.Frame if _HAS_TK else object):
             return
         self._canvas.set_helper_role_groups(groups)
 
+    def set_collision_overlay_path(self, path: str, manifest_path: Optional[str] = None) -> None:
+        """Load and show an MM9COLL collision sidecar overlay."""
+        if not OPENGL_AVAILABLE:
+            return
+        self._canvas.set_collision_overlay_path(path, manifest_path=manifest_path)
+
+    def clear_collision_overlay(self) -> None:
+        """Hide any loaded collision sidecar overlay."""
+        if not OPENGL_AVAILABLE:
+            return
+        self._canvas.clear_collision_overlay()
+
     def set_camera_mode(self, mode: str) -> None:
         """Switch between 'orbit' and 'fly' programmatically."""
         if not OPENGL_AVAILABLE:
@@ -2000,6 +2136,10 @@ class View3D(tk.Frame if _HAS_TK else object):
                 try:
                     from view3d.dtx import TextureCache
                     self._canvas._tex_cache = TextureCache(textures_dir)
+                    self._canvas._rebuild_object_models(
+                        self._canvas._objects,
+                        bsp_world=self._canvas._bsp_world,
+                    )
                 except Exception as exc:
                     print(f"[view3d] textures cache update failed: {exc}", file=sys.stderr)
         if skins_dir is not None and skins_dir != self._skins_dir:
@@ -2009,6 +2149,10 @@ class View3D(tk.Frame if _HAS_TK else object):
                 try:
                     from view3d.dtx import TextureCache
                     self._canvas._skin_cache = TextureCache(skins_dir)
+                    self._canvas._rebuild_object_models(
+                        self._canvas._objects,
+                        bsp_world=self._canvas._bsp_world,
+                    )
                 except Exception as exc:
                     print(f"[view3d] skins cache update failed: {exc}", file=sys.stderr)
         if models_dir is not None and models_dir != self._models_dir:
@@ -2017,7 +2161,12 @@ class View3D(tk.Frame if _HAS_TK else object):
             if self._canvas._ready:
                 try:
                     from view3d.gl_object_models import ObjectModelCache
+                    self._canvas._delete_baked_props()
                     self._canvas._obj_model_cache = ObjectModelCache(models_dir)
+                    self._canvas._rebuild_object_models(
+                        self._canvas._objects,
+                        bsp_world=self._canvas._bsp_world,
+                    )
                 except Exception as exc:
                     print(f"[view3d] models cache update failed: {exc}", file=sys.stderr)
 

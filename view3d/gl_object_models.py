@@ -979,6 +979,7 @@ class ObjectModelCache:
         self._root = models_root
         self._index: Dict[str, str] = {}
         self._cache: Dict[str, Optional[GpuMesh]] = {}
+        self._abc_cache: Dict[str, object] = {}
         self._build_index()
 
     def _build_index(self) -> None:
@@ -1005,6 +1006,7 @@ class ObjectModelCache:
                 except Exception:
                     pass
         self._cache.clear()
+        self._abc_cache.clear()
 
     def _path_for(self, filename: str) -> Optional[str]:
         key = _normalise_model_name(filename)
@@ -1022,19 +1024,35 @@ class ObjectModelCache:
         if key in self._cache:
             return self._cache[key]
 
-        path = self._path_for(filename)
-        if path is None:
-            self._cache[key] = None
-            return None
-
-        abc = load_abc(path, bake_static_bind_pose=True)
-        if abc is None or abc.is_empty():
+        abc = self.get_or_load_abc(filename)
+        if abc is None:
             self._cache[key] = None
             return None
 
         mesh = upload_abc_model(abc, category="object")
         self._cache[key] = mesh
         return mesh
+
+    def get_or_load_abc(self, filename: str):
+        """Return the parsed static-preview ABC model for *filename*."""
+        key = _normalise_model_name(filename)
+        if not key:
+            return None
+        if key in self._abc_cache:
+            return self._abc_cache[key]
+
+        path = self._path_for(filename)
+        if path is None:
+            self._abc_cache[key] = None
+            return None
+
+        abc = load_abc(path, bake_static_bind_pose=True)
+        if abc is None or abc.is_empty():
+            self._abc_cache[key] = None
+            return None
+
+        self._abc_cache[key] = abc
+        return abc
 
 
 def build_instances(
@@ -1140,6 +1158,7 @@ def draw_object_model_items(
     fog_far: float = 3000.0,
     fog_color: Tuple[float, float, float] = (0.055, 0.063, 0.086),
     only_world_index: Optional[int] = None,
+    include_world_indices: Optional[set] = None,
 ) -> Tuple[int, int, set]:
     """Draw a cached object-model render item list."""
     from OpenGL import GL  # type: ignore
@@ -1162,6 +1181,8 @@ def draw_object_model_items(
 
         for item in items:
             if only_world_index is not None and item.world_index != only_world_index:
+                continue
+            if include_world_indices is not None and item.world_index not in include_world_indices:
                 continue
             model = _object_matrix(item.obj, y_override=item.y_override)
             if model is None:

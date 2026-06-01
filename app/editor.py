@@ -37,11 +37,46 @@ import json
 import os
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 from typing import Any, Dict, List, Optional
 
 EDITOR_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_LITHTECH_ROOT = os.path.abspath(os.path.join(EDITOR_ROOT, os.pardir, "lithtech"))
+DEFAULT_COLLISION_EXPORTER = os.path.join(
+    DEFAULT_LITHTECH_ROOT,
+    "tools",
+    "mm9_jupiter_load_probe",
+    "mm9_export_collision.py",
+)
+
+
+def build_collision_export_command(
+    exporter_script: str,
+    manifest_path: str,
+    dat_path: str,
+    editor_root: str = EDITOR_ROOT,
+    out_mesh: str = "",
+) -> List[str]:
+    """Build the subprocess argv for the LithTech MM9 collision exporter."""
+    cmd = [
+        sys.executable,
+        os.path.abspath(exporter_script),
+        "--manifest",
+        os.path.abspath(manifest_path),
+        "--dat",
+        os.path.abspath(dat_path),
+        "--editor-root",
+        os.path.abspath(editor_root),
+    ]
+    if out_mesh:
+        cmd.extend(["--out-mesh", os.path.abspath(out_mesh)])
+    return cmd
+
+
+def collision_sidecar_path_for_manifest(manifest_path: str) -> str:
+    return os.path.splitext(os.path.abspath(manifest_path))[0] + ".collisionmeshbin"
 
 # tkinter is imported lazily inside main() so config validation can produce
 # readable console errors even on machines where Tk isn't available yet.
@@ -327,6 +362,19 @@ class EditorApp:
                 variable=self._view_helper_role_vars[role],
                 command=self.cmd_set_helper_role_groups,
             )
+        m_view.add_separator()
+        m_view.add_command(
+            label="Load collision sidecar...",
+            command=self.cmd_load_collision_sidecar,
+        )
+        m_view.add_command(
+            label="Generate collision sidecar...",
+            command=self.cmd_generate_collision_sidecar,
+        )
+        m_view.add_command(
+            label="Clear collision sidecar",
+            command=self.cmd_clear_collision_sidecar,
+        )
 
         m_conversion = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Conversion", menu=m_conversion)
@@ -773,6 +821,119 @@ class EditorApp:
             if bool(var.get())
         }
         self.view3d.set_helper_role_groups(groups)
+
+    def cmd_load_collision_sidecar(self) -> None:
+        """Load an MM9COLL sidecar and show it as a translucent overlay."""
+        if self.view3d is None:
+            return
+        path = filedialog.askopenfilename(
+            title="Load collision sidecar",
+            filetypes=[
+                ("MM9 collision sidecar", "*.collisionmeshbin *.meshbin"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        manifest_path = None
+        base, _ext = os.path.splitext(path)
+        candidate = base + ".json"
+        if os.path.exists(candidate):
+            manifest_path = candidate
+        try:
+            self.view3d.set_collision_overlay_path(path, manifest_path=manifest_path)
+        except Exception as exc:
+            messagebox.showerror("Collision sidecar failed", str(exc))
+
+    def _choose_collision_exporter_script(self) -> Optional[str]:
+        if os.path.isfile(DEFAULT_COLLISION_EXPORTER):
+            return DEFAULT_COLLISION_EXPORTER
+        return filedialog.askopenfilename(
+            title="Pick mm9_export_collision.py",
+            initialdir=os.path.dirname(DEFAULT_COLLISION_EXPORTER),
+            filetypes=[
+                ("Python scripts", "*.py"),
+                ("All files", "*.*"),
+            ],
+        ) or None
+
+    def _write_active_level_temp_dat(self) -> str:
+        L = getattr(self, "active", None)
+        if L is None:
+            raise ValueError("Open a level before generating a collision sidecar.")
+        L.load()
+        world = L.materialize()
+        fd, dat_path = tempfile.mkstemp(prefix="mm9_editor_collision_", suffix=".DAT")
+        os.close(fd)
+        world.save(dat_path)
+        return dat_path
+
+    def cmd_generate_collision_sidecar(self) -> None:
+        """Generate an MM9COLL sidecar for the active level via LithTech tooling."""
+        if self.view3d is None:
+            return
+        L = getattr(self, "active", None)
+        if L is None:
+            messagebox.showwarning("No level", "Open a level before generating a collision sidecar.")
+            return
+        self._flush_view_transforms()
+
+        exporter_script = self._choose_collision_exporter_script()
+        if not exporter_script:
+            return
+        manifest_path = filedialog.askopenfilename(
+            title="Pick static-world package manifest",
+            initialdir=os.path.join(DEFAULT_LITHTECH_ROOT, "build_mingw"),
+            filetypes=[
+                ("Static-world package manifest", "*_static_world_package.json"),
+                ("JSON files", "*.json"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not manifest_path:
+            return
+
+        temp_dat = ""
+        try:
+            temp_dat = self._write_active_level_temp_dat()
+            cmd = build_collision_export_command(
+                exporter_script,
+                manifest_path,
+                temp_dat,
+                editor_root=EDITOR_ROOT,
+            )
+            result = subprocess.run(
+                cmd,
+                cwd=os.path.dirname(os.path.abspath(exporter_script)),
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                raise RuntimeError(detail or f"collision exporter exited with {result.returncode}")
+
+            sidecar_path = collision_sidecar_path_for_manifest(manifest_path)
+            if not os.path.exists(sidecar_path):
+                raise FileNotFoundError(f"expected sidecar was not written:\n{sidecar_path}")
+            self.view3d.set_collision_overlay_path(sidecar_path, manifest_path=manifest_path)
+            messagebox.showinfo(
+                "Collision sidecar generated",
+                f"Generated and loaded:\n{sidecar_path}",
+            )
+        except Exception as exc:
+            messagebox.showerror("Collision sidecar generation failed", str(exc))
+        finally:
+            if temp_dat:
+                try:
+                    os.remove(temp_dat)
+                except OSError:
+                    pass
+
+    def cmd_clear_collision_sidecar(self) -> None:
+        """Hide the loaded collision sidecar overlay."""
+        if self.view3d is not None:
+            self.view3d.clear_collision_overlay()
 
     def cmd_lomm_to_mm9_conversion(self) -> None:
         """Open the LoMM-to-MM9 conversion workflow."""

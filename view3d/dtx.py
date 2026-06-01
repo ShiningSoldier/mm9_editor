@@ -57,9 +57,12 @@ path is never retried.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import os
 import struct
 import sys
+import tempfile
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -73,6 +76,9 @@ _HEADER_SIZE = 164
 _FMT_DXT1 = 4
 _FMT_DXT5 = 6
 _FMT_BGRA = frozenset({0, 3})   # f26=3 (v5 files) and f26=0 (older v4 files)
+_DECODE_CACHE_FORMAT_VERSION = 1
+_DECODE_CACHE_ENV = "MM9_EDITOR_TEXTURE_CACHE"
+_DECODE_CACHE_DIR_ENV = "MM9_EDITOR_TEXTURE_CACHE_DIR"
 
 # ---------------------------------------------------------------------------
 # Alpha metadata
@@ -343,19 +349,91 @@ def inspect_dtx_alpha_file(path: str) -> Optional[TextureAlphaInfo]:
 
 
 # ---------------------------------------------------------------------------
-# GL upload
+# Decoded texture cache
 # ---------------------------------------------------------------------------
 
-def load_dtx_bytes(data: bytes) -> Optional[int]:
-    """
-    Parse a DTX blob and upload mip level 0 to the GPU.
+def _default_decode_cache_dir() -> str:
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    return os.path.abspath(os.environ.get(
+        _DECODE_CACHE_DIR_ENV,
+        os.path.join(project_root, "cache", "view3d_textures"),
+    ))
 
-    Returns the OpenGL texture ID on success, or ``None`` if the format is
-    unrecognised, the data is too short, or a GL error occurs.
-    Requires a live GL context.
-    """
-    from OpenGL import GL  # type: ignore
 
+def _decode_cache_enabled_from_env() -> bool:
+    return os.environ.get(_DECODE_CACHE_ENV) == "1"
+
+
+def decoded_texture_cache_key(data: bytes) -> Optional[str]:
+    """Return a content key for a DTX mip-0 RGBA decode result."""
+    hdr = parse_header(data)
+    if hdr is None:
+        return None
+    pixel_fmt, w, h, _mips = hdr
+    expected = _mip0_size(pixel_fmt, w, h)
+    if len(data) < _HEADER_SIZE + expected:
+        return None
+    payload = {
+        "format": _DECODE_CACHE_FORMAT_VERSION,
+        "pixelFormat": pixel_fmt,
+        "width": w,
+        "height": h,
+        "mip0Sha256": hashlib.sha256(data[_HEADER_SIZE : _HEADER_SIZE + expected]).hexdigest(),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _decode_cache_path(cache_dir: str, key: str) -> str:
+    return os.path.join(cache_dir, key[:2], key + ".npz")
+
+
+def _read_decode_cache(cache_dir: str, key: str) -> Optional[Tuple[int, int, np.ndarray]]:
+    path = _decode_cache_path(cache_dir, key)
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            version = int(data["version"][0])
+            if version != _DECODE_CACHE_FORMAT_VERSION:
+                return None
+            width = int(data["width"][0])
+            height = int(data["height"][0])
+            rgba = np.asarray(data["rgba"], dtype=np.uint8)
+            if rgba.shape != (height, width, 4):
+                return None
+            return width, height, rgba
+    except Exception:
+        return None
+
+
+def _write_decode_cache(cache_dir: str, key: str, width: int, height: int, rgba: np.ndarray) -> None:
+    path = _decode_cache_path(cache_dir, key)
+    directory = os.path.dirname(path)
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix=key + ".", suffix=".tmp", dir=directory)
+        os.close(fd)
+        try:
+            with open(tmp_path, "wb") as f:
+                np.savez_compressed(
+                    f,
+                    version=np.asarray([_DECODE_CACHE_FORMAT_VERSION], dtype=np.uint32),
+                    width=np.asarray([width], dtype=np.uint32),
+                    height=np.asarray([height], dtype=np.uint32),
+                    rgba=np.asarray(rgba, dtype=np.uint8),
+                )
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def decode_dtx_rgba(data: bytes) -> Optional[Tuple[int, int, np.ndarray]]:
+    """Decode DTX mip-0 pixels to RGBA8 without touching OpenGL."""
     hdr = parse_header(data)
     if hdr is None:
         return None
@@ -364,63 +442,67 @@ def load_dtx_bytes(data: bytes) -> Optional[int]:
     expected = _mip0_size(pixel_fmt, w, h)
     if len(data) < _HEADER_SIZE + expected:
         return None
-
     pix = data[_HEADER_SIZE : _HEADER_SIZE + expected]
+
+    if pixel_fmt == _FMT_DXT1:
+        rgba = _decode_dxt1_rgba(pix, w, h)
+    elif pixel_fmt == _FMT_DXT5:
+        rgba = _decode_dxt5_rgba(pix, w, h)
+    else:
+        bgra = np.frombuffer(pix, dtype=np.uint8).reshape((h, w, 4))
+        rgba = bgra[:, :, [2, 1, 0, 3]].copy()
+    return w, h, rgba
+
+
+def decode_dtx_rgba_cached(data: bytes, cache_dir: Optional[str] = None) -> Optional[Tuple[int, int, np.ndarray]]:
+    """Decode DTX mip-0 RGBA, optionally using the on-disk editor cache."""
+    if not cache_dir:
+        return decode_dtx_rgba(data)
+    key = decoded_texture_cache_key(data)
+    if key is None:
+        return None
+    cached = _read_decode_cache(cache_dir, key)
+    if cached is not None:
+        return cached
+    decoded = decode_dtx_rgba(data)
+    if decoded is None:
+        return None
+    width, height, rgba = decoded
+    _write_decode_cache(cache_dir, key, width, height, rgba)
+    return decoded
+
+
+# ---------------------------------------------------------------------------
+# GL upload
+# ---------------------------------------------------------------------------
+
+def _upload_rgba_texture(width: int, height: int, rgba: np.ndarray) -> Optional[int]:
+    """Upload RGBA8 pixels to the current GL context."""
+    from OpenGL import GL  # type: ignore
 
     tex = None
     try:
         tex = int(GL.glGenTextures(1))
         GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
 
-        # GL_LINEAR_MIPMAP_LINEAR (trilinear) for min — requires mipmaps,
-        # which we generate below after uploading mip 0.
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER,
                            GL.GL_LINEAR_MIPMAP_LINEAR)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT)
-
-        if pixel_fmt == _FMT_DXT1:
-            rgba = _decode_dxt1_rgba(pix, w, h)
-            GL.glTexImage2D(
-                GL.GL_TEXTURE_2D, 0,
-                GL.GL_RGBA,
-                w, h, 0,
-                GL.GL_RGBA,
-                GL.GL_UNSIGNED_BYTE,
-                rgba,
-            )
-        elif pixel_fmt == _FMT_DXT5:
-            rgba = _decode_dxt5_rgba(pix, w, h)
-            GL.glTexImage2D(
-                GL.GL_TEXTURE_2D, 0,
-                GL.GL_RGBA,
-                w, h, 0,
-                GL.GL_RGBA,
-                GL.GL_UNSIGNED_BYTE,
-                rgba,
-            )
-        else:
-            # BGRA32: LithTech stores pixels as [B, G, R, A] bytes in memory.
-            GL.glTexImage2D(
-                GL.GL_TEXTURE_2D, 0,
-                GL.GL_RGBA,
-                w, h, 0,
-                GL.GL_BGRA,            # matches LithTech's byte order
-                GL.GL_UNSIGNED_BYTE,
-                np.frombuffer(pix, dtype=np.uint8),
-            )
-
-        # Generate the full mipmap chain from mip 0.  This eliminates
-        # shimmering on distant surfaces and is fast on GPU.
+        GL.glTexImage2D(
+            GL.GL_TEXTURE_2D, 0,
+            GL.GL_RGBA,
+            width, height, 0,
+            GL.GL_RGBA,
+            GL.GL_UNSIGNED_BYTE,
+            rgba,
+        )
         GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
-
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
         return tex
-
     except Exception as exc:
-        print(f"[dtx] GL upload error ({w}x{h} fmt={pixel_fmt}): {exc}",
-              file=sys.stderr)
+        print(f"[dtx] GL upload error ({width}x{height} RGBA): {exc}", file=sys.stderr)
         try:
             GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
             if tex is not None:
@@ -430,11 +512,26 @@ def load_dtx_bytes(data: bytes) -> Optional[int]:
         return None
 
 
-def load_dtx_file(path: str) -> Optional[int]:
+def load_dtx_bytes(data: bytes, decode_cache_dir: Optional[str] = None) -> Optional[int]:
+    """
+    Parse a DTX blob and upload mip level 0 to the GPU.
+
+    Returns the OpenGL texture ID on success, or ``None`` if the format is
+    unrecognised, the data is too short, or a GL error occurs.
+    Requires a live GL context.
+    """
+    decoded = decode_dtx_rgba_cached(data, decode_cache_dir)
+    if decoded is None:
+        return None
+    width, height, rgba = decoded
+    return _upload_rgba_texture(width, height, rgba)
+
+
+def load_dtx_file(path: str, decode_cache_dir: Optional[str] = None) -> Optional[int]:
     """Load a .dtx file and upload mip 0.  Returns GL texture ID or ``None``."""
     try:
         with open(path, "rb") as f:
-            return load_dtx_bytes(f.read())
+            return load_dtx_bytes(f.read(), decode_cache_dir=decode_cache_dir)
     except OSError as exc:
         print(f"[dtx] cannot read {path!r}: {exc}", file=sys.stderr)
         return None
@@ -459,6 +556,9 @@ class TextureCache:
 
     def __init__(self, textures_root: str) -> None:
         self._root  = textures_root
+        self._decode_cache_dir: Optional[str] = (
+            _default_decode_cache_dir() if _decode_cache_enabled_from_env() else None
+        )
         # upper-case relative path (forward slashes) -> absolute path on disk
         self._index: Dict[str, str]           = {}
         # upper-case relative path -> GL texture ID (int) or None (failed/missing)
@@ -563,7 +663,7 @@ class TextureCache:
             self._cache[norm] = None
             return 0
 
-        tex_id = load_dtx_file(self._index[key])
+        tex_id = load_dtx_file(self._index[key], decode_cache_dir=self._decode_cache_dir)
         self._cache[norm] = tex_id
         return tex_id or 0
 

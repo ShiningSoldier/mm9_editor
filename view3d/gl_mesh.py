@@ -37,6 +37,10 @@ upload_model / draw_mesh / delete_mesh / draw_bsp after GL is initialised.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
+import os
+import tempfile
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -50,6 +54,10 @@ _COORD_SANITY: float = 1.0e6
 # Triangles below this threshold are co-linear / zero-area and should be
 # silently dropped (their normals would be garbage).
 _AREA_EPSILON: float = 1.0e-8
+
+_BSP_CACHE_FORMAT_VERSION = 1
+_BSP_CACHE_ENV = "MM9_EDITOR_BSP_CACHE"
+_BSP_CACHE_DIR_ENV = "MM9_EDITOR_BSP_CACHE_DIR"
 
 _NON_RENDER_TEXTURE_TOKENS = (
     "/LEVELTEXTURES/MISC/RAIL.DTX",
@@ -523,6 +531,194 @@ def _triangulate_model(
     return verts, indices, tex_ranges
 
 
+def _default_bsp_cache_dir() -> str:
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    return os.path.abspath(os.environ.get(
+        _BSP_CACHE_DIR_ENV,
+        os.path.join(project_root, "cache", "view3d_bsp"),
+    ))
+
+
+def _bsp_cache_enabled_from_env() -> bool:
+    return os.environ.get(_BSP_CACHE_ENV) == "1"
+
+
+def _texture_size_for_cache(tex_name: str, tex_cache=None) -> Tuple[int, int]:
+    if not tex_name:
+        return (128, 128)
+    size = None
+    if tex_cache is not None and hasattr(tex_cache, "image_size"):
+        try:
+            size = tex_cache.image_size(tex_name)
+        except Exception:
+            size = None
+    if size is None:
+        return (128, 128)
+    try:
+        return (int(size[0]), int(size[1]))
+    except Exception:
+        return (128, 128)
+
+
+def _mesh_fingerprint_payload(
+    mesh,
+    tex_cache=None,
+    helper_mode: str = "normal",
+    helper_roles: Optional[Set[str]] = None,
+) -> dict:
+    """Return the cache-key payload for one BSP triangulation variant."""
+    texture_names = [str(name or "") for name in getattr(mesh, "texture_names", []) or []]
+    texture_size_names = sorted(set(texture_names + [_render_texture_name(name) for name in texture_names]))
+    return {
+        "format": _BSP_CACHE_FORMAT_VERSION,
+        "helperMode": str(helper_mode or "normal").lower(),
+        "helperRoles": sorted(str(role) for role in (helper_roles or set())),
+        "name": str(getattr(mesh, "name", "") or ""),
+        "minBox": list(getattr(mesh, "min_box", ()) or ()),
+        "maxBox": list(getattr(mesh, "max_box", ()) or ()),
+        "translation": list(getattr(mesh, "translation", ()) or ()),
+        "points": [list(p) for p in getattr(mesh, "points", []) or []],
+        "polygons": [
+            {
+                "vertexIndices": list(getattr(poly, "vertex_indices", []) or []),
+                "surfaceIndex": int(getattr(poly, "surface_index", -1)),
+                "planeIndex": int(getattr(poly, "plane_index", -1)),
+            }
+            for poly in getattr(mesh, "polygons", []) or []
+        ],
+        "textureNames": texture_names,
+        "textureSizes": {
+            name: list(_texture_size_for_cache(name, tex_cache))
+            for name in texture_size_names
+        },
+        "surfaces": [
+            {
+                "uvO": list(getattr(surface, "uv_o", ()) or ()),
+                "uvP": list(getattr(surface, "uv_p", ()) or ()),
+                "uvQ": list(getattr(surface, "uv_q", ()) or ()),
+                "textureIndex": int(getattr(surface, "texture_index", -1)),
+                "flags": int(getattr(surface, "flags", 0)),
+                "textureFlags": int(getattr(surface, "texture_flags", 0)),
+            }
+            for surface in getattr(mesh, "surfaces", []) or []
+        ],
+    }
+
+
+def bsp_triangulation_cache_key(
+    mesh,
+    tex_cache=None,
+    helper_mode: str = "normal",
+    helper_roles: Optional[Set[str]] = None,
+) -> str:
+    """Return a stable content key for one triangulated BSP mesh variant."""
+    payload = _mesh_fingerprint_payload(
+        mesh,
+        tex_cache=tex_cache,
+        helper_mode=helper_mode,
+        helper_roles=helper_roles,
+    )
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _cache_path_for_key(cache_dir: str, key: str) -> str:
+    return os.path.join(cache_dir, key[:2], key + ".npz")
+
+
+def _read_triangulation_cache(
+    cache_dir: str,
+    key: str,
+) -> Optional[Tuple[np.ndarray, np.ndarray, List[Tuple[str, int, int]]]]:
+    path = _cache_path_for_key(cache_dir, key)
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            version = int(data["version"][0])
+            if version != _BSP_CACHE_FORMAT_VERSION:
+                return None
+            verts = np.asarray(data["verts"], dtype=np.float32)
+            indices = np.asarray(data["indices"], dtype=np.uint32)
+            ranges_json = str(data["ranges_json"][0])
+            ranges_raw = json.loads(ranges_json)
+            ranges = [
+                (str(item[0]), int(item[1]), int(item[2]))
+                for item in ranges_raw
+                if isinstance(item, list) and len(item) == 3
+            ]
+            return verts, indices, ranges
+    except Exception:
+        return None
+
+
+def _write_triangulation_cache(
+    cache_dir: str,
+    key: str,
+    verts: np.ndarray,
+    indices: np.ndarray,
+    tex_ranges: List[Tuple[str, int, int]],
+) -> None:
+    path = _cache_path_for_key(cache_dir, key)
+    directory = os.path.dirname(path)
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix=key + ".", suffix=".tmp", dir=directory)
+        os.close(fd)
+        try:
+            with open(tmp_path, "wb") as f:
+                np.savez_compressed(
+                    f,
+                    version=np.asarray([_BSP_CACHE_FORMAT_VERSION], dtype=np.uint32),
+                    verts=np.asarray(verts, dtype=np.float32),
+                    indices=np.asarray(indices, dtype=np.uint32),
+                    ranges_json=np.asarray([json.dumps(tex_ranges, separators=(",", ":"))]),
+                )
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def triangulate_model_cached(
+    mesh,
+    tex_cache=None,
+    helper_mode: str = "normal",
+    helper_roles: Optional[Set[str]] = None,
+    cache_dir: Optional[str] = None,
+) -> Tuple[np.ndarray, np.ndarray, List[Tuple[str, int, int]]]:
+    """Triangulate a BSP mesh using an optional on-disk editor cache."""
+    if not cache_dir:
+        return _triangulate_model(
+            mesh,
+            tex_cache=tex_cache,
+            helper_mode=helper_mode,
+            helper_roles=helper_roles,
+        )
+
+    key = bsp_triangulation_cache_key(
+        mesh,
+        tex_cache=tex_cache,
+        helper_mode=helper_mode,
+        helper_roles=helper_roles,
+    )
+    cached = _read_triangulation_cache(cache_dir, key)
+    if cached is not None:
+        return cached
+
+    verts, indices, tex_ranges = _triangulate_model(
+        mesh,
+        tex_cache=tex_cache,
+        helper_mode=helper_mode,
+        helper_roles=helper_roles,
+    )
+    _write_triangulation_cache(cache_dir, key, verts, indices, tex_ranges)
+    return verts, indices, tex_ranges
+
+
 def triangulation_stats(mesh) -> dict:  # type: ignore[type-arg]
     """
     Return a dict with geometry statistics for *mesh* without uploading to GL.
@@ -586,6 +782,7 @@ def upload_model(
     tex_cache=None,
     helper_mode: str = "normal",
     helper_roles: Optional[Set[str]] = None,
+    bsp_cache_dir: Optional[str] = None,
 ) -> Optional[GpuMesh]:  # type: ignore[type-arg]
     """
     Triangulate *mesh* and upload it to the GPU.
@@ -595,11 +792,12 @@ def upload_model(
     from OpenGL import GL  # type: ignore
 
     roles = set(helper_roles or [])
-    verts, indices, tex_ranges = _triangulate_model(
+    verts, indices, tex_ranges = triangulate_model_cached(
         mesh,
         tex_cache=tex_cache,
         helper_mode=helper_mode,
         helper_roles=roles or None,
+        cache_dir=bsp_cache_dir,
     )
     n_verts = verts.shape[0]
     n_tris  = len(indices) // 3
@@ -1090,6 +1288,9 @@ class MeshCache:
 
     def __init__(self) -> None:
         self._cache: Dict[Tuple[int, Optional[int]], Optional[GpuMesh]] = {}
+        self._bsp_cache_dir: Optional[str] = (
+            _default_bsp_cache_dir() if _bsp_cache_enabled_from_env() else None
+        )
 
     def get_or_upload(
         self,
@@ -1111,6 +1312,7 @@ class MeshCache:
                 tex_cache=tex_cache,
                 helper_mode=helper_mode,
                 helper_roles=set(helper_roles or ()),
+                bsp_cache_dir=self._bsp_cache_dir,
             )
         return self._cache[key]
 
