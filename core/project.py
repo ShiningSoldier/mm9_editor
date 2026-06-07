@@ -28,7 +28,7 @@ import struct
 import tempfile
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
@@ -386,7 +386,7 @@ class ImportMeshBspOp:
         )
         yaw = "" if abs(float(self.target_yaw)) < 1.0e-6 else f" yaw {self.target_yaw:.2f}"
         collision = "" if str(self.collision_mode or "none").lower() in {"none", "off", "false", "0"} else f" collision={self.collision_mode}"
-        return f"+ import Blender OBJ {os.path.basename(self.obj_path)} -> {self.new_name}{target}{yaw}{collision}"
+        return f"+ import Blender geometry {os.path.basename(self.obj_path)} -> {self.new_name}{target}{yaw}{collision}"
 
 
 @dataclass
@@ -1124,8 +1124,14 @@ class Project:
                     )
             if mesh_imports:
                 validation_warnings.append(
-                    "Blender OBJ mesh imports use an experimental minimal BSP compiler; "
+                    "Blender OBJ/glTF mesh imports use an experimental minimal BSP compiler; "
                     "reopen the output DAT and validate in-game before relying on it"
+                )
+                validation_warnings.extend(
+                    mesh_import.validate_collision_controllers(
+                        mesh_imports,
+                        materialized.objects,
+                    )
                 )
             if vertex_edits:
                 validation_warnings.append(
@@ -1388,6 +1394,7 @@ class Project:
                         "mesh_imports": d.stats()["mesh_imports"],
                         "vertex_edits": d.stats()["vertex_edits"],
                         "submodel_replacements": d.stats()["submodel_replacements"],
+                        "geometry_edits": d.geometry_manifest_details(),
                         "ops_summary": d.ops_summary,
                         "validation_warnings": d.validation_warnings,
                     }
@@ -1602,6 +1609,263 @@ class DatWrite:
             "submodel_replacements": len(self.replaced_submodels),
             "replaced_bsp_models": sum(len(plan.models) for plan in self.replaced_submodels),
         }
+
+    def geometry_manifest_details(self) -> Dict[str, Any]:
+        return {
+            "mesh_imports": [
+                {
+                    "obj_path": plan.obj_path,
+                    "meta_path": plan.meta_path,
+                    "new_name": plan.new_name,
+                    "collision_mode": plan.collision_mode,
+                    "visible_model_count": sum(1 for item in plan.models if not mesh_import.is_collision_model(item)),
+                    "collision_model_count": sum(1 for item in plan.models if mesh_import.is_collision_model(item)),
+                    "role_counts": mesh_import.role_counts(plan.models),
+                    "models": [
+                        _manifest_model_summary(item.name, item.mesh, role=item.role)
+                        for item in plan.models
+                    ],
+                }
+                for plan in self.mesh_imports
+            ],
+            "vertex_edits": [
+                {
+                    "obj_path": plan.obj_path,
+                    "meta_path": plan.meta_path,
+                    "models": [
+                        _manifest_model_summary(item.name, item.edited_model)
+                        for item in plan.models
+                    ],
+                }
+                for plan in self.vertex_edits
+            ],
+            "submodel_replacements": [
+                {
+                    "obj_path": plan.obj_path,
+                    "meta_path": plan.meta_path,
+                    "models": [
+                        {
+                            **_manifest_model_summary(item.name, item.replacement_model),
+                            "source_polygon_count": len(item.source_model.polygons),
+                            "source_point_count": len(item.source_model.points),
+                            "replacement_record_bytes": len(item.record.raw_bytes),
+                        }
+                        for item in plan.models
+                    ],
+                }
+                for plan in self.replaced_submodels
+            ],
+        }
+
+    def geometry_risk_report(self) -> List[str]:
+        """Human-readable geometry details for the pre-save review dialog."""
+        lines: List[str] = []
+        if self.mesh_imports:
+            mesh_model_count = sum(len(plan.models) for plan in self.mesh_imports)
+            visible_model_count = sum(
+                1
+                for plan in self.mesh_imports
+                for item in plan.models
+                if not mesh_import.is_collision_model(item)
+            )
+            collision_model_count = mesh_model_count - visible_model_count
+            lines.append(
+                "geometry risk: mesh import uses generated standalone BSP "
+                "records; this does not rebuild PhysicsBSP, VisBSP, portals, "
+                "or light data"
+            )
+            lines.append(
+                "mesh geometry: "
+                f"{visible_model_count} visible model(s), "
+                f"{collision_model_count} collision/helper model(s)"
+            )
+            role_counts = _combine_counts(
+                mesh_import.role_counts(plan.models)
+                for plan in self.mesh_imports
+            )
+            if role_counts:
+                lines.append(f"mesh roles: {_format_counts(role_counts)}")
+            uv_counts = _combine_counts(
+                _uv_method_counts(item.mesh.surfaces)
+                for plan in self.mesh_imports
+                for item in plan.models
+            )
+            if uv_counts:
+                lines.append(f"mesh UV methods: {_format_counts(uv_counts)}")
+            source_counts = _combine_counts(
+                _source_format_counts(item.mesh.polygons)
+                for plan in self.mesh_imports
+                for item in plan.models
+            )
+            if source_counts:
+                lines.append(f"mesh source formats: {_format_counts(source_counts)}")
+            elif any(str(plan.source_format or "").lower() in {"gltf", "glb"} for plan in self.mesh_imports):
+                lines.append("mesh source formats: glTF geometry without original DAT face metadata")
+            for plan in self.mesh_imports:
+                for warning in _mesh_import_risk_warnings(plan):
+                    lines.append(f"mesh warning: {warning}")
+
+        if self.vertex_edits:
+            model_count = sum(len(plan.models) for plan in self.vertex_edits)
+            lines.append(
+                "geometry risk: vertex edits patch existing BSP records in place; "
+                f"{model_count} model(s) will keep their original topology"
+            )
+
+        if self.replaced_submodels:
+            model_count = sum(len(plan.models) for plan in self.replaced_submodels)
+            uv_counts = _combine_counts(
+                _uv_method_counts(item.replacement_model.surfaces)
+                for plan in self.replaced_submodels
+                for item in plan.models
+            )
+            lines.append(
+                "geometry risk: submodel replacement rebuilds standalone BSP "
+                f"record(s) for {model_count} model(s); PhysicsBSP, VisBSP, "
+                "and skybox replacement remain blocked"
+            )
+            if uv_counts:
+                lines.append(f"replacement UV methods: {_format_counts(uv_counts)}")
+
+        if self.prefab_imports:
+            submodel_count = sum(len(plan.submodels) for plan in self.prefab_imports)
+            lines.append(
+                "geometry risk: prefab import splices source BSP submodel "
+                f"record(s); {submodel_count} BSP model(s) will be added"
+            )
+
+        return lines
+
+
+def _manifest_model_summary(
+    name: str,
+    model: bsp.WorldModelMesh,
+    *,
+    role: str = "",
+) -> Dict[str, Any]:
+    details: Dict[str, Any] = {
+        "name": name,
+        "point_count": len(model.points),
+        "polygon_count": len(model.polygons),
+        "texture_count": len(model.texture_names),
+        "surface_count": len(model.surfaces),
+        "default_uv_surface_count": sum(1 for surface in model.surfaces if _is_default_uv_surface(surface)),
+        "uv_method_counts": _uv_method_counts(model.surfaces),
+        "source_face_count": _source_face_count(model.polygons),
+        "source_format_counts": _source_format_counts(model.polygons),
+        "source_physics_material_counts": _source_metadata_counts(model.polygons, "physics_material"),
+        "source_surface_key_counts": _source_metadata_counts(model.polygons, "surface_key"),
+        "source_surface_flag_counts": _source_surface_flag_counts(model.polygons),
+        "textures": list(model.texture_names[:16]),
+    }
+    if role:
+        details["role"] = role
+    return details
+
+
+def _combine_counts(counts_list: Iterable[Dict[str, int]]) -> Dict[str, int]:
+    combined: Dict[str, int] = {}
+    for counts in counts_list:
+        for key, count in (counts or {}).items():
+            text = str(key or "")
+            if not text:
+                continue
+            combined[text] = combined.get(text, 0) + int(count)
+    return combined
+
+
+def _format_counts(counts: Dict[str, int]) -> str:
+    return ", ".join(
+        f"{key}={counts[key]}"
+        for key in sorted(counts)
+    )
+
+
+def _mesh_import_risk_warnings(plan: mesh_import.MeshBspImportPlan) -> List[str]:
+    warnings: List[str] = []
+    source_format = str(plan.source_format or "").lower()
+    metadata_source = str(plan.metadata_source or "").lower()
+    if source_format in {"gltf", "glb"} and metadata_source == "missing":
+        warnings.append(
+            "generic glTF lacks MM9 DAT metadata; import is additive triangle "
+            "geometry only and cannot be treated as a full-level DAT round trip"
+        )
+    elif source_format in {"gltf", "glb"}:
+        warnings.append(
+            "glTF import creates additive/replacement BSP records only; full-level "
+            "DAT semantics such as PhysicsBSP, VisBSP, portals, and lighting are "
+            "not reconstructed"
+        )
+    for warning in plan.import_warnings:
+        text = str(warning or "").strip()
+        if text and text not in warnings:
+            warnings.append(text)
+    return warnings
+
+
+def _is_default_uv_surface(surface: bsp.Surface) -> bool:
+    return (
+        tuple(round(float(v), 6) for v in surface.uv_o) == (0.0, 0.0, 0.0)
+        and tuple(round(float(v), 6) for v in surface.uv_p) == (1.0, 0.0, 0.0)
+        and tuple(round(float(v), 6) for v in surface.uv_q) == (0.0, 0.0, 1.0)
+    )
+
+
+def _uv_method_counts(surfaces: Sequence[bsp.Surface]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for surface in surfaces:
+        method = str(getattr(surface, "mm9_uv_method", "") or "")
+        if not method:
+            method = "default" if _is_default_uv_surface(surface) else "unknown"
+        counts[method] = counts.get(method, 0) + 1
+    return counts
+
+
+def _source_face_count(polygons: Sequence[bsp.Polygon]) -> int:
+    return sum(1 for polygon in polygons if getattr(polygon, "mm9_source_face", None))
+
+
+def _source_format_counts(polygons: Sequence[bsp.Polygon]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for polygon in polygons:
+        source_face = getattr(polygon, "mm9_source_face", None)
+        if not isinstance(source_face, dict):
+            continue
+        source_format = str(source_face.get("source_format") or "")
+        if not source_format:
+            continue
+        counts[source_format] = counts.get(source_format, 0) + 1
+    return counts
+
+
+def _source_metadata_counts(polygons: Sequence[bsp.Polygon], key: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for polygon in polygons:
+        source_face = getattr(polygon, "mm9_source_face", None)
+        if not isinstance(source_face, dict):
+            continue
+        value = str(source_face.get(key) or "")
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _source_surface_flag_counts(polygons: Sequence[bsp.Polygon]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for polygon in polygons:
+        source_face = getattr(polygon, "mm9_source_face", None)
+        if not isinstance(source_face, dict):
+            continue
+        flags = source_face.get("surface_flags") or []
+        if isinstance(flags, str):
+            flags = [flags]
+        if not isinstance(flags, (list, tuple)):
+            continue
+        for flag in flags:
+            text = str(flag or "")
+            if text:
+                counts[text] = counts.get(text, 0) + 1
+    return counts
 
 
 @dataclass

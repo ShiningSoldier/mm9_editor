@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import math
 import os
-import re
 import struct
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import _path_setup  # noqa: F401
 from core import bsp
-from features.dat_editing import mesh_import
+from features.dat_editing import mesh_import, obj_workflow
 from features.doors import bsp_writer
 
 
@@ -61,17 +58,17 @@ def build_vertex_edit_plan(
     the OBJ coordinates back into DAT space.
     """
     meta_path = meta_path or mesh_import._default_meta_path(obj_path)
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-    _validate_source_identity(source_dat, meta)
+    meta = obj_workflow.load_roundtrip_meta(meta_path, source_dat)
 
     export_to_dat = meta.get("coordinate_system", {}).get("export_to_dat_matrix")
     if not export_to_dat:
         export_to_dat = _identity_matrix()
+    parsed_objects = _parse_obj_preserve_order(obj_path)
     parsed_by_name = {
-        _object_key(obj.name): obj
-        for obj in _parse_obj_preserve_order(obj_path)
+        obj_workflow.object_key(obj.name): obj
+        for obj in parsed_objects
     }
+    parsed_names = [obj.name for obj in parsed_objects]
     wanted = {str(name or "").lower() for name in model_names or []}
     edited: List[VertexEditedModel] = []
 
@@ -82,10 +79,10 @@ def build_vertex_edit_plan(
         source_model = target_bsp.model_by_name(model_name)
         if source_model is None:
             raise ValueError(f"source BSP model {model_name!r} is not present in the target level")
-        object_name = _obj_name(model_name, index)
-        parsed = parsed_by_name.get(_object_key(object_name))
+        object_name = obj_workflow.obj_name(model_name, index)
+        parsed = parsed_by_name.get(obj_workflow.object_key(object_name))
         if parsed is None:
-            raise ValueError(f"OBJ object {object_name!r} for BSP model {model_name!r} was not found")
+            raise ValueError(obj_workflow.missing_obj_message(object_name, model_name, parsed_names))
         edited_model = _edited_model_from_obj(source_model, parsed, model_meta, export_to_dat)
         edited.append(VertexEditedModel(
             name=model_name,
@@ -181,6 +178,8 @@ def patch_model_record(
 
 
 def _parse_obj_preserve_order(path: str) -> List[_ObjObject]:
+    if not os.path.exists(path):
+        raise ValueError(f"OBJ file was not found: {path}")
     objects: List[_ObjObject] = []
     current: Optional[_ObjObject] = None
     global_points: List[Vec3] = []
@@ -201,7 +200,7 @@ def _parse_obj_preserve_order(path: str) -> List[_ObjObject]:
         return current
 
     with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for raw_line in f:
+        for line_number, raw_line in enumerate(f, start=1):
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -213,7 +212,10 @@ def _parse_obj_preserve_order(path: str) -> List[_ObjObject]:
             if head == "v" and len(parts) >= 4:
                 obj = ensure_current()
                 global_index = len(global_points)
-                global_points.append((float(parts[1]), float(parts[2]), float(parts[3])))
+                try:
+                    global_points.append((float(parts[1]), float(parts[2]), float(parts[3])))
+                except ValueError as exc:
+                    raise ValueError(f"{path}:{line_number}: invalid OBJ vertex coordinates") from exc
                 local_index_for_global[global_index] = len(obj.points)
                 object_for_global[global_index] = obj
                 obj.points.append(global_points[-1])
@@ -224,10 +226,16 @@ def _parse_obj_preserve_order(path: str) -> List[_ObjObject]:
                     vertex_text = token.split("/", 1)[0]
                     if not vertex_text:
                         continue
-                    obj_index = int(vertex_text)
+                    try:
+                        obj_index = int(vertex_text)
+                    except ValueError as exc:
+                        raise ValueError(f"{path}:{line_number}: invalid OBJ face vertex {token!r}") from exc
                     global_index = obj_index - 1 if obj_index > 0 else len(global_points) + obj_index
-                    if 0 <= global_index < len(global_points):
-                        face_global.append(global_index)
+                    if not (0 <= global_index < len(global_points)):
+                        raise ValueError(
+                            f"{path}:{line_number}: OBJ face references missing vertex index {obj_index}"
+                        )
+                    face_global.append(global_index)
                 if len(face_global) < 3:
                     continue
                 obj = object_for_global.get(face_global[0], ensure_current())
@@ -280,13 +288,6 @@ def _edited_model_from_obj(
     return edited
 
 
-def _validate_source_identity(source_dat: bytes, meta: Dict[str, object]) -> None:
-    source = meta.get("source", {}) or {}
-    expected = str(source.get("sha256") or "")
-    if expected and hashlib.sha256(source_dat).hexdigest().lower() != expected.lower():
-        raise ValueError("OBJ metadata source checksum does not match the currently loaded DAT")
-
-
 def _validate_topology(source_model: bsp.WorldModelMesh, edited_model: bsp.WorldModelMesh) -> None:
     if len(source_model.points) != len(edited_model.points):
         raise ValueError(f"BSP model {source_model.name!r} point count changed")
@@ -295,15 +296,6 @@ def _validate_topology(source_model: bsp.WorldModelMesh, edited_model: bsp.World
     for index, (source_polygon, edited_polygon) in enumerate(zip(source_model.polygons, edited_model.polygons)):
         if list(source_polygon.vertex_indices) != list(edited_polygon.vertex_indices):
             raise ValueError(f"BSP model {source_model.name!r} polygon {index} vertex list changed")
-
-
-def _obj_name(name: str, index: int) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(name or "")).strip("_")
-    return cleaned or f"WorldModel_{index}"
-
-
-def _object_key(name: str) -> str:
-    return re.sub(r"[^a-z0-9_]+", "_", str(name or "").lower()).strip("_")
 
 
 def _matrix_point(matrix: Sequence[Sequence[float]], point: Vec3) -> Vec3:

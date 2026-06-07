@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import os
-import re
 import struct
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -14,7 +11,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
 from core import bsp
-from features.dat_editing import bsp_compile, mesh_import
+from features.dat_editing import bsp_compile, mesh_import, obj_workflow
 
 
 HEADER_SIZE = struct.calcsize("<11I")
@@ -44,9 +41,7 @@ def build_replace_submodel_plan(
     model_names: Optional[Sequence[str]] = None,
 ) -> ReplaceSubmodelPlan:
     meta_path = meta_path or mesh_import._default_meta_path(obj_path)
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-    _validate_source_identity(source_dat, meta)
+    meta = obj_workflow.load_roundtrip_meta(meta_path, source_dat)
 
     material_to_texture = {
         str(item.get("material_name") or ""): str(item.get("texture_name") or "Default")
@@ -55,10 +50,12 @@ def build_replace_submodel_plan(
     export_to_dat = meta.get("coordinate_system", {}).get("export_to_dat_matrix")
     if not export_to_dat:
         export_to_dat = _identity_matrix()
+    parsed_objects = mesh_import._parse_obj(obj_path)
     parsed_by_name = {
-        _object_key(obj.name): obj
-        for obj in mesh_import._parse_obj(obj_path)
+        obj_workflow.object_key(obj.name): obj
+        for obj in parsed_objects
     }
+    parsed_names = [obj.name for obj in parsed_objects]
     wanted = {str(name or "").lower() for name in model_names or []}
     replacements: List[ReplacedBspModel] = []
 
@@ -70,10 +67,10 @@ def build_replace_submodel_plan(
         if source_model is None:
             raise ValueError(f"source BSP model {model_name!r} is not present in the target level")
         _validate_replace_target(source_model)
-        object_name = _obj_name(model_name, index)
-        parsed = parsed_by_name.get(_object_key(object_name))
+        object_name = obj_workflow.obj_name(model_name, index)
+        parsed = parsed_by_name.get(obj_workflow.object_key(object_name))
         if parsed is None:
-            raise ValueError(f"OBJ object {object_name!r} for BSP model {model_name!r} was not found")
+            raise ValueError(obj_workflow.missing_obj_message(object_name, model_name, parsed_names))
         replacement_model = mesh_import._parsed_obj_to_mesh(
             parsed,
             model_name,
@@ -228,22 +225,6 @@ def _validate_replace_target(model: bsp.WorldModelMesh) -> None:
         raise ValueError(f"skybox model {model.name!r} cannot be replaced by this path")
     if model.raw_start is None or model.raw_end is None:
         raise ValueError(f"BSP model {model.name!r} has no raw byte range")
-
-
-def _validate_source_identity(source_dat: bytes, meta: Dict[str, object]) -> None:
-    source = meta.get("source", {}) or {}
-    expected = str(source.get("sha256") or "")
-    if expected and hashlib.sha256(source_dat).hexdigest().lower() != expected.lower():
-        raise ValueError("OBJ metadata source checksum does not match the currently loaded DAT")
-
-
-def _obj_name(name: str, index: int) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(name or "")).strip("_")
-    return cleaned or f"WorldModel_{index}"
-
-
-def _object_key(name: str) -> str:
-    return re.sub(r"[^a-z0-9_]+", "_", str(name or "").lower()).strip("_")
 
 
 def _identity_matrix() -> List[List[float]]:

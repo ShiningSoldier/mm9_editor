@@ -63,7 +63,7 @@ class SaveDialog(tk.Toplevel):
                     f"({d.stats()['prefab_bsp_models']} BSP model(s))\n")
             if d.stats().get("mesh_imports", 0):
                 dat_text.insert("end",
-                    f"  Blender OBJ imports: {d.stats()['mesh_imports']} "
+                    f"  Blender OBJ/glTF imports: {d.stats()['mesh_imports']} "
                     f"({d.stats()['mesh_bsp_models']} preview BSP model(s))\n")
             if d.stats().get("vertex_edits", 0):
                 dat_text.insert("end",
@@ -75,6 +75,11 @@ class SaveDialog(tk.Toplevel):
                     f"({d.stats()['replaced_bsp_models']} model(s))\n")
             for line in d.ops_summary:
                 dat_text.insert("end", f"  {line}\n")
+            geometry_report = d.geometry_risk_report()
+            if geometry_report:
+                dat_text.insert("end", "  Geometry validation report:\n")
+                for line in geometry_report:
+                    dat_text.insert("end", f"    - {line}\n")
             for warning in d.validation_warnings:
                 dat_text.insert("end", f"  [warn] {warning}\n")
             dat_text.insert("end", "\n")

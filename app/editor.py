@@ -55,6 +55,7 @@ from core import project_io
 from features.doors import clone as door_clone
 from features.doors import links as door_links
 from features.dat_editing import export_roundtrip as dat_roundtrip_export
+from features.dat_editing import gltf_export as dat_gltf_export
 from features.dat_editing import mesh_import as dat_mesh_import
 from features.prefabs import import_static as prefab_import
 from features.prefabs import inspector as prefab_inspector
@@ -93,11 +94,14 @@ def _ask_prefab_collision_options(parent, title: str = "Prefab Collision") -> Op
         font=("Segoe UI", 10, "bold"),
     ).pack(anchor="w")
 
-    options = [
+    options = []
+    if "mesh" in str(title or "").lower():
+        options.append(("Per-face InvisibleBrush slabs", "face_slabs"))
+    options.extend([
         ("Thin InvisibleBrush box (recommended)", "box_approx"),
         ("No collision helper", "none"),
         ("Duplicate prefab geometry (diagnostic)", "invisible_bsp"),
-    ]
+    ])
     for label, value in options:
         tk.Radiobutton(
             outer,
@@ -110,7 +114,7 @@ def _ask_prefab_collision_options(parent, title: str = "Prefab Collision") -> Op
             activebackground="#11151c",
             activeforeground="#ffffff",
             anchor="w",
-        ).pack(anchor="w", pady=(8 if value == "box_approx" else 2, 0))
+        ).pack(anchor="w", pady=(8 if value == "face_slabs" else 2, 0))
 
     row = tk.Frame(outer, bg="#11151c")
     row.pack(fill="x", pady=(12, 0))
@@ -127,7 +131,7 @@ def _ask_prefab_collision_options(parent, title: str = "Prefab Collision") -> Op
     tk.Label(segment_row, text="units", bg="#11151c", fg="#aeb7c2").pack(side="left")
 
     def _sync_state(*_args) -> None:
-        state = "normal" if mode_var.get() == "box_approx" else "disabled"
+        state = "normal" if mode_var.get() in {"box_approx", "face_slabs"} else "disabled"
         entry.configure(state=state)
         segment_entry.configure(state=state)
 
@@ -342,7 +346,9 @@ class EditorApp:
         m_tools.add_separator()
         m_tools.add_command(label="Export DAT Geometry for Blender...",
                             command=self.cmd_export_dat_geometry_roundtrip)
-        m_tools.add_command(label="Import Blender OBJ Geometry...",
+        m_tools.add_command(label="Export DAT Geometry as glTF...",
+                            command=self.cmd_export_dat_geometry_gltf)
+        m_tools.add_command(label="Import Blender OBJ/glTF Geometry...",
                             command=self.cmd_import_blender_obj_geometry)
         m_tools.add_command(label="Import Blender Vertex Edits...",
                             command=self.cmd_import_blender_vertex_edits)
@@ -1101,6 +1107,50 @@ class EditorApp:
         )
 
 
+    def cmd_export_dat_geometry_gltf(self) -> None:
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        L = self.active
+        bsp_world = L.get_bsp()
+        if bsp_world is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+
+        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
+        output_dir = filedialog.askdirectory(
+            title="Export DAT geometry as glTF",
+            initialdir=editor_dir,
+        )
+        if not output_dir:
+            return
+
+        try:
+            source_name = L.display_name or L.rez_vpath or L.path or "level"
+            base_name = os.path.splitext(os.path.basename(source_name))[0] or "level"
+            result = dat_gltf_export.export_gltf_roundtrip(
+                bsp_world,
+                L.source_bytes(),
+                output_dir,
+                source_path=source_name,
+                base_name=base_name,
+                objects=L.materialize().objects if L.world is not None else None,
+            )
+        except Exception as e:
+            messagebox.showerror("glTF export failed", str(e))
+            return
+
+        messagebox.showinfo(
+            "glTF export complete",
+            "Wrote Blender glTF files:\n\n"
+            f"{result.gltf_path}\n"
+            f"{result.bin_path}\n"
+            f"{result.meta_path}\n\n"
+            f"Models: {result.model_count}; polygons: {result.polygon_count}; "
+            f"triangles: {result.triangle_count}",
+        )
+
+
     def cmd_import_blender_obj_geometry(self) -> None:
         if not getattr(self, "active", None):
             messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
@@ -1113,15 +1163,17 @@ class EditorApp:
 
         editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
         obj_path = filedialog.askopenfilename(
-            title="Import Blender OBJ geometry",
+            title="Import Blender geometry",
             initialdir=editor_dir,
-            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")],
+            filetypes=[("Blender geometry", "*.obj *.gltf *.glb"), ("OBJ files", "*.obj"), ("glTF files", "*.gltf *.glb"), ("All files", "*.*")],
         )
         if not obj_path:
             return
         default_meta = dat_mesh_import._default_meta_path(obj_path)
         if os.path.exists(default_meta):
             meta_path = default_meta
+        elif os.path.splitext(obj_path)[1].lower() in {".gltf", ".glb"}:
+            meta_path = ""
         else:
             meta_path = filedialog.askopenfilename(
                 title="Select DAT sidecar metadata",
@@ -1136,7 +1188,7 @@ class EditorApp:
         except Exception:
             default_name = os.path.splitext(os.path.basename(obj_path))[0] or "MeshImport"
         name = simpledialog.askstring(
-            "Import Blender OBJ Geometry",
+            "Import Blender Geometry",
             "New BSP model name prefix:",
             initialvalue=default_name,
             parent=self.root,
@@ -1164,9 +1216,16 @@ class EditorApp:
             collision_segment_length=collision_segment_length,
         )
         try:
-            op.build_plan(L)
+            plan = op.build_plan(L)
         except Exception as e:
             messagebox.showerror("Mesh import failed", str(e))
+            return
+        if not messagebox.askokcancel(
+            "Confirm mesh import",
+            dat_mesh_import.import_summary(plan)
+            + "\n\nCreate this preview import operation?",
+            parent=self.root,
+        ):
             return
 
         L.append_op(op)
@@ -1179,7 +1238,7 @@ class EditorApp:
         self._refresh_after_edit(helper_index)
         messagebox.showinfo(
             "Mesh imported for preview",
-            "Imported OBJ geometry into the editor preview.\n\n"
+            "Imported Blender geometry into the editor preview.\n\n"
             "DAT save uses an experimental minimal BSP compiler. Reopen the "
             "output DAT and validate in-game before relying on it.",
         )

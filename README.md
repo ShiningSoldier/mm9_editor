@@ -135,10 +135,81 @@ To create a preset from a selected object, click **Save as Preset...** in the
 Properties panel. To create or manage presets manually, use the **Presets**
 menu. Presets are stored in `mm9_editor/user_presets.json`.
 
+### Blender Geometry Round Trip
+
+The editor can export level BSP geometry to Blender-friendly OBJ or glTF files
+and import edited geometry back as pending DAT operations. This workflow is
+meant for additive static geometry, collision helpers, vertex edits to existing
+submodels, and small standalone submodel replacements. It is not a full
+Blender-to-DAT level compiler.
+
+1. Open a level from `WORLDS.REZ`.
+2. Choose **Tools -> Export DAT Geometry for Blender...**.
+3. Pick an output folder. The editor writes:
+
+```text
+<level>_geometry.obj
+<level>_geometry.mtl
+<level>_geometry.datmeta.json
+```
+
+The OBJ is the mesh Blender imports. The `.datmeta.json` sidecar is required
+for import; it records the source DAT checksum, coordinate transform, BSP model
+names, texture names, and record metadata that OBJ cannot preserve.
+
+**Tools -> Export DAT Geometry as glTF...** writes `.gltf` plus `.bin`, embeds
+the same MM9 metadata in glTF `extras`, and also writes a
+`.gltf.datmeta.json` fallback sidecar. The Blender geometry import path accepts
+exported `.gltf` and `.glb` files as well as OBJ.
+
+When opening the OBJ in Blender, increase viewport clipping if the level seems
+empty. MM9 levels use large world coordinates, so Blender's default clipping can
+hide otherwise valid geometry. The default export omits skyboxes, `VisBSP`,
+and most helper/world-boundary surfaces so the level does not appear as a solid
+box. Debug/raw exports can still include helper geometry through the lower-level
+export options.
+
+After editing in Blender, export OBJ or glTF and keep the sidecar next to it
+when using exported MM9 geometry. Then use one of the editor import commands:
+
+- **Tools -> Import Blender OBJ/glTF Geometry...** adds mesh data as new static
+  BSP geometry. The import dialog can generate `InvisibleBrush` collision
+  helpers, including box approximation and per-face slab helpers. Mesh objects
+  named or tagged as collision-only become hidden collision helpers.
+- **Tools -> Import Blender Vertex Edits...** patches existing BSP vertices
+  while preserving the original topology. Added or removed faces are rejected.
+- **Tools -> Import Blender Submodel Replacement...** replaces the topology of
+  exported standalone BSP submodels. `PhysicsBSP`, `VisBSP`, and skyboxes are
+  blocked on this path.
+
+For the most reliable import, keep exported object names intact, export mesh
+objects rather than curves, and keep material assignments on faces. If the mesh
+file and sidecar do not match the currently open level, the importer rejects the
+operation with a checksum or missing-object error instead of guessing. Generic
+third-party glTF files can be imported as additive triangle geometry, but they
+do not carry original DAT polygon identity.
+
+Imported geometry appears in the editor preview and can be saved like other
+pending operations. The save preview shows a geometry risk report with visible
+model counts, collision/helper counts, UV methods, source formats, and targeted
+warnings for glTF or unsupported full-level semantics. On save, the editor
+rebuilds or patches the affected BSP records, updates DAT object/render
+offsets, validates the final DAT bytes, and writes the patched `WORLDS.REZ`
+under `mm9_editor/output/`. Reopen the changed level and test in game before
+relying on the result; the mesh-to-BSP compiler is intentionally conservative
+for arbitrary topology.
+
+For the deeper technical reference, source-world findings, PreProcessor
+findings, and future plan, see `docs/dat_editing.md`. Full DEdit
+source-world-to-DAT compilation is intentionally not the default path; the
+current supported approach is conservative DAT patching of additive or
+replacement standalone BSP submodels.
+
 ### Saving
 
-Click **Save...** or press `Ctrl+S`. The save dialog shows pending DAT writes
-and optional RUDE registrations. Committing writes timestamped output such as:
+Click **Save...** or press `Ctrl+S`. The save dialog shows pending DAT writes,
+geometry validation/risk summaries, and optional RUDE registrations. Committing
+writes timestamped output such as:
 
 ```text
 mm9_editor/output/20260510_144200/data/WORLDS.REZ

@@ -1,331 +1,311 @@
-# DAT Geometry Editing Ideas
+# MM9 DAT Geometry Editing
 
-This note collects the current ideas for making MM9 `.DAT` geometry editable,
-including a possible Blender round trip. It is intentionally practical rather
-than aspirational: the editor can already parse DAT v66 object data, render BSP
-geometry, clone physical doors, import static prefab BSP records, and write
-patched DAT output. The missing piece is a safe general workflow for changing
-or adding level geometry without corrupting the LithTech world data that the
-game still expects.
+This document is the current technical reference for editing Might and Magic IX
+compiled world geometry in `mm9_editor`.
 
-## Current Baseline
+The editor supports conservative DAT patching. It does not try to rebuild a
+complete level from arbitrary mesh data. Blender, OBJ, glTF, LTA, and legacy ED
+data are treated as modeling or inspection inputs; `mm9_editor` remains the
+authority for DAT structure, object records, BSP roles, validation, manifests,
+and REZ output.
 
-MM9 world files are LithTech DAT version 66 files with a 44-byte header. The
-important header fields for editing are `ObjectDataPos` and `RenderDataPos`.
-The object section starts at `ObjectDataPos` and the render payload starts at
-`RenderDataPos`; changing BSP payload size means these offsets must be patched.
+## Current Capabilities
 
-The editor already has a narrow BSP writer path:
+- Export DAT BSP geometry for Blender as OBJ/MTL/sidecar or glTF/bin/sidecar.
+- Import OBJ, `.gltf`, or `.glb` as additive standalone BSP submodels.
+- Generate `InvisibleBrush` collision helpers from imported mesh data.
+- Treat mesh objects named or tagged as collision-only as hidden helpers.
+- Patch topology-preserving vertex edits back into existing exported BSP models.
+- Replace topology for standalone non-core BSP submodels.
+- Preserve source-world OPQ, surface, and material hints where available.
+- Validate generated BSP models before preview and final DAT bytes before save.
+- Show a pre-save geometry risk report and write detailed manifest summaries.
 
-- Physical door clones copy existing BSP world-model records from the source
-  DAT, rename them, transform points/normals/bounds/UV projection vectors, and
-  append the copied records before the object section.
-- Static prefab imports use the same raw transform machinery to splice a BSP
-  record from a converted prefab DAT into another level.
-- The writer updates the world-model count, `NextWorldItem` links, object/render
-  offsets, and known terminal-tail cases such as Bootcamp's payload between the
-  last parsed model and `ObjectDataPos`.
-- Pending edits are previewed in the editor by constructing preview BSP data
-  before saving.
-
-This is enough to prove that geometry changes are possible, but only in a
-controlled "copy an existing BSP record and transform it" form.
-
-## What We Can Safely Edit First
-
-The safest near-term target is additive geometry as independent BSP submodels:
-
-1. Create or edit geometry outside the original BSP tree.
-2. Compile or convert it into a self-contained world-model/submodel record.
-3. Add a matching `WorldObject` controller when the game needs one for rendering
-   or logic.
-4. Leave `PhysicsBSP` and `VisBSP` mostly intact unless a specific feature
-   deliberately targets them.
-
-This matches the working prefab-import path and avoids immediately solving the
-hardest problem: rebuilding the entire visibility BSP, leaf/PVS data, and
-runtime render partitioning.
-
-Good first use cases:
-
-- Add decorative static geometry.
-- Add blocking collision helpers, such as generated `InvisibleBrush` boxes.
-- Add copied or edited doors as separate door submodels.
-- Import small rooms, fences, stairs, platforms, or ramps as new submodels.
-- Replace a small standalone submodel when the source record can be preserved
-  structurally.
-
-Riskier use cases:
-
-- Editing `PhysicsBSP` in place.
-- Editing `VisBSP` in place.
-- Deleting or heavily reshaping original world geometry.
-- Rebuilding the whole level from arbitrary meshes.
-- Changing portal/PVS-sensitive structures without understanding the hidden
-  visibility payload.
-
-## Blender Round Trip Shape
-
-OBJ export alone is useful for inspection, but it loses too much information
-for a reliable DAT import. A Blender round trip should use a sidecar metadata
-file alongside OBJ, or use glTF with custom extras if we want richer native
-metadata later.
-
-Recommended first format:
+The deliberately unsupported path is:
 
 ```text
-level_edit/
-  STURMFORDCITY_geometry.obj
-  STURMFORDCITY_geometry.mtl
-  STURMFORDCITY_geometry.datmeta.json
-  textures/
+arbitrary full-level Blender/glTF scene -> complete rebuilt MM9 DAT
 ```
 
-The OBJ carries vertices, faces, UVs, material names, and object/group names.
-The JSON sidecar carries everything OBJ cannot safely preserve:
+That would require rebuilding visibility data, physics BSPs, render/light data,
+world-tree layout, object data, blind object data, and helper semantics. Current
+workflows instead patch constrained parts of an existing compiled DAT.
 
-- Source DAT path and checksum.
-- Coordinate-system transform used for Blender.
-- BSP model names, classes, source record IDs, and roles.
-- Original polygon IDs and source model IDs for imported/exported triangles.
-- Texture names exactly as DAT/REZ paths, not only sanitized material names.
-- UV projection basis (`uv_o`, `uv_p`, `uv_q`) when available.
-- Per-model bounds, translation, flags, `NextWorldItem`, and parse warnings.
-- Whether a model is visible art, physics, visibility, controller geometry,
-  `InvisibleBrush`, helper, sky marker, water marker, or trigger-only.
-- For doors, same-named `Door`/`RotatingDoor` controller fields such as
-  `MoveDir`, `MoveDist`, `RotationPoint`, `RotationAngles`, `DoubleDoorName`,
-  `Locked`, sounds, and `StartOpen`.
+## DAT Structure
 
-The import side should treat the metadata as authoritative. Blender object names
-and materials are editable UI labels, not enough by themselves to reconstruct a
-valid DAT.
+MM9 world files are LithTech DAT version `66` files with a 44-byte header:
 
-## Coordinate And Texture Concerns
+- `uint32 version`
+- `uint32 ObjectDataPos`
+- `uint32 RenderDataPos`
+- eight unused/dummy `uint32` fields
 
-The editor viewport already uses a display-space X-axis flip compared with DAT
-coordinates. Any Blender export/import must make this transform explicit:
+Important editing offsets:
 
-- Document DAT-to-Blender axes in the metadata.
-- Store the transform matrix used at export.
-- Apply the inverse transform on import.
-- Keep an option to export in raw DAT coordinates for debugging.
+- `ObjectDataPos`: start of the WorldObject section.
+- `RenderDataPos`: start of the render payload.
+- `WorldModelTableStart`: start of the BSP world-model table in the pre-object
+  payload.
 
-Texture mapping is a bigger issue than plain OBJ UVs suggest. The existing BSP
-writer transforms surface UV projection vectors so moved/rotated clones retain
-texture alignment. For Blender-authored geometry, we need one of two strategies:
+Compiled level data can include:
 
-1. Accept OBJ UVs and synthesize compatible BSP surface texture data from them.
-2. Preserve original BSP UV projection data only when modifying an existing
-   polygon without changing its topology.
+- BSP world-model records
+- `PhysicsBSP`
+- `VisBSP`
+- world tree layout
+- object data
+- blind object data
+- light grid / lightmaps
+- render data
+- particle blockers
+- helper materials and texture-driven gameplay roles
 
-The first strategy is probably required for new geometry. It should start with
-simple static submodels and be validated on a small prefab-style test DAT before
-we trust it on large shipped levels.
+Changing BSP payload size requires preserving unknown byte ranges and patching
+offsets. The writer re-parses final output and checks header offsets, object
+parsing, BSP parsing, model names, `NextWorldItem` links, record ranges, bounds,
+polygon indices, and required new/replaced BSP names.
 
-## Import Strategies
+## Supported Workflows
 
-### Strategy A: Additive Mesh To New BSP Submodel
+### Export For Blender
 
-This is the recommended first real implementation.
+The editor can export DAT BSP geometry as:
 
-Workflow:
+- OBJ: `.obj`, `.mtl`, `.datmeta.json`
+- glTF: `.gltf`, external `.bin`, `.gltf.datmeta.json`
 
-1. Export selected geometry or an empty placement template to Blender.
-2. User creates a named mesh object, assigns MM9 texture/material names, and
-   exports OBJ plus sidecar.
-3. Importer triangulates faces if needed and builds one or more new BSP
-   submodel records.
-4. Editor creates a matching `WorldObject` controller for each visible submodel.
-5. Optional generated `InvisibleBrush` collision helpers are added as separate
-   hidden BSP/controller pairs.
-6. Save path appends records before the object section, patches offsets and
-   world-model links, and writes a validation manifest.
+OBJ uses the sidecar as the metadata authority. glTF embeds MM9 metadata in
+`extras` and also writes a sidecar for tools that strip custom metadata.
 
-Advantages:
-
-- Builds on existing prefab import and door clone writer.
-- Does not require rewriting original `VisBSP`.
-- Easy to preview and undo.
-- Lower chance of breaking existing doors, portals, and triggers.
+Default export omits skyboxes, `VisBSP`, and most helper/world-boundary surfaces
+so the level is inspectable in Blender. Raw/debug export paths can include those
+models when needed.
 
-Open questions:
+### Additive Mesh Import
 
-- Exact minimum fields required for a brand-new BSP record built from scratch.
-- Whether the game accepts a simple flat polygon-list model without all data
-  that DEdit would normally emit.
-- How to synthesize reliable surface and plane data for arbitrary triangles.
+OBJ, `.gltf`, and `.glb` can be imported as new standalone BSP submodels. The
+importer:
 
-### Strategy B: Edit Existing Submodel In Place
+- loads the file into `GeometryScene`
+- maps materials to DAT texture paths
+- converts UVs into LithTech OPQ projection vectors
+- builds minimal standalone BSP models
+- optionally creates collision helpers
+- creates matching `WorldObject` or hidden `InvisibleBrush` controllers
+- validates the generated models before preview
+- validates final DAT bytes during save
 
-This is a useful second-stage goal for standalone objects such as simple doors,
-grates, fences, or helper brushes.
+Collision modes include no generated collision, diagnostic duplicate BSP, thin
+box approximation, and per-face slab helpers. Explicit collision-only source
+objects can be identified by names such as `Collision*`, `*_Collision`,
+`*_Collider`, and `UCX*`, or by glTF/node metadata role values containing
+collision semantics.
 
-Workflow:
+### Vertex Edits
 
-1. Export one BSP model with original polygon/model IDs.
-2. User edits vertex positions without changing topology.
-3. Importer maps edited vertices back to the original polygon records.
-4. Writer patches only point positions, normals, bounds, polygon centers, and
-   UV projection if necessary.
+Topology-preserving vertex edits can patch existing exported BSP submodels.
+Added faces, removed faces, changed polygon vertex lists, and mismatched source
+metadata are rejected.
 
-Advantages:
+Use this for small shape corrections where the original BSP record layout
+should remain intact.
 
-- Much safer than arbitrary topology replacement.
-- Preserves unknown record fields and payload layout.
-- Good for reshaping misplaced collision or small visible elements.
+### Standalone Submodel Replacement
 
-Limitations:
+Standalone submodel replacement rebuilds selected non-core BSP model records
+with the minimal mesh-to-BSP compiler. It blocks `PhysicsBSP`, `VisBSP`,
+skyboxes, and other system/core geometry.
 
-- No new faces or deleted faces in the first version.
-- Works only where the source model is structurally simple enough.
-- Still needs strong validation against game loading.
+Use this for isolated submodels where replacing the full record is acceptable.
 
-### Strategy C: Replace Submodel Topology
+### Source-World Inspection
 
-This is the natural Blender dream, but it should wait until Strategy A and B are
-stable.
+The editor has read-only parsers for:
 
-Workflow:
+- uncompressed DEdit `.lta`
+- legacy raw `.ed` prefab brush streams
+- zlib-blocked full-level legacy `.ED` wrappers shipped with MM9 by mistake
 
-1. Export a submodel with metadata.
-2. User edits topology freely.
-3. Importer builds a replacement BSP model record from the new mesh.
-4. Writer replaces the old record, patches lengths, links, bounds, and offsets.
+These are diagnostic inputs and regression fixtures, not a full DAT compiler
+backend. They feed `GeometryScene`, preserve authoring metadata, and can export
+inspection-only glTF.
 
-This is feasible only after we can build valid BSP model records from arbitrary
-mesh data. It also needs a plan for collision, visibility, helper roles, and
-texture projection.
+## Shared Geometry Model
 
-### Strategy D: Full World Rebuild
+`GeometryScene` is the format-neutral bridge:
 
-This means creating an entire level in Blender and converting it into a valid
-MM9 DAT. It is the least feasible near-term path.
+- `GeometryScene`: source path, materials, models, metadata
+- `GeometryModel`: name, points, faces, extras
+- `GeometryFace`: vertex indices, material name, optional UVs, extras
+- `GeometryMaterial`: material name, DAT texture name, extras
 
-A full rebuild would need:
+The preferred import route is:
 
-- Valid DAT v66 header and object section.
-- World properties, start points, lights, triggers, sounds, and gameplay
-  objects.
-- Render BSP data.
-- Physics BSP data.
-- Visibility BSP/PVS data or a safe fallback the game accepts.
-- Correct texture, light, portal, and helper semantics.
+```text
+source file -> GeometryScene -> mesh_import -> bsp_compile -> DAT patch writer
+```
 
-The more practical version of this idea is to create a small converted prefab or
-mini-world and import it into an existing world as an additive submodel.
+Keeping OBJ, glTF, LTA, and ED on the same model prevents format-specific drift.
 
-## Validation Rules
+## Texture Projection
 
-Every DAT geometry writer should run validation before saving:
+LithTech BSP surfaces do not store ordinary per-corner UVs. They store OPQ
+projection vectors:
 
-- Header offsets are internally consistent.
-- Object section round-trips and all object property type codes are preserved.
-- World-model count and `NextWorldItem` chain are valid.
-- Known terminal-tail payloads are preserved and shifted correctly.
-- BSP model names do not collide unless the operation is an intentional replace.
-- Matching visible BSP and `WorldObject` controller names are present when
-  required.
-- Door controller pairs preserve `DoubleDoorName` consistency.
-- `PhysicsBSP` and `VisBSP` are not modified unless the operation explicitly
-  allows it.
-- Textures resolve case-insensitively through `TEXTURES.REZ` or are reported.
-- Helper roles such as sky, trigger, water, AI rails, invisible/fire-through,
-  and sound-only are classified instead of accidentally becoming visible art.
-- Output DAT can be re-opened by the editor and pass a second parse/preview.
+- `uv_o`: projection origin
+- `uv_p`: U projection vector
+- `uv_q`: V projection vector
 
-For game validation, start with a copy of a small test level and a tiny imported
-mesh. Then verify:
+The importer prefers a Python port of DEdit's `ConvertUVToOPQ` math. If that is
+not possible, it falls back to least-squares fitting and then to a safe default
+projection. Source-world faces can carry original OPQ values; when present, the
+importer preserves them and tags the method as `source_opq`.
 
-- Level loads from `WORLDS.REZ`.
-- New geometry renders.
-- Collision behaves as intended.
-- Existing doors/triggers/transitions still work.
-- Old saves are not used as proof of DAT behavior, because saves contain active
-  runtime object records and may not fully reload changed DAT data.
+Manifests and save-preview reports summarize UV provenance with
+`uv_method_counts`, including `source_opq`, `dedit_opq`, `least_squares`,
+`default`, `collision_box`, `collision_helper`, and `unknown`.
 
-## Suggested Implementation Stages
+## Coordinates
 
-### Stage 1: Export Metadata For Round Trip
+DAT coordinates and Blender-facing export space differ by an X-axis flip.
+Export metadata records the exact transform matrix. Import applies the inverse
+transform before generating DAT geometry.
 
-Extend current OBJ export with a `.datmeta.json` sidecar. Include enough source
-identity to map Blender meshes back to DAT/BSP records and enough material data
-to avoid losing MM9 texture names.
+MM9 levels use large world coordinates. Blender may require a larger viewport
+clipping distance to show exported geometry.
 
-Exit criteria:
+## Validation And Manifests
 
-- Exported OBJ can be imported into Blender for editing.
-- Re-import can identify unchanged objects and source BSP records.
-- No DAT writing is required in this stage.
+Before preview:
 
-### Stage 2: Re-import As Pending Additive Static BSP
+- mesh imports validate generated standalone BSP models
+- degenerate polygons and invalid UV/OPQ data fail early
+- duplicate or unsafe BSP names are rejected
 
-Build a command that imports a Blender OBJ object as a pending static BSP import,
-similar to `Import Static Prefab BSP`.
+Before save:
 
-Exit criteria:
+- the save preview shows a geometry risk report
+- collision helpers are checked for hidden `InvisibleBrush` controllers
+- risky paths warn that `PhysicsBSP`, `VisBSP`, portals, and lighting are not
+  rebuilt
+- generic glTF without MM9 metadata is called out as additive triangle geometry,
+  not a full-level DAT round trip
 
-- User can place or keep the imported mesh in editor preview.
-- Saving writes a new visible BSP/controller pair.
-- The output DAT reopens in the editor and loads in the game.
+After writing bytes:
 
-### Stage 3: Generated Collision Helpers
+- the DAT header, object section, BSP section, record order, model links, model
+  names, bounds, and polygon indices are validated
+- warnings and geometry summaries are written to `manifest.json`
+- changed DAT entries are written under `changed_entries/` for inspection
 
-Allow the user to mark imported Blender objects as visible, collision-only, or
-visible-plus-generated-collision.
+Game validation should use a fresh load from the patched `WORLDS.REZ`. Old save
+files can contain active runtime object state and may not fully reload changed
+DAT data.
 
-Exit criteria:
+## Source-World And PreProcessor Findings
 
-- Imported visible geometry can have a matching `InvisibleBrush` collision
-  helper.
-- Helper BSP preview shows the generated collision separately.
-- Save manifest reports visible and collision submodel counts.
+The LithTech source tree contains:
 
-### Stage 4: Restricted In-Place Vertex Editing
+```text
+C:\lithtech\lithtech\tools\DEdit
+C:\lithtech\lithtech\tools\shared\world
+C:\lithtech\lithtech\tools\PreProcessor
+```
 
-Support editing vertices of selected simple existing submodels without changing
-topology.
+Current/newer DEdit source-world formats include `.lta`, `.ltc`, and `.tbw`.
+Legacy MM9 assets include raw `.ed` prefabs under `C:\lithtech\PreFabs` and
+full-level `.ED` wrappers under `mm9_data\WORLDS`. Legacy `.ed` files begin
+with version `1249`; full-level wrappers add an info string, block tables, and
+contiguous zlib chunks.
 
-Exit criteria:
+Source-world brush polygons can preserve plane data, OPQ vectors, physics
+material, surface key, and surface flags. These are useful authoring hints and
+regression fixtures.
 
-- Original record structure is preserved.
-- Bounds, centers, normals, and texture data are updated.
-- Validation blocks topology changes until replacement is supported.
+The available `tools\PreProcessor` is not an MM9-compatible compiler path:
 
-### Stage 5: Arbitrary Submodel Replacement
+- no PreProcessor build target, project file, or built binary is present
+- the original flow was `DEdit -> winpacker -> packer DLL`
+- `PreProcPackerImpl.cpp` is a plugin entry point, not a standalone compiler
+- the current `Packer_PC\PCWorldPacker.cpp` hardcodes DAT version `85`
+- v85 output includes object, blind-object, light-grid, physics, particle, and
+  render offsets plus a world offset, unlike MM9 v66's 44-byte header
+- its objects-only save path rejects files whose version is not v85
 
-Build a real mesh-to-BSP-record compiler for replacing a selected submodel's
-topology.
+`C:\lithtech\lithtech\handoff.md` independently supports the same conclusion:
+MM9 appears to be a custom MMIX LithTech Talon / LithTech 2.x-era branch, not a
+native Jupiter game. Direct MM9 v66 loading into the Jupiter v85 tree is not
+viable.
 
-Exit criteria:
+## Implementation Map
 
-- Replacement records are created from mesh data, not copied from an existing
-  source record.
-- Small standalone submodels load and render correctly in-game.
-- The editor can roll back the operation from project metadata.
+- `features/dat_editing/export_roundtrip.py`: OBJ/MTL/sidecar export
+- `features/dat_editing/gltf_export.py`: glTF and inspection glTF export
+- `features/dat_editing/gltf_import.py`: glTF/GLB import into `GeometryScene`
+- `features/dat_editing/mesh_import.py`: OBJ/glTF import planning and
+  `GeometryScene` to BSP mesh conversion
+- `features/dat_editing/bsp_compile.py`: minimal standalone BSP model compiler
+- `features/dat_editing/vertex_edit.py`: topology-preserving vertex edits
+- `features/dat_editing/replace_submodel.py`: standalone submodel replacement
+- `features/dat_editing/output_validation.py`: post-write DAT validation
+- `features/dat_editing/source_world.py`: read-only LTA parser
+- `features/dat_editing/legacy_ed.py`: read-only legacy ED scanner
+- `features/dat_editing/uv_projection.py`: DEdit-style UV-to-OPQ math
+- `features/dat_editing/geometry_scene.py`: format-neutral scene model
 
-### Stage 6: Output DAT Validation
+Important coverage includes OBJ/glTF export/import, source checksum checks,
+UV-to-OPQ projection, mesh import collision helpers, vertex edits, submodel
+replacement, DAT output validation, LTA fixtures, legacy ED fixtures, and
+source-prefab golden tests.
 
-Validate the final DAT bytes produced by geometry-editing operations before
-committing them into the output REZ.
+## Future Plan
 
-Exit criteria:
+### 1. In-Game Validation Harness
 
-- Header offsets, object-section parsing, and BSP parsing are checked after
-  the final bytes are assembled.
-- Required imported/replaced BSP model names are verified in the output.
-- Invalid world-model links, ranges, bounds, polygon indices, and unexpected
-  object-count changes fail the save before a patched REZ is written.
-- Non-fatal parser quirks are surfaced as validation warnings in the save
-  manifest.
+Automate a small set of fresh-load checks against patched output archives:
 
-## Design Recommendation
+- open patched `WORLDS.REZ` in a controlled game or compatibility runtime
+- verify required BSP model names are present
+- verify new visible geometry and collision helpers are reachable/inspectable
+- capture load failures and geometry warnings in a save manifest companion log
 
-Do not start with "Blender to full DAT." Start with "Blender mesh to additive
-BSP submodel." This is the shortest path that can actually change geometry in
-the shipped game while reusing the editor's working save machinery.
+### 2. Improve Physics And Collision Fidelity
 
-The important architectural choice is to keep DAT/BSP metadata outside Blender
-in a sidecar file and keep imports conservative. Blender should be the modeling
-surface; `mm9_editor` should remain the authority for DAT structure, object
-properties, BSP roles, validation, save manifests, and REZ installation.
+Keep additive helper collision as the supported path, but make it more useful:
+
+- improve face-slab generation for stairs, ramps, and thin vertical surfaces
+- classify helper material roles more completely
+- add targeted diagnostics for geometry that probably needs collision but lacks
+  helper models
+- continue avoiding implicit `PhysicsBSP` rebuilds until the format is better
+  understood
+
+### 3. Broaden Source-World Metadata Use
+
+Use LTA/ED data as authoring hints without making it a compiler backend:
+
+- preserve more texture flags and helper semantics
+- compare source-world OPQ and compiled DAT OPQ across more fixtures
+- export richer inspection glTF for source prefabs and legacy ED wrappers
+- use source metadata to improve import warnings and material classification
+
+### 4. Mature glTF As The Preferred Interchange
+
+OBJ remains stable, but glTF should become the richer round-trip format:
+
+- support more safe glTF transform combinations
+- improve diagnostics for generic third-party glTF files
+- preserve more MM9 metadata in `extras`
+- keep sidecar fallback for Blender or tools that strip metadata
+
+### 5. Optional MMIX/Talon Compiler Research
+
+Continue this outside the editor save path:
+
+- search specifically for an MMIX/Talon-era v66 world packer
+- if found, compile a tiny LTA fixture and compare output against shipped MM9
+  DAT structure
+- if not found, derive a v66 writer only from parser knowledge and golden DAT
+  comparisons
+- integrate only as an optional diagnostic backend after golden tests prove
+  compatibility
