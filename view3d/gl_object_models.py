@@ -296,6 +296,7 @@ def _object_model_filename(obj, actor_visuals: Optional[Dict[str, object]] = Non
         actor_visuals,
         str(getattr(obj, "type_str", "") or ""),
         str(obj.get("Name") or ""),
+        str(obj.get("ScriptName") or ""),
     )
     if actor_visual and actor_visual.model:
         return actor_visual.model
@@ -330,6 +331,7 @@ def _object_skin_names(obj, actor_visuals: Optional[Dict[str, object]] = None) -
         actor_visuals,
         str(getattr(obj, "type_str", "") or ""),
         str(obj.get("Name") or ""),
+        str(obj.get("ScriptName") or ""),
     )
     if actor_visual:
         if hasattr(actor_visual, "all_skins"):
@@ -1059,6 +1061,7 @@ def build_instances(
             actor_visuals,
             str(getattr(obj, "type_str", "") or ""),
             str(obj.get("Name") or ""),
+            str(obj.get("ScriptName") or ""),
         ) is not None
         if not filename and not has_actor_visual:
             continue
@@ -1103,6 +1106,7 @@ def build_render_items(
             actor_visuals,
             str(getattr(obj, "type_str", "") or ""),
             str(obj.get("Name") or ""),
+            str(obj.get("ScriptName") or ""),
         ) is not None
         if not filename and not has_actor_visual:
             continue

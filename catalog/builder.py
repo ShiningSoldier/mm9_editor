@@ -598,6 +598,7 @@ def _json_actor_visuals(actor_visuals: Optional[Dict[str, ActorVisual]]) -> Dict
 def build_catalog(
     worlds_dir: str,
     actor_visuals: Optional[Dict[str, ActorVisual]] = None,
+    actor_visual_rules: Optional[Iterable[object]] = None,
     object_lto_dump: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Scan all *.DAT files in *worlds_dir* and return a catalog dict.
@@ -635,7 +636,12 @@ def build_catalog(
                 entry["property_names"].add(p.name)
 
             actor_visual = resolve_actor_visual(
-                actor_visuals, cls, str(obj.get("Name") or ""))
+                actor_visuals,
+                cls,
+                str(obj.get("Name") or ""),
+                str(obj.get("ScriptName") or ""),
+                actor_visual_rules,
+            )
             fname = actor_visual.model if actor_visual else obj.get("Filename")
             if isinstance(fname, str) and fname.endswith((".abc", ".ABC", ".lta", ".ltb")):
                 fname_key = fname.lower()
@@ -650,6 +656,11 @@ def build_catalog(
                     sources = entry.setdefault("actor_visual_sources", set())
                     sources.add(
                         f"{actor_visual.source_file}:{actor_visual.number}"
+                        + (
+                            ":editor-preview-only"
+                            if actor_visual.editor_preview_only
+                            else ""
+                        )
                     )
                 fnentry = filenames.setdefault(fname_key, {
                     "uses": 0, "classes": set(), "levels": set()
@@ -734,6 +745,7 @@ def build_catalog_from_rez(
     object_lto_dump_path: Optional[str] = None,
     object_lto_path: Optional[str] = None,
     object_lto_helper_path: Optional[str] = None,
+    actor_visual_rules: Optional[Iterable[object]] = None,
 ) -> Dict[str, Any]:
     """Build the catalog by extracting .DAT levels from *worlds_rez_path*.
 
@@ -807,6 +819,7 @@ def build_catalog_from_rez(
         return build_catalog(
             tmpdir,
             actor_visuals=actor_visuals,
+            actor_visual_rules=actor_visual_rules,
             object_lto_dump=object_lto_dump,
         )
     finally:

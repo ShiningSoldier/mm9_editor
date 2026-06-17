@@ -10,29 +10,35 @@ from __future__ import annotations
 import csv
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import StringIO
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 _TABLE_FILENAMES = ("ACTOR.TXT", "MONSTERS.TXT")
 _GENERIC_TYPE_PREFIXES = {"peasant"}
 @dataclass(frozen=True)
-class ActorVisualQuirk:
-    lookup_key: str
+class ActorVisualRule:
     source_file: str
     source_row: str
     comment: str
+    lookup_key: str = ""
     type_str: str = ""
     object_name: str = ""
     object_name_prefix: str = ""
+    script_name: str = ""
+    editor_preview_only: bool = False
     fallback_model: str = ""
     fallback_skins: Tuple[str, ...] = ()
     fallback_accessory_skins: Tuple[str, ...] = ()
     fallback_monster_name: str = ""
     fallback_type_picture: str = ""
 
-    def matches(self, type_str: str, object_name: str) -> bool:
+    @property
+    def visual_key(self) -> str:
+        return self.lookup_key or _row_lookup_key(self.source_file, self.source_row)
+
+    def matches(self, type_str: str, object_name: str, script_name: str = "") -> bool:
         if self.type_str and self.type_str != type_str:
             return False
         if self.object_name and self.object_name != object_name:
@@ -41,14 +47,20 @@ class ActorVisualQuirk:
             self.object_name_prefix
         ):
             return False
+        if self.script_name and _script_key(self.script_name) != _script_key(
+            script_name
+        ):
+            return False
         return True
 
 
-_ACTOR_VISUAL_QUIRKS: Tuple[ActorVisualQuirk, ...] = (
-    ActorVisualQuirk(
+ActorVisualQuirk = ActorVisualRule
+
+
+_ACTOR_VISUAL_RULES: Tuple[ActorVisualRule, ...] = (
+    ActorVisualRule(
         type_str="Honk",
         object_name="Accountant",
-        lookup_key="elderhonkhonkworshipper2b",
         source_file="MONSTERS.TXT",
         source_row="217",
         comment=(
@@ -56,72 +68,86 @@ _ACTOR_VISUAL_QUIRKS: Tuple[ActorVisualQuirk, ...] = (
             "appearance matches ElderHonkFemale / Honk Worshipper2 B."
         ),
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
         type_str="Honk",
-        lookup_key="honkhonkworshippera",
         source_file="MONSTERS.TXT",
         source_row="186",
         comment="Base Honk class maps to Honk Worshipper A.",
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
         type_str="Honk2",
-        lookup_key="honkhonkworshipper2a",
         source_file="MONSTERS.TXT",
         source_row="216",
         comment="Honk2 class maps to Honk Worshipper2 A.",
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
         type_str="ElderHonk",
-        lookup_key="elderhonkhonkworshipperb",
         source_file="MONSTERS.TXT",
         source_row="187",
         comment="ElderHonk class maps to Elder Honk / Honk Worshipper B.",
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
         type_str="ElderHonkFemale",
-        lookup_key="elderhonkhonkworshipper2b",
         source_file="MONSTERS.TXT",
         source_row="217",
         comment="ElderHonkFemale class maps to Elder Honk / Honk Worshipper2 B.",
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
         type_str="HonkSeer",
-        lookup_key="honkseerhonkworshipperc",
         source_file="MONSTERS.TXT",
         source_row="188",
         comment="HonkSeer class maps to Honk Seer / Honk Worshipper C.",
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
         type_str="TheGreatHonk",
-        lookup_key="thegreathonkgodspet",
         source_file="MONSTERS.TXT",
         source_row="262",
         comment="TheGreatHonk class maps to The Great Honk / God's Pet.",
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
+        type_str="SuccEbora",
+        script_name=r"scripts\eborabath.scr",
+        source_file="MONSTERS.TXT",
+        source_row="301",
+        comment=(
+            "Ebora bath script uses the Ebora actor-table row even when the "
+            "DAT class/name carries a placeholder appearance."
+        ),
+    ),
+    ActorVisualRule(
+        type_str="Concubine",
+        script_name=r"scripts\eboraconcubine.scr",
+        source_file="MONSTERS.TXT",
+        source_row="302",
+        comment=(
+            "Ebora concubine script uses the Siren-skinned Ebora row for a "
+            "deterministic editor preview."
+        ),
+    ),
+    ActorVisualRule(
         type_str="LizardOrc",
         object_name_prefix="LoMMOrc",
-        lookup_key="lommorc",
         source_file="MONSTERS.TXT",
         source_row="304",
+        editor_preview_only=True,
         comment=(
-            "LoMM Orc is a stock-MM9 LizardOrc placement variant using "
-            "ported Legends of Might and Magic Orc assets."
+            "LoMM Orc appended-row variant is an editor preview mapping only; "
+            "stock MM9 LizardOrc runtime does not select row 304."
         ),
         fallback_model="models\\OrcMM9.abc",
         fallback_skins=("skins\\Orc.dtx",),
         fallback_monster_name="LoMM Orc",
         fallback_type_picture="LoMM Orc",
     ),
-    ActorVisualQuirk(
+    ActorVisualRule(
         type_str="LizardOrcMage",
         object_name_prefix="LoMMOrc",
-        lookup_key="lommorc",
         source_file="MONSTERS.TXT",
         source_row="304",
+        editor_preview_only=True,
         comment=(
-            "LoMM Orc mage-class experiment uses a fresh actor row while "
-            "retaining the stock LizardOrcMage object class/behavior."
+            "LoMM Orc mage-class appended-row experiment is editor-preview-only; "
+            "the stock LizardOrcMage runtime selects row 191."
         ),
         fallback_model="models\\OrcMM9.abc",
         fallback_skins=("skins\\Orc.dtx",),
@@ -129,6 +155,8 @@ _ACTOR_VISUAL_QUIRKS: Tuple[ActorVisualQuirk, ...] = (
         fallback_type_picture="LoMM Orc",
     ),
 )
+
+_ACTOR_VISUAL_QUIRKS = _ACTOR_VISUAL_RULES
 
 
 @dataclass(frozen=True)
@@ -142,6 +170,7 @@ class ActorVisual:
     monster_name: str
     type_picture: str
     quirk: str = ""
+    editor_preview_only: bool = False
 
     def to_json(self) -> Dict[str, object]:
         return {
@@ -153,6 +182,7 @@ class ActorVisual:
             "monster_name": self.monster_name,
             "type_picture": self.type_picture,
             "quirk": self.quirk,
+            "editor_preview_only": self.editor_preview_only,
         }
 
     @property
@@ -178,11 +208,25 @@ class ActorVisual:
             monster_name=str(data.get("monster_name", "") or ""),
             type_picture=str(data.get("type_picture", "") or ""),
             quirk=str(data.get("quirk", "") or ""),
+            editor_preview_only=bool(data.get("editor_preview_only", False)),
         )
 
 
 def _token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _row_lookup_key(source_file: str, source_row: str) -> str:
+    return f"row{_token(source_file)}{_token(source_row)}"
+
+
+def _script_key(script_name: str) -> str:
+    value = str(script_name or "").replace("/", "\\").strip().strip('"').lower()
+    if value.startswith("scripts\\"):
+        value = value[len("scripts\\"):]
+    if value.endswith(".scr"):
+        value = value[:-4]
+    return value
 
 
 def _strip_instance_suffix(value: str) -> str:
@@ -241,7 +285,12 @@ def _row_keys(monster_name: str, type_picture: str) -> List[str]:
     return out
 
 
-def object_actor_keys(type_str: str, object_name: str = "") -> List[str]:
+def object_actor_keys(
+    type_str: str,
+    object_name: str = "",
+    script_name: str = "",
+    visual_rules: Optional[Iterable[object]] = None,
+) -> List[str]:
     out: List[str] = []
     seen = set()
 
@@ -251,7 +300,7 @@ def object_actor_keys(type_str: str, object_name: str = "") -> List[str]:
             out.append(key)
             seen.add(key)
 
-    for key in _quirk_visual_keys(type_str, object_name):
+    for key in _quirk_visual_keys(type_str, object_name, script_name, visual_rules):
         add(key)
 
     for raw in (type_str, _strip_instance_suffix(object_name)):
@@ -264,16 +313,18 @@ def resolve_actor_visual(
     visual_index: Optional[Dict[str, object]],
     type_str: str,
     object_name: str = "",
+    script_name: str = "",
+    visual_rules: Optional[Iterable[object]] = None,
 ) -> Optional[ActorVisual]:
     visual_index = visual_index or {}
 
-    for quirk in _matching_quirks(type_str, object_name):
-        visual = _visual_from_index(visual_index, quirk.lookup_key)
+    for quirk in _matching_quirks(type_str, object_name, script_name, visual_rules):
+        visual = _visual_from_index(visual_index, quirk.visual_key)
         if visual is not None:
-            return visual
+            return _apply_visual_rule(visual, quirk)
         if quirk.fallback_model:
             return ActorVisual(
-                key=quirk.lookup_key,
+                key=quirk.visual_key,
                 model=quirk.fallback_model,
                 skins=quirk.fallback_skins,
                 accessory_skins=quirk.fallback_accessory_skins,
@@ -286,17 +337,35 @@ def resolve_actor_visual(
                     quirk.fallback_type_picture or quirk.lookup_key
                 ),
                 quirk=(
-                    f"{quirk.source_file}:{quirk.source_row}: "
-                    f"{quirk.comment}"
+                    _visual_rule_note(quirk)
                 ),
+                editor_preview_only=quirk.editor_preview_only,
             )
 
-    for key in object_actor_keys(type_str, object_name):
+    for key in object_actor_keys(type_str, object_name, script_name, visual_rules):
         visual = _visual_from_index(visual_index, key)
         if visual is not None:
             return visual
 
     return None
+
+
+def _apply_visual_rule(visual: ActorVisual, rule: ActorVisualRule) -> ActorVisual:
+    return replace(
+        visual,
+        key=_token(rule.visual_key),
+        quirk=_visual_rule_note(rule),
+        editor_preview_only=rule.editor_preview_only,
+    )
+
+
+def _visual_rule_note(rule: ActorVisualRule) -> str:
+    note = f"{rule.source_file}:{rule.source_row}: {rule.comment}"
+    if rule.script_name:
+        note = f"{note} ScriptName={rule.script_name}"
+    if rule.editor_preview_only:
+        note = f"{note} [editor-preview-only]"
+    return note
 
 
 def _visual_from_index(
@@ -314,31 +383,74 @@ def _visual_from_index(
     return None
 
 
-def _matching_quirks(type_str: str, object_name: str) -> List[ActorVisualQuirk]:
+def _matching_quirks(
+    type_str: str,
+    object_name: str,
+    script_name: str = "",
+    visual_rules: Optional[Iterable[object]] = None,
+) -> List[ActorVisualQuirk]:
     return [
         quirk
-        for quirk in _ACTOR_VISUAL_QUIRKS
-        if quirk.matches(type_str, object_name)
+        for quirk in _all_visual_rules(visual_rules)
+        if quirk.matches(type_str, object_name, script_name)
     ]
 
-def _quirk_visual_keys(type_str: str, object_name: str) -> List[str]:
+def _quirk_visual_keys(
+    type_str: str,
+    object_name: str,
+    script_name: str = "",
+    visual_rules: Optional[Iterable[object]] = None,
+) -> List[str]:
     return [
-        quirk.lookup_key
-        for quirk in _matching_quirks(type_str, object_name)
+        quirk.visual_key
+        for quirk in _matching_quirks(
+            type_str, object_name, script_name, visual_rules)
     ]
 
 
-def _quirk_for_key(key: str) -> str:
-    for quirk in _ACTOR_VISUAL_QUIRKS:
-        if quirk.lookup_key == key:
-            return (
-                f"{quirk.source_file}:{quirk.source_row}: {quirk.comment}"
-            )
-    return ""
+def _all_visual_rules(
+    extra_rules: Optional[Iterable[object]] = None,
+) -> Tuple[ActorVisualRule, ...]:
+    if not extra_rules:
+        return _ACTOR_VISUAL_RULES
+    return _ACTOR_VISUAL_RULES + tuple(
+        _coerce_visual_rule(rule) for rule in extra_rules
+    )
+
+
+def _coerce_visual_rule(rule: object) -> ActorVisualRule:
+    if isinstance(rule, ActorVisualRule):
+        return rule
+    if not isinstance(rule, dict):
+        raise TypeError(f"unsupported actor visual rule: {type(rule).__name__}")
+    allowed = {
+        "source_file",
+        "source_row",
+        "comment",
+        "lookup_key",
+        "type_str",
+        "object_name",
+        "object_name_prefix",
+        "script_name",
+        "editor_preview_only",
+        "fallback_model",
+        "fallback_skins",
+        "fallback_accessory_skins",
+        "fallback_monster_name",
+        "fallback_type_picture",
+    }
+    data: Dict[str, Any] = {
+        key: value for key, value in rule.items() if key in allowed
+    }
+    for tuple_key in ("fallback_skins", "fallback_accessory_skins"):
+        if tuple_key in data:
+            data[tuple_key] = tuple(str(item) for item in (data[tuple_key] or ()))
+    return ActorVisualRule(**data)
 
 
 def parse_actor_visual_tables(
     tables: Iterable[Tuple[str, str]],
+    visual_rules: Optional[Iterable[object]] = None,
 ) -> Dict[str, ActorVisual]:
     """Parse ACTOR.TXT/MONSTERS.TXT contents into runtime model lookups.
 
@@ -373,7 +485,9 @@ def parse_actor_visual_tables(
             )
             monster_name = str(row.get("Monster Name", "") or "").strip()
             type_picture = str(row.get("Type/Picture", "") or "").strip()
-            keys = _row_keys(monster_name, type_picture)
+            row_number = str(row.get("Number", "") or "").strip()
+            keys = [_row_lookup_key(source_file, row_number)]
+            keys.extend(_row_keys(monster_name, type_picture))
 
             monster_key = _token(monster_name)
             if monster_key and name_counts.get(monster_key, 0) == 1:
@@ -388,15 +502,26 @@ def parse_actor_visual_tables(
                     skins=skins,
                     accessory_skins=accessory_skins,
                     source_file=source_file,
-                    number=str(row.get("Number", "") or "").strip(),
+                    number=row_number,
                     monster_name=monster_name,
                     type_picture=type_picture,
-                    quirk=_quirk_for_key(key),
+                    quirk=_quirk_for_key_from_rules(key, visual_rules),
                 )
 
         merged.update(local)
 
     return merged
+
+
+def _quirk_for_key_from_rules(
+    key: str,
+    visual_rules: Optional[Iterable[object]] = None,
+) -> str:
+    token_key = _token(key)
+    for quirk in _all_visual_rules(visual_rules):
+        if _token(quirk.visual_key) == token_key:
+            return _visual_rule_note(quirk)
+    return ""
 
 
 def load_actor_visuals_from_data_dir(data_dir: str) -> Dict[str, ActorVisual]:

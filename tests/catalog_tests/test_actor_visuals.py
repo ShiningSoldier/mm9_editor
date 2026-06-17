@@ -116,6 +116,9 @@ class ActorVisualTests(unittest.TestCase):
         self.assertEqual(visual.number, "304")
         self.assertEqual(visual.model, "models\\OrcMM9.abc")
         self.assertEqual(visual.skins, ("skins\\Orc.dtx",))
+        self.assertTrue(visual.editor_preview_only)
+        self.assertTrue(visual.to_json()["editor_preview_only"])
+        self.assertIn("editor-preview-only", visual.quirk)
 
     def test_lomm_orc_lizardorc_variant_has_editor_fallback_visual(self):
         visuals = parse_actor_visual_tables([
@@ -133,6 +136,7 @@ class ActorVisualTests(unittest.TestCase):
         self.assertEqual(visual.model, "models\\OrcMM9.abc")
         self.assertEqual(visual.skins, ("skins\\Orc.dtx",))
         self.assertIn("LoMM Orc", visual.quirk)
+        self.assertTrue(visual.editor_preview_only)
 
     def test_lomm_orc_lizardorc_mage_variant_prefers_appended_row(self):
         visuals = parse_actor_visual_tables([
@@ -150,6 +154,85 @@ class ActorVisualTests(unittest.TestCase):
         self.assertEqual(visual.number, "304")
         self.assertEqual(visual.model, "models\\OrcMM9.abc")
         self.assertEqual(visual.skins, ("skins\\Orc.dtx",))
+        self.assertTrue(visual.editor_preview_only)
+
+    def test_script_rule_maps_placeholder_actor_to_explicit_row(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "301\tEbora\tebora.abc\tebora.dtx\t\t\tEbora\n",
+            ),
+        ])
+
+        visual = resolve_actor_visual(
+            visuals,
+            "SuccEbora",
+            "BathingGuest7",
+            r"scripts\eborabath.scr",
+        )
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.number, "301")
+        self.assertEqual(visual.model, "models\\ebora.abc")
+        self.assertEqual(visual.skins, ("skins\\ebora.dtx",))
+        self.assertFalse(visual.editor_preview_only)
+        self.assertIn("eborabath.scr", visual.quirk)
+
+    def test_explicit_row_rule_preserves_accessory_skins(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "304\tLoMM Orc\tOrcMM9.abc\tOrc.dtx\tOrcAxe.dtx\tOrcShield.dtx\tLoMM Orc\n",
+            ),
+        ])
+
+        visual = resolve_actor_visual(visuals, "LizardOrcMage", "LoMMOrc1")
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.skins, ("skins\\Orc.dtx",))
+        self.assertEqual(
+            visual.accessory_skins,
+            ("skins\\OrcAxe.dtx", "skins\\OrcShield.dtx"),
+        )
+        self.assertEqual(
+            visual.all_skins,
+            ("skins\\Orc.dtx", "skins\\OrcAxe.dtx", "skins\\OrcShield.dtx"),
+        )
+
+    def test_custom_visual_rule_dict_maps_imported_variant_to_row(self):
+        custom_rule = {
+            "type_str": "LizardOrcMage",
+            "object_name": "ImportedOrcCaptain",
+            "script_name": r"scripts\mm9ed_debug_actor.scr",
+            "source_file": "MONSTERS.TXT",
+            "source_row": "304",
+            "comment": "Local import test mapping for LoMM Orc Captain.",
+            "editor_preview_only": True,
+        }
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "304\tLoMM Orc Captain\tOrcMM9.abc\tOrc.dtx\tOrcAxe.dtx\t\tLoMM Orc Captain\n",
+            ),
+        ], visual_rules=[custom_rule])
+
+        visual = resolve_actor_visual(
+            visuals,
+            "LizardOrcMage",
+            "ImportedOrcCaptain",
+            r"scripts\MM9ED_DEBUG_ACTOR.scr",
+            visual_rules=[custom_rule],
+        )
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.number, "304")
+        self.assertEqual(visual.model, "models\\OrcMM9.abc")
+        self.assertEqual(visual.all_skins, ("skins\\Orc.dtx", "skins\\OrcAxe.dtx"))
+        self.assertTrue(visual.editor_preview_only)
+        self.assertIn("Local import test mapping", visual.quirk)
 
     def test_catalog_uses_actor_visual_model_before_dat_filename(self):
         visuals = parse_actor_visual_tables([
@@ -176,6 +259,36 @@ class ActorVisualTests(unittest.TestCase):
         self.assertNotIn("models\\sheep.abc", cat["classes"]["RedWolf"]["filenames"])
         self.assertIn("skins\\wolfred.dtx", cat["classes"]["RedWolf"]["skins"])
         self.assertIn("models\\wolf.abc", cat["filenames"])
+
+    def test_catalog_marks_preview_only_actor_visual_sources(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "304\tLoMM Orc\tOrcMM9.abc\tOrc.dtx\t\t\tLoMM Orc\n",
+            ),
+        ])
+        obj = patcher.WorldObject("LizardOrcMage", [
+            patcher.Property("Name", 0, 0, "LoMMOrc1"),
+            patcher.Property("Pos", 1, 0, (0.0, 0.0, 0.0)),
+            patcher.Property("Filename", 0, 0, "models\\lizardorc.abc"),
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "BOOTCAMP.DAT")
+            patcher.World(
+                patcher.Header(patcher.DAT_VERSION, patcher.HEADER_SIZE, patcher.HEADER_SIZE, (0,) * 8),
+                b"",
+                [obj],
+                b"",
+            ).save(path)
+
+            cat = catalog.build_catalog(tmp, actor_visuals=visuals)
+
+        self.assertIn(
+            "MONSTERS.TXT:304:editor-preview-only",
+            cat["classes"]["LizardOrcMage"]["actor_visual_sources"],
+        )
 
     # ------------------------------------------------------------------
     # Regression: class name must take priority over a misleading object

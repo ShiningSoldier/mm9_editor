@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Create a reversible MM9 output batch for testing the LoMM Orc.
 
-The patch keeps stock MM9 object classes intact.  It ports the LoMM Orc as a
-`LizardOrc` placement variant by adding the LoMM model/skin assets and
-appending matching actor-table rows.
+The patch can either add editor-visible metadata rows or replace the runtime
+row used by the stock Lizard-Orc Mage class.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import _path_setup  # noqa: F401
+import actor_table_patch
 import mm9_patch as patcher
 from core.rezmgr import RezReader, RezWriter, _restype_for_filename
 
@@ -59,40 +59,9 @@ def _read_rez_text(rez_path: str, vpath: str) -> str:
         return reader.extract_to_bytes(vpath).decode("latin-1")
 
 
-def _line_ending(text: str) -> str:
-    return "\r\n" if "\r\n" in text else "\n"
-
-
-def _header_and_source_cells(
-    text: str,
-    source_row_number: int,
-) -> Tuple[List[str], List[str]]:
-    lines = text.splitlines()
-    if not lines:
-        raise ValueError("empty actor table")
-    header = lines[0].split("\t")
-    source_prefix = f"{source_row_number}\t"
-    for line in lines[1:]:
-        if line.startswith(source_prefix):
-            cells = line.split("\t")
-            if len(cells) < len(header):
-                cells.extend([""] * (len(header) - len(cells)))
-            if len(cells) > len(header):
-                cells = cells[:len(header)]
-            return header, cells
-    raise ValueError(f"could not find source actor-table row {source_row_number}")
-
-
-def _make_lomm_orc_cells(
-    header: List[str],
-    source_cells: List[str],
-    table_mode: str,
-) -> List[str]:
-    cells = list(source_cells)
-    if len(cells) < len(header):
-        cells.extend([""] * (len(header) - len(cells)))
+def _orc_field_overrides(table_mode: str) -> Dict[str, str]:
     if table_mode == TABLE_MODE_MAGE_SLOT:
-        updates = {
+        return {
             "ModelName": ORC_MODEL_NAME,
             "SkinName": ORC_SKIN_NAME,
             "SkinName2": "",
@@ -102,88 +71,32 @@ def _make_lomm_orc_cells(
             "FootRadius": "500",
             "IsMonster": "1",
         }
-    else:
-        base_name = (
-            "LizardOrcMage"
-            if table_mode == TABLE_MODE_APPEND_MAGE
-            else "LizardOrc"
-        )
-        updates = {
-            "Number": str(ORC_ROW_NUMBER),
-            "Monster Name": ORC_ROW_NAME,
-            "ModelName": ORC_MODEL_NAME,
-            "SkinName": ORC_SKIN_NAME,
-            "SkinName2": "",
-            "SkinName3": "",
-            "Type/Picture": ORC_ROW_NAME,
-            "LVL": "4",
-            "HP": "80",
-            "EXP": "64",
-            "WalkVelocity": "125",
-            "RunVelocity": "265",
-            "LungeVelocity": "215",
-            "AlertRadius": "1200",
-            "Accuracy": "2",
-            "ScriptName": "baserange.scr",
-            "FootSound": "orcstep",
-            "FootRadius": "500",
-            "BaseName": base_name,
-            "IsMonster": "1",
-        }
-    header_index = {key: index for index, key in enumerate(header)}
-    for key, value in updates.items():
-        index = header_index.get(key)
-        if index is not None:
-            cells[index] = value
-    return cells[:len(header)]
-
-
-def _line_is_lomm_orc_row(line: str) -> bool:
-    stripped = line.rstrip("\r\n")
-    if not stripped.strip():
-        return False
-    cells = stripped.split("\t")
-    if cells and cells[0].strip() == str(ORC_ROW_NUMBER):
-        return True
-    return len(cells) > 1 and cells[1].strip().lower() == ORC_ROW_NAME.lower()
-
-
-def _upsert_orc_row(
-    text: str,
-    source_row_number: int = 189,
-    table_mode: str = TABLE_MODE_APPEND,
-) -> Tuple[str, str]:
-    header, source_cells = _header_and_source_cells(text, source_row_number)
-    cells = _make_lomm_orc_cells(header, source_cells, table_mode)
-    newline = _line_ending(text)
-    row_text = "\t".join(cells)
-
-    if table_mode == TABLE_MODE_MAGE_SLOT:
-        lines = text.splitlines(keepends=True)
-        source_prefix = f"{source_row_number}\t"
-        for index, line in enumerate(lines):
-            if line.startswith(source_prefix):
-                suffix = "\r\n" if line.endswith("\r\n") else (
-                    "\n" if line.endswith("\n") else newline
-                )
-                lines[index] = row_text + suffix
-                return "".join(lines), "replaced"
-        raise ValueError(f"could not replace actor-table row {source_row_number}")
-
-    lines = text.splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        if _line_is_lomm_orc_row(line):
-            suffix = "\r\n" if line.endswith("\r\n") else (
-                "\n" if line.endswith("\n") else newline
-            )
-            lines[index] = row_text + suffix
-            return "".join(lines), "updated"
-
-    if text.endswith(newline):
-        return text + row_text + newline, "added"
-    if text.endswith("\n"):
-        return text + row_text + "\n", "added"
-    return text + newline + row_text + newline, "added"
+    base_name = (
+        "LizardOrcMage"
+        if table_mode == TABLE_MODE_APPEND_MAGE
+        else "LizardOrc"
+    )
+    return {
+        "Monster Name": ORC_ROW_NAME,
+        "ModelName": ORC_MODEL_NAME,
+        "SkinName": ORC_SKIN_NAME,
+        "SkinName2": "",
+        "SkinName3": "",
+        "Type/Picture": ORC_ROW_NAME,
+        "LVL": "4",
+        "HP": "80",
+        "EXP": "64",
+        "WalkVelocity": "125",
+        "RunVelocity": "265",
+        "LungeVelocity": "215",
+        "AlertRadius": "1200",
+        "Accuracy": "2",
+        "ScriptName": "baserange.scr",
+        "FootSound": "orcstep",
+        "FootRadius": "500",
+        "BaseName": base_name,
+        "IsMonster": "1",
+    }
 
 
 def _patched_orc_model(data: bytes) -> Tuple[bytes, Dict[str, int]]:
@@ -339,15 +252,42 @@ def build_lomm_orc_patch(
         if table_mode in (TABLE_MODE_APPEND_MAGE, TABLE_MODE_MAGE_SLOT)
         else 189
     )
-    actor_text, actor_row_action = _upsert_orc_row(
-        _read_rez_text(data_rez, "DATA/ACTOR"),
-        source_row_number=source_row_number,
-        table_mode=table_mode,
+    target_row_number = (
+        ORC_MAGE_SLOT_ROW_NUMBER
+        if table_mode == TABLE_MODE_MAGE_SLOT
+        else ORC_ROW_NUMBER
     )
-    monsters_text, monsters_row_action = _upsert_orc_row(
+    table_strategy = (
+        actor_table_patch.STRATEGY_REPLACE_ROW
+        if table_mode == TABLE_MODE_MAGE_SLOT
+        else actor_table_patch.STRATEGY_APPEND_ROW
+    )
+    runtime_class = _runtime_class_for_table_mode(table_mode)
+    runtime_row_number = (
+        ORC_MAGE_SLOT_ROW_NUMBER
+        if runtime_class == "LizardOrcMage"
+        else 189
+    )
+    row_overrides = _orc_field_overrides(table_mode)
+    actor_text, actor_row_patch = actor_table_patch.patch_actor_table_text(
+        _read_rez_text(data_rez, "DATA/ACTOR"),
+        table_name="ACTOR.TXT",
+        strategy=table_strategy,
+        source_row=str(source_row_number),
+        target_row=str(target_row_number),
+        field_overrides=row_overrides,
+        target_class=runtime_class,
+        runtime_row=str(runtime_row_number),
+    )
+    monsters_text, monsters_row_patch = actor_table_patch.patch_actor_table_text(
         _read_rez_text(data_rez, "DATA/MONSTERS"),
-        source_row_number=source_row_number,
-        table_mode=table_mode,
+        table_name="MONSTERS.TXT",
+        strategy=table_strategy,
+        source_row=str(source_row_number),
+        target_row=str(target_row_number),
+        field_overrides=row_overrides,
+        target_class=runtime_class,
+        runtime_row=str(runtime_row_number),
     )
     patched_model, animation_replacements = _patched_orc_model(_read_file(orc_model))
 
@@ -403,6 +343,20 @@ def build_lomm_orc_patch(
         "entries": [ORC_SKIN_VPATH],
     })
 
+    editor_preview_only = table_strategy != actor_table_patch.STRATEGY_REPLACE_ROW
+    visual_mapping_rules = [{
+        "type_str": runtime_class,
+        "object_name_prefix": "LoMMOrc",
+        "script_name": "",
+        "source_file": "MONSTERS.TXT",
+        "source_row": str(target_row_number),
+        "comment": (
+            "LoMM Orc explicit visual mapping generated by port_lomm_orc.py; "
+            f"row strategy is {table_strategy}."
+        ),
+        "editor_preview_only": editor_preview_only,
+    }]
+
     manifest = {
         "version": 1,
         "created_at": datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -412,15 +366,29 @@ def build_lomm_orc_patch(
         "mm9_root": os.path.abspath(mm9_root),
         "lomm_root": os.path.abspath(lomm_root),
         "archives": archives,
-        "lomm_orc": {
-            "row_number": (
-                ORC_MAGE_SLOT_ROW_NUMBER
-                if table_mode == TABLE_MODE_MAGE_SLOT
-                else ORC_ROW_NUMBER
+        "visual_mapping_rules": visual_mapping_rules,
+        "actor_table_patch": {
+            "strategy": table_strategy,
+            "runtime_visibility": actor_table_patch.classify_runtime_visibility(
+                table_strategy,
+                actor_row_patch.selected_by_runtime_class
+                or monsters_row_patch.selected_by_runtime_class,
             ),
-            "actor_row_action": actor_row_action,
-            "monsters_row_action": monsters_row_action,
-            "runtime_class": _runtime_class_for_table_mode(table_mode),
+            "target_class": runtime_class,
+            "runtime_row": str(runtime_row_number),
+            "source_row": str(source_row_number),
+            "target_row": str(target_row_number),
+            "field_overrides": row_overrides,
+            "row_patches": [
+                actor_row_patch.__dict__,
+                monsters_row_patch.__dict__,
+            ],
+        },
+        "lomm_orc": {
+            "row_number": target_row_number,
+            "actor_row_action": actor_row_patch.action,
+            "monsters_row_action": monsters_row_patch.action,
+            "runtime_class": runtime_class,
             "preset_name": "LoMM Orc",
             "model": ORC_MODEL_VPATH,
             "source_model": "MODELS/ORC",

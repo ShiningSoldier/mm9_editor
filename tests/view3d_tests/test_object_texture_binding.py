@@ -436,7 +436,7 @@ class ObjectTextureBindingTests(unittest.TestCase):
     def test_ebora_script_model_overrides_honk_placeholder(self):
         ebora = FakeObject(
             "SuccEbora",
-            Name="Ebora",
+            Name="BathingGuest7",
             Filename="models\\Honk.abc",
             ScriptName="scripts\\eborabath.scr",
         )

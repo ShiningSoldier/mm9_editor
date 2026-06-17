@@ -74,6 +74,26 @@ hats or weapons:
 Any new creature workflow must preserve `SkinName`, `SkinName2`, and
 `SkinName3` so the viewport and game-facing data do not lose attachments.
 
+The editor must not treat class/name visual quirks as proof of game behavior.
+The LoMM Orc row-304 experiment showed this clearly:
+
+- `DATA.REZ` contained new `ACTOR` / `MONSTERS` row 304 for `LoMM Orc`.
+- The placed world object was class `LizardOrcMage`, name `LoMMOrc1`, and
+  `Filename = models\OrcMM9.abc`.
+- The editor preview selected row 304 through the `LoMMOrc*` visual quirk and
+  rendered the LoMM Orc.
+- In game, the same object rendered and behaved as the stock Lizard-Orc Mage.
+
+So the game appears to bind existing actor classes to their known runtime table
+row. For `LizardOrcMage`, that row is 191. A placed actor's DAT `Name` and
+`Filename`, and an appended actor row with `BaseName = LizardOrcMage`, are not
+enough to redirect the game to row 304.
+
+For an existing MM9 class, a runtime visual/behavior change therefore requires
+editing the row the class actually uses, not merely adding a new row. Adding a
+new row is still useful for editor preview metadata and future class work, but
+it is not by itself a game-visible creature variant.
+
 ## Existing Unplaced-Class Proof
 
 `LizardOrcMage` proves that a valid class can exist in MM9 without appearing in
@@ -95,33 +115,50 @@ A generated `LizardOrcMage` placement works visually in game. This is the best
 current model for first-class editor support of classes that are valid in MM9
 but absent from shipped worlds.
 
+Important follow-up from the LoMM Orc tests:
+
+- Stock `LizardOrcMage` selects row 191 at runtime.
+- Replacing row 191 is the meaningful existing-class experiment.
+- Appending row 304 while keeping class `LizardOrcMage` does not affect runtime
+  selection.
+
 ## LoMM Creature Porting Levels
 
 There are three increasingly difficult ways to bring LoMM creatures into MM9.
 
-### 1. Reuse an Existing MM9 Class
+### 1. Replace/Reskin an Existing MM9 Class Row
 
 This is the safest path.
 
-Use an existing MM9 monster class whose behavior is close enough, then override
-or extend its actor-table visual data and copy LoMM assets into MM9 archives.
+Use an existing MM9 monster class whose behavior is close enough, then modify
+the actor/monster table row that the game already uses for that class. Copy
+LoMM assets into MM9 archives under the names referenced by that row.
 
 Expected work:
 
 - Pick an MM9 host class, such as `LizardOrc`, `HalfOrcSoldier`, or another
   compatible monster.
 - Copy LoMM model, skin, and sound assets into MM9 archives.
-- Add or edit actor/monster table rows to point at the LoMM assets.
-- Place the existing MM9 class with the new row/visual mapping.
-- Add documented visual quirks only if class/name/table context cannot resolve
-  the intended row automatically.
+- Edit the host class's existing actor/monster table row to point at the LoMM
+  assets.
+- Place the existing MM9 class.
+- Verify both editor preview and in-game spawning.
 
 This approach does not require changing `object.lto`, because the runtime class
-already exists.
+already exists. It also does not produce a new independent creature. Every use
+of that host row/class will become the replacement creature while the patch is
+installed.
+
+Known result:
+
+- Replacing stock MM9 Dwarf model/skin archive entries with LoMM Dwarf assets
+  worked in game after loose extracted archive folders were removed from the
+  live `DATA` directory.
 
 ### 2. Add a New Variant Under an Existing MM9 Base Class
 
-This is plausible but requires `object.lto` changes.
+This is the first path that can produce a new independent creature variant.
+It likely requires `object.lto` changes and possibly object-code changes.
 
 The new class would inherit from a compatible MM9 class and mostly reuse its
 behavior, while exposing a distinct class name for placement and table lookup.
@@ -133,9 +170,14 @@ Expected work:
 - Keep property definitions minimal and inherited where possible.
 - Add actor/monster table rows for the new class or variant.
 - Copy LoMM assets.
-- Confirm DEdit/editor class visibility and in-game spawning.
+- Confirm DEdit/editor class visibility.
+- Confirm the game selects the new row, not the inherited/parent row.
+- Confirm in-game spawning.
 
-This path depends on being able to rebuild or patch `object.lto` safely.
+This path depends on being able to rebuild or patch `object.lto` safely. It is
+not yet proven that adding only a `ClassDef` is sufficient. The row lookup may
+live in the class constructor or other server-side code inside `object.lto`, so
+new-class work must validate the class-to-table-row binding explicitly.
 
 ### 3. Port a Completely New Creature Behavior
 
@@ -192,6 +234,16 @@ Known useful findings:
 - Some LoMM character models use multi-weight vertex records.
 - The editor viewport may need model-parser support beyond old fixed-stride
   assumptions, even when the game runtime displays the model correctly.
+- The LoMM Dwarf and MM9 Dwarf are structurally close enough that replacing the
+  stock MM9 Dwarf model/skin archive entries with LoMM assets is a good
+  compatibility smoke test.
+- The LoMM Orc model can be loaded by the editor after animation-name patching,
+  but the row-304 append experiment did not prove game compatibility because
+  the game continued to use stock `LizardOrcMage` row 191.
+- MM9's live `DATA` directory is mounted as a loose resource root by `rez.txt`.
+  Extracted archive folders such as `DATA\WORLDS`, `DATA\MODELS`,
+  `DATA\SKINS`, or `DATA\SCRIPTS` can shadow or interfere with patched REZ
+  archives. Keep the live install clean when testing patches.
 
 For each candidate creature, audit:
 
@@ -204,36 +256,45 @@ For each candidate creature, audit:
 
 ## Candidate Implementation Plan
 
-1. Start with existing-class creature reskins.
+1. Keep existing-class replacement as the baseline smoke test.
    - Pick one LoMM creature with compatible MM9 behavior.
    - Copy its model/skin/sound assets into MM9 archives through the existing
      transactional archive flow.
-   - Add or modify actor-table data in a reversible output patch.
-   - Place it as an existing MM9 class and verify editor preview plus in-game
-     spawning.
+   - Modify the existing actor/monster row used by the host class, or replace
+     the exact asset names referenced by that row.
+   - Place the host MM9 class and verify editor preview plus in-game spawning.
+   - Treat appended rows as metadata only unless a new runtime class selects
+     them.
 
 2. Add a creature import/audit command.
    - Input: LoMM install, creature asset names, target MM9 class, target table
      row strategy.
    - Output: asset-copy plan, missing-asset report, suggested actor row,
      suggested catalog/visual mapping, and validation checklist.
+   - Report whether the strategy is a true runtime replacement, editor-only
+     preview mapping, or experimental new-class mapping.
 
-3. Make actor-table patching first-class.
+3. Keep actor-table patching reversible and explicit.
    - Read and write `ACTOR.TXT` / `MONSTERS.TXT` from `DATA.REZ`.
    - Preserve table formatting where possible.
    - Write patched `DATA.REZ` into an output batch, never directly into the live
      install.
    - Include restore-compatible install manifests.
+   - Record source row, target row, and whether the row is known to be selected
+     by the runtime class.
 
 4. Add optional visual mapping rules.
    - Support explicit class/name/script-to-row mappings for imported variants.
    - Keep quirks data-driven and commented with source rows.
    - Preserve primary and accessory skins.
+   - Mark mappings that are editor-preview-only so they are not mistaken for
+     game runtime behavior.
 
-5. Only then attempt a new `object.lto` class.
+5. Attempt a new `object.lto` class only after the replacement path is stable.
    - Choose a variant that can inherit from an existing MM9 monster.
    - Produce a minimal experimental class definition.
    - Validate the dumped class list before placing it.
+   - Verify which actor/monster row the new runtime class selects.
    - Place it in a throwaway test level.
    - Run an in-game smoke test from a temporary patched install.
 
@@ -254,7 +315,8 @@ For every imported creature:
 
 ## Recommended Next Step
 
-Do not begin with a new `object.lto` class. Begin with a LoMM creature that can
-reuse an existing MM9 class, and build the missing actor-table patching and
-asset-audit workflow around that. Once that path is boring and reversible, use
-the same validation harness for experimental `object.lto` class additions.
+Use existing-class replacement, not appended-row variants, for the next game
+smoke tests. For the LoMM Orc, the meaningful test is replacing row 191 or the
+row-191 asset references used by `LizardOrcMage`. If that works, the remaining
+problem is not asset compatibility; it is creating a new runtime class that can
+select a new actor/monster row without sacrificing the stock class.
