@@ -262,6 +262,20 @@ python mm9_rezmgr.py list "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
 python catalog.py build-from-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
 ```
 
+The catalog builder can also attach a generated `object.lto` class dump for
+object-schema work and include valid classes that do not appear in shipped
+levels:
+
+```sh
+python catalog.py build-from-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ" ^
+  --object-lto "C:\Path\To\Might and Magic 9\data\object.lto"
+```
+
+If the native dump helper is unavailable or cannot load `object.lto`, the
+builder logs a warning and still produces the current DAT-scanned catalog.
+Classes found only in `object.lto` are added with `0` instances and use
+inherited `PropDef` defaults for their first-placement template.
+
 Some lower-level patcher utilities still accept ordinary DAT/RUDE file paths
 for reverse-engineering work, but the GUI editor workflow is REZ-only.
 

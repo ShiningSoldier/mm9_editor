@@ -1,0 +1,43 @@
+; MM9 editor actor debug probe.
+;
+; Attach this to an object through its ScriptName property, for example:
+; scripts\MM9ED_DEBUG_ACTOR.scr
+;
+; It logs proof that the object script started, plus the object's position and
+; current animation. If the object is invisible but these messages appear, the
+; object exists in-game and the failure is probably model/skin/render related.
+
+#hobject hMe
+#number nX
+#number nY
+#number nZ
+#number nAnim
+#string sAnim
+
+:Report
+	GetMyHandle hMe
+
+	DebugOut MM9ED_DEBUG_ACTOR report
+	CPrint MM9ED_DEBUG_ACTOR report
+	RollOverText 300, 1, 3000, 2000
+
+	GetPos hMe,nX,nY,nZ
+	DebugOut nX
+	DebugOut nY
+	DebugOut nZ
+
+	GetCurrAnim hMe nAnim
+	GetAnimName hMe nAnim sAnim
+	DebugOut sAnim
+	CPrint sAnim
+
+	Wait 0, 2, Report
+	Exit
+
+:Main
+	DebugOut MM9ED_DEBUG_ACTOR main
+	CPrint MM9ED_DEBUG_ACTOR main
+	RollOverText 300, 1, 5000, 3000
+
+	Wait 0, 0.5, Report
+	Exit

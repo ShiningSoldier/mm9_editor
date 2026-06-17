@@ -331,8 +331,13 @@ def _object_skin_names(obj, actor_visuals: Optional[Dict[str, object]] = None) -
         str(getattr(obj, "type_str", "") or ""),
         str(obj.get("Name") or ""),
     )
-    if actor_visual and actor_visual.skins:
-        return list(actor_visual.skins)
+    if actor_visual:
+        if hasattr(actor_visual, "all_skins"):
+            skins = list(actor_visual.all_skins)
+        else:
+            skins = list(getattr(actor_visual, "skins", ()) or ())
+        if skins:
+            return skins
 
     return _split_skin_names(str(obj.get("Skin") or ""))
 

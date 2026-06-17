@@ -62,6 +62,7 @@ import argparse
 import glob
 import json
 import os
+import subprocess
 import struct
 import sys
 from typing import Any, Dict, Iterable, List, Optional, Set
@@ -78,6 +79,246 @@ import mm9_patch as patcher
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CATALOG_PATH = os.path.join(HERE, "data", "catalog.json")
+OBJECT_LTO_DUMP_SCHEMA = "mm9_editor.object_lto_dump.v1"
+DEFAULT_OBJECT_LTO_DUMP_HELPER = os.path.join(
+    os.path.dirname(HERE),
+    "tools",
+    "object_lto_dump",
+    "bin",
+    "object_lto_dump.exe",
+)
+
+
+class ObjectLtoDumpError(RuntimeError):
+    """Raised when an object.lto dump cannot be loaded or generated."""
+
+
+def _normalize_object_lto_dump(dump: Dict[str, Any],
+                               source_path: Optional[str] = None) -> Dict[str, Any]:
+    """Return the catalog-facing object.lto layer for a helper JSON dump."""
+    if dump.get("schema") != OBJECT_LTO_DUMP_SCHEMA:
+        raise ObjectLtoDumpError(
+            f"unsupported object.lto dump schema: {dump.get('schema')!r}")
+
+    classes: Dict[str, Any] = {}
+    for item in dump.get("classes", []):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if isinstance(name, str) and name:
+            classes[name] = item
+
+    return {
+        "available": True,
+        "schema": dump.get("schema"),
+        "source_dump": os.path.abspath(source_path) if source_path else None,
+        "object_lto_path": dump.get("object_lto_path"),
+        "server_object_version": dump.get("server_object_version"),
+        "class_count": int(dump.get("class_count") or len(classes)),
+        "classes": classes,
+    }
+
+
+def load_object_lto_dump(path: str) -> Dict[str, Any]:
+    """Load a JSON dump produced by ``tools/object_lto_dump``."""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            dump = json.load(f)
+    except Exception as exc:
+        raise ObjectLtoDumpError(
+            f"could not read object.lto dump {path!r}: {exc}") from exc
+    return _normalize_object_lto_dump(dump, source_path=path)
+
+
+def generate_object_lto_dump(
+    object_lto_path: str,
+    helper_path: Optional[str] = None,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """Run the native helper and return a normalized object.lto dump layer."""
+    helper = helper_path or DEFAULT_OBJECT_LTO_DUMP_HELPER
+    if not os.path.isfile(helper):
+        raise ObjectLtoDumpError(f"object.lto dump helper not found: {helper}")
+    if not os.path.isfile(object_lto_path):
+        raise ObjectLtoDumpError(f"object.lto not found: {object_lto_path}")
+
+    try:
+        proc = subprocess.run(
+            [helper, object_lto_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        raise ObjectLtoDumpError(
+            f"failed to run object.lto dump helper {helper!r}: {exc}") from exc
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        if detail:
+            raise ObjectLtoDumpError(
+                f"object.lto dump helper failed with exit code "
+                f"{proc.returncode}: {detail}")
+        raise ObjectLtoDumpError(
+            f"object.lto dump helper failed with exit code {proc.returncode}")
+
+    try:
+        dump = json.loads(proc.stdout)
+    except Exception as exc:
+        raise ObjectLtoDumpError(
+            f"object.lto dump helper did not emit valid JSON: {exc}") from exc
+    return _normalize_object_lto_dump(dump)
+
+
+def resolve_object_lto_dump(
+    object_lto_dump_path: Optional[str] = None,
+    object_lto_path: Optional[str] = None,
+    helper_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Load an existing dump if present, otherwise try to generate one.
+
+    The caller may catch :class:`ObjectLtoDumpError` to fall back to the current
+    DAT-only catalog build.
+    """
+    dump_error: Optional[ObjectLtoDumpError] = None
+    if object_lto_dump_path:
+        if os.path.isfile(object_lto_dump_path):
+            try:
+                return load_object_lto_dump(object_lto_dump_path)
+            except ObjectLtoDumpError as exc:
+                dump_error = exc
+        else:
+            dump_error = ObjectLtoDumpError(
+                f"object.lto dump file not found: {object_lto_dump_path}")
+
+    if object_lto_path:
+        try:
+            return generate_object_lto_dump(
+                object_lto_path,
+                helper_path=helper_path,
+            )
+        except ObjectLtoDumpError as exc:
+            if dump_error is not None:
+                raise ObjectLtoDumpError(
+                    f"{dump_error}; also failed to generate a fresh dump: {exc}"
+                ) from exc
+            raise
+
+    if dump_error is not None:
+        raise dump_error
+
+    return None
+
+
+def _object_lto_default_value(prop: Dict[str, Any]) -> Any:
+    """Return a DAT-serializer-friendly value for a dumped PropDef."""
+    type_id = prop.get("type_id")
+    value = prop.get("default_value")
+
+    if type_id == 0:
+        return "" if value is None else str(value)
+    if type_id in (1, 2):
+        parts = value if isinstance(value, (list, tuple)) else []
+        return [float(parts[i]) if i < len(parts) else 0.0 for i in range(3)]
+    if type_id == 3:
+        return float(value or 0.0)
+    if type_id == 5:
+        return bool(value)
+    if type_id in (4, 6):
+        return int(value or 0)
+    if type_id == 7:
+        parts = value if isinstance(value, (list, tuple)) else []
+        return [float(parts[i]) if i < len(parts) else 0.0 for i in range(3)] + [0.0]
+    return value
+
+
+def _object_lto_template_properties(class_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    props: List[Dict[str, Any]] = []
+    for prop in class_info.get("properties", []) or []:
+        if not isinstance(prop, dict):
+            continue
+        name = prop.get("name")
+        type_id = prop.get("type_id")
+        if not isinstance(name, str) or not name:
+            continue
+        if not isinstance(type_id, int) or not (0 <= type_id <= 7):
+            continue
+        props.append({
+            "name": name,
+            "code": type_id,
+            "flags": int(prop.get("flags") or 0),
+            "value": _object_lto_default_value(prop),
+        })
+    return props
+
+
+def _object_lto_filenames(template_props: Iterable[Dict[str, Any]]) -> Set[str]:
+    filenames: Set[str] = set()
+    for prop in template_props:
+        name = str(prop.get("name") or "")
+        value = prop.get("value")
+        if name.lower() in {"filename", "skin", "skin2", "skin3"}:
+            if isinstance(value, str) and value:
+                filenames.add(value.lower())
+    return filenames
+
+
+def _merge_object_lto_classes(classes: Dict[str, Dict[str, Any]],
+                              object_lto_dump: Optional[Dict[str, Any]]) -> None:
+    """Merge visible, runtime object.lto classes into the catalog class map."""
+    if not object_lto_dump:
+        return
+
+    for class_name, class_info in sorted(
+        (object_lto_dump.get("classes") or {}).items()
+    ):
+        if not isinstance(class_info, dict):
+            continue
+
+        existing = classes.get(class_name)
+        if existing is not None:
+            existing["source"] = "object.lto+dat"
+            existing["object_lto"] = {
+                "parent": class_info.get("parent"),
+                "hierarchy": class_info.get("hierarchy") or [],
+                "flags": int(class_info.get("flags") or 0),
+                "flag_names": class_info.get("flag_names") or [],
+                "hidden_in_dedit": bool(class_info.get("hidden_in_dedit")),
+                "runtime_loadable": bool(class_info.get("runtime_loadable", True)),
+            }
+            continue
+
+        if class_info.get("hidden_in_dedit"):
+            continue
+        if class_info.get("runtime_loadable") is False:
+            continue
+
+        template_props = _object_lto_template_properties(class_info)
+        property_names = {str(p["name"]) for p in template_props}
+        filenames = _object_lto_filenames(template_props)
+        classes[class_name] = {
+            "instance_count": 0,
+            "levels": [],
+            "category": categorize(class_name, property_names, filenames),
+            "property_names": sorted(property_names),
+            "filenames": sorted(filenames),
+            "source": "object.lto",
+            "object_lto": {
+                "parent": class_info.get("parent"),
+                "hierarchy": class_info.get("hierarchy") or [],
+                "flags": int(class_info.get("flags") or 0),
+                "flag_names": class_info.get("flag_names") or [],
+                "hidden_in_dedit": False,
+                "runtime_loadable": True,
+            },
+            "template": {
+                "source_level": "object.lto",
+                "source_instance": class_name,
+                "default_pos": [0.0, 0.0, 0.0],
+                "properties": template_props,
+            },
+        }
 
 # --------------------------------------------------------------------------
 # Categorisation
@@ -357,6 +598,7 @@ def _json_actor_visuals(actor_visuals: Optional[Dict[str, ActorVisual]]) -> Dict
 def build_catalog(
     worlds_dir: str,
     actor_visuals: Optional[Dict[str, ActorVisual]] = None,
+    object_lto_dump: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Scan all *.DAT files in *worlds_dir* and return a catalog dict.
 
@@ -401,6 +643,10 @@ def build_catalog(
                 if actor_visual is not None:
                     skins = entry.setdefault("skins", set())
                     skins.update(s.lower() for s in actor_visual.skins)
+                    accessory_skins = entry.setdefault("accessory_skins", set())
+                    accessory_skins.update(
+                        s.lower() for s in actor_visual.accessory_skins
+                    )
                     sources = entry.setdefault("actor_visual_sources", set())
                     sources.add(
                         f"{actor_visual.source_file}:{actor_visual.number}"
@@ -434,15 +680,20 @@ def build_catalog(
         entry["levels"]         = sorted(entry["levels"])
         entry["property_names"] = sorted(entry["property_names"])
         entry["filenames"]      = sorted(entry["filenames"])
+        entry.setdefault("source", "dat")
         if "skins" in entry:
             entry["skins"] = sorted(entry["skins"])
+        if "accessory_skins" in entry:
+            entry["accessory_skins"] = sorted(entry["accessory_skins"])
         if "actor_visual_sources" in entry:
             entry["actor_visual_sources"] = sorted(entry["actor_visual_sources"])
     for fn, entry in filenames.items():
         entry["levels"]  = sorted(entry["levels"])
         entry["classes"] = sorted(entry["classes"])
 
-    return {
+    _merge_object_lto_classes(classes, object_lto_dump)
+
+    catalog = {
         "classes":   classes,
         "filenames": filenames,
         "actor_visuals": _json_actor_visuals(actor_visuals),
@@ -453,6 +704,9 @@ def build_catalog(
             "free_npc_nbrs_above_max": list(range(max_npc_nbr + 1, max_npc_nbr + 21)),
         },
     }
+    if object_lto_dump is not None:
+        catalog["object_lto"] = object_lto_dump
+    return catalog
 
 
 def load_catalog(path: str) -> Dict[str, Any]:
@@ -477,6 +731,9 @@ def build_catalog_from_rez(
     worlds_rez_path: str,
     data_rez_path: Optional[str] = None,
     data_dir: Optional[str] = None,
+    object_lto_dump_path: Optional[str] = None,
+    object_lto_path: Optional[str] = None,
+    object_lto_helper_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the catalog by extracting .DAT levels from *worlds_rez_path*.
 
@@ -508,6 +765,24 @@ def build_catalog_from_rez(
     if actor_visuals:
         print(f"  {len(actor_visuals)} actor/monster visual keys loaded")
 
+    object_lto_dump: Optional[Dict[str, Any]] = None
+    try:
+        object_lto_dump = resolve_object_lto_dump(
+            object_lto_dump_path=object_lto_dump_path,
+            object_lto_path=object_lto_path,
+            helper_path=object_lto_helper_path,
+        )
+        if object_lto_dump:
+            print(
+                "  object.lto classes loaded: "
+                f"{object_lto_dump.get('class_count', '?')}"
+            )
+    except ObjectLtoDumpError as exc:
+        print(
+            f"  [warn] object.lto dump unavailable; using DAT scan only: {exc}",
+            file=sys.stderr,
+        )
+
     tmpdir = tempfile.mkdtemp(prefix="mm9cat_")
     reader = None
     try:
@@ -529,7 +804,11 @@ def build_catalog_from_rez(
                 f.write(data)
             extracted += 1
         print(f"  {extracted} levels extracted")
-        return build_catalog(tmpdir, actor_visuals=actor_visuals)
+        return build_catalog(
+            tmpdir,
+            actor_visuals=actor_visuals,
+            object_lto_dump=object_lto_dump,
+        )
     finally:
         if reader is not None:
             reader.close()
@@ -576,6 +855,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="optional extracted DATA folder containing ACTOR.TXT/MONSTERS.TXT",
     )
+    pbr.add_argument(
+        "--object-lto-dump",
+        default=None,
+        help=(
+            "optional JSON dump produced by tools/object_lto_dump; when "
+            "present, this is preferred over running the native helper"
+        ),
+    )
+    pbr.add_argument(
+        "--object-lto",
+        default=None,
+        help=(
+            "optional path to object.lto; the native helper is run to generate "
+            "the class dump, and failures fall back to the DAT scan"
+        ),
+    )
+    pbr.add_argument(
+        "--object-lto-helper",
+        default=None,
+        help=(
+            "optional path to object_lto_dump.exe "
+            f"(default: {DEFAULT_OBJECT_LTO_DUMP_HELPER})"
+        ),
+    )
 
     # info -- summarise an existing catalog
     pi = sub.add_parser("info", help="print a summary of an existing catalog.json")
@@ -591,12 +894,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.worlds_rez,
             data_rez_path=args.data_rez,
             data_dir=args.data_dir,
+            object_lto_dump_path=args.object_lto_dump,
+            object_lto_path=args.object_lto,
+            object_lto_helper_path=args.object_lto_helper,
         )
         save_catalog(cat, args.out)
         s = cat["summary"]
         print(f"Wrote {args.out}")
         print(f"  levels:          {s['total_levels']}")
         print(f"  classes:         {s['total_classes']}")
+        if cat.get("object_lto", {}).get("available"):
+            print(
+                "  object.lto:      "
+                f"{cat['object_lto'].get('class_count', '?')} classes"
+            )
         print(f"  max NPCNbr seen: {s['max_npc_nbr']}")
         print(f"  next free NPCs:  {s['free_npc_nbrs_above_max'][:5]} ...")
         return 0
@@ -607,6 +918,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Catalog: {args.path}")
         print(f"  levels:         {s.get('total_levels', '?')}")
         print(f"  classes:        {s.get('total_classes', '?')}")
+        object_lto = cat.get("object_lto") or {}
+        if object_lto.get("available"):
+            print(f"  object.lto:     {object_lto.get('class_count', '?')} classes")
         print(f"  max NPCNbr:     {s.get('max_npc_nbr', '?')}")
         print(f"  next free NPCs: {s.get('free_npc_nbrs_above_max', [])[:5]} ...")
         return 0

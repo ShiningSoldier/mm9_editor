@@ -1653,7 +1653,14 @@ class EditorApp:
         if self._pending_kind == "preset":
             preset = getattr(self, "_pending_preset", None)
             if preset:
-                overrides.update(preset.overrides)
+                preset_overrides = dict(preset.overrides)
+                name_prefix = str(preset_overrides.pop("__name_prefix", "") or "")
+                overrides.update(preset_overrides)
+                if name_prefix and "Name" not in preset_overrides:
+                    j = 1
+                    while f"{name_prefix}{j}" in existing:
+                        j += 1
+                    overrides["Name"] = f"{name_prefix}{j}"
 
         # Phase 6: encode NPCNbr override and attach rude registration dict
         rude_data = None
@@ -2126,6 +2133,10 @@ class EditorApp:
         e = self.catalog["classes"].get(class_name)
         if not e:
             return None
+        object_lto_template = self._template_from_object_lto_catalog(class_name, e)
+        if object_lto_template is not None:
+            return object_lto_template
+
         preferred = e["template"]["source_level"]
         all_levels = [preferred] + [lvl for lvl in e.get("levels", [])
                                     if lvl != preferred]
@@ -2140,6 +2151,29 @@ class EditorApp:
                     return o
 
         return None
+
+    def _template_from_object_lto_catalog(
+        self,
+        class_name: str,
+        entry: Dict[str, Any],
+    ) -> Optional[patcher.WorldObject]:
+        template = entry.get("template") or {}
+        if template.get("source_level") != "object.lto":
+            return None
+        props = []
+        for item in template.get("properties") or []:
+            try:
+                props.append(patcher.Property(
+                    str(item["name"]),
+                    int(item["code"]),
+                    int(item.get("flags") or 0),
+                    item.get("value"),
+                ))
+            except Exception:
+                continue
+        if not props:
+            return None
+        return patcher.WorldObject(class_name, props)
 
     def _find_template_for_filename(self, filename: str) -> Optional[patcher.WorldObject]:
         target = filename.lower()
@@ -2235,6 +2269,10 @@ def main(argv=None):
                 paths.archive_path("worlds"),
                 data_rez_path=(
                     paths.archive_path("data") if paths.has_archive("data") else None
+                ),
+                object_lto_path=(
+                    os.path.join(paths.game_data_dir, "object.lto")
+                    if paths.game_data_dir else None
                 ),
             )
         else:

@@ -28,6 +28,7 @@ class ActorVisualTests(unittest.TestCase):
         self.assertIsNotNone(visual)
         self.assertEqual(visual.model, "models\\wolf.abc")
         self.assertEqual(visual.skins, ("skins\\wolfblack.dtx",))
+        self.assertEqual(visual.accessory_skins, ())
 
     def test_matches_civilian_type_picture_without_peasant_or_variant(self):
         visuals = parse_actor_visual_tables([
@@ -58,6 +59,97 @@ class ActorVisualTests(unittest.TestCase):
         self.assertIsNotNone(visual)
         self.assertEqual(visual.model, "models\\PeasantHOM1.ABC")
         self.assertEqual(visual.skins, ("skins\\PeasantHOM1a.dtx",))
+
+    def test_actor_visual_preserves_secondary_accessory_skins(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "191\tLizard-Orc Mage\tlizardorc.abc\tLizardOrc.dtx\tLizOrcCutlass.dtx\t\tLizard-Orc C\n",
+            ),
+        ])
+
+        visual = resolve_actor_visual(visuals, "LizardOrcMage", "LizardOrcMage0")
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.model, "models\\lizardorc.abc")
+        self.assertEqual(visual.skins, ("skins\\LizardOrc.dtx",))
+        self.assertEqual(visual.accessory_skins, ("skins\\LizOrcCutlass.dtx",))
+        self.assertEqual(
+            visual.to_json()["accessory_skins"],
+            ["skins\\LizOrcCutlass.dtx"],
+        )
+
+    def test_accountant_resolves_to_row_217_with_honk_hat(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "186\tHonk\thonkfemale.abc\thonkf1.dtx\thonkhat.dtx\t\tHonk Worshipper A\n"
+                + "216\tHonk\thonkmale.abc\thonkm2.dtx\t\t\tHonk Worshipper2 A\n"
+                + "217\tElder Honk\thonkfemale.abc\thonkf3.dtx\thonkhat.dtx\t\tHonk Worshipper2 B\n",
+            ),
+        ])
+
+        visual = resolve_actor_visual(visuals, "Honk", "Accountant")
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.number, "217")
+        self.assertEqual(visual.model, "models\\honkfemale.abc")
+        self.assertEqual(visual.skins, ("skins\\honkf3.dtx",))
+        self.assertEqual(visual.accessory_skins, ("skins\\honkhat.dtx",))
+        self.assertIn("MONSTERS.TXT:217", visual.quirk)
+
+    def test_lomm_orc_lizardorc_variant_prefers_appended_row(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "189\tLizard-Orc\tlizardorc.abc\tLizardOrc.dtx\tLizOrcCutlass.dtx\t\tLizard-Orc A\n"
+                + "304\tLoMM Orc\tOrcMM9.abc\tOrc.dtx\t\t\tLoMM Orc\n",
+            ),
+        ])
+
+        visual = resolve_actor_visual(visuals, "LizardOrc", "LoMMOrc1")
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.number, "304")
+        self.assertEqual(visual.model, "models\\OrcMM9.abc")
+        self.assertEqual(visual.skins, ("skins\\Orc.dtx",))
+
+    def test_lomm_orc_lizardorc_variant_has_editor_fallback_visual(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "189\tLizard-Orc\tlizardorc.abc\tLizardOrc.dtx\tLizOrcCutlass.dtx\t\tLizard-Orc A\n",
+            ),
+        ])
+
+        visual = resolve_actor_visual(visuals, "LizardOrc", "LoMMOrc1")
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.number, "304")
+        self.assertEqual(visual.model, "models\\OrcMM9.abc")
+        self.assertEqual(visual.skins, ("skins\\Orc.dtx",))
+        self.assertIn("LoMM Orc", visual.quirk)
+
+    def test_lomm_orc_lizardorc_mage_variant_prefers_appended_row(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "191\tLizard-Orc Mage\tlizardorc.abc\tLizardOrc.dtx\tLizOrcCutlass.dtx\t\tLizard-Orc C\n"
+                + "304\tLoMM Orc\tOrcMM9.abc\tOrc.dtx\t\t\tLoMM Orc\n",
+            ),
+        ])
+
+        visual = resolve_actor_visual(visuals, "LizardOrcMage", "LoMMOrc1")
+
+        self.assertIsNotNone(visual)
+        self.assertEqual(visual.number, "304")
+        self.assertEqual(visual.model, "models\\OrcMM9.abc")
+        self.assertEqual(visual.skins, ("skins\\Orc.dtx",))
 
     def test_catalog_uses_actor_visual_model_before_dat_filename(self):
         visuals = parse_actor_visual_tables([

@@ -4,6 +4,7 @@
 /cache/
 /mm9_data/
 /lomm_data/
+/tools/object_lto_dump/bin/
 
 # Python cache folders
 __pycache__/

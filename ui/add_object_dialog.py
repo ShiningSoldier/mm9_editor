@@ -63,6 +63,72 @@ CATEGORY_ORDER = [
 
 # Internal sentinel key for the presets bucket
 _PRESETS_CAT = "__presets__"
+_SCOPE_ALL = "all"
+_SCOPE_OBSERVED = "observed"
+
+
+def _class_instance_count(entry: Dict[str, Any]) -> int:
+    try:
+        return int(entry.get("instance_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_unplaced_object_lto_class(entry: Dict[str, Any]) -> bool:
+    template = entry.get("template") or {}
+    return (
+        _class_instance_count(entry) == 0
+        and (
+            entry.get("source") == "object.lto"
+            or template.get("source_level") == "object.lto"
+        )
+    )
+
+
+def _class_matches_scope(entry: Dict[str, Any], scope: str) -> bool:
+    if scope == _SCOPE_OBSERVED:
+        return _class_instance_count(entry) > 0
+    return True
+
+
+def _class_display_label(class_name: str, entry: Dict[str, Any]) -> str:
+    count = _class_instance_count(entry)
+    if count > 0:
+        return f"{class_name}  ({count}×)"
+    if _is_unplaced_object_lto_class(entry):
+        return f"{class_name}  (unplaced)"
+    return f"{class_name}  (0 instances)"
+
+
+def _class_detail_text(class_name: str, entry: Dict[str, Any]) -> str:
+    template = entry.get("template") or {}
+    cat = entry.get("category", "other")
+    count = _class_instance_count(entry)
+    level_count = len(entry.get("levels", []))
+
+    if count == 0:
+        source = entry.get("source", "?")
+        if _is_unplaced_object_lto_class(entry):
+            return (
+                f"{class_name}  ·  category: {cat}  ·  "
+                f"unplaced valid class  ·  source: {source}  ·  "
+                f"template: object.lto defaults"
+            )
+        return (
+            f"{class_name}  ·  category: {cat}  ·  "
+            f"0 instances across {level_count} levels  ·  "
+            f"template: {template.get('source_instance', '?')} "
+            f"from {template.get('source_level', '?')}"
+        )
+
+    instance_word = "instance" if count == 1 else "instances"
+    level_word = "level" if level_count == 1 else "levels"
+    return (
+        f"{class_name}  ·  category: {cat}  ·  "
+        f"{count} {instance_word} across {level_count} {level_word}  ·  "
+        f"template: {template.get('source_instance', '?')} "
+        f"from {template.get('source_level', '?')}"
+    )
 
 
 class AddObjectDialog(tk.Toplevel):
@@ -172,7 +238,7 @@ class AddObjectDialog(tk.Toplevel):
         # Right — filter + class list
         right = tk.Frame(body, bg="#1a1d22")
         right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(1, weight=1)
+        right.rowconfigure(2, weight=1)
         right.columnconfigure(0, weight=1)
 
         filter_row = tk.Frame(right, bg="#1a1d22")
@@ -200,8 +266,31 @@ class AddObjectDialog(tk.Toplevel):
         )
         self._sort_cb.pack(side="left", padx=(8, 0))
 
+        scope_row = tk.Frame(right, bg="#1a1d22")
+        scope_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        tk.Label(scope_row, text="Scope:", bg="#1a1d22", fg="#888",
+                 font=("Segoe UI", 8)).pack(side="left")
+        self._scope_var = tk.StringVar(value=_SCOPE_ALL)
+        self._scope_controls: List[tk.Radiobutton] = []
+        for text, value in (
+            ("All object classes", _SCOPE_ALL),
+            ("Observed in shipped levels", _SCOPE_OBSERVED),
+        ):
+            rb = tk.Radiobutton(
+                scope_row, text=text, value=value,
+                variable=self._scope_var,
+                command=self._populate_classes,
+                bg="#1a1d22", fg="#888",
+                selectcolor="#23272d",
+                activebackground="#1a1d22",
+                activeforeground="#cccccc",
+                font=("Segoe UI", 8),
+            )
+            rb.pack(side="left", padx=(8, 0))
+            self._scope_controls.append(rb)
+
         cls_frame = tk.Frame(right, bg="#1a1d22")
-        cls_frame.grid(row=1, column=0, sticky="nsew")
+        cls_frame.grid(row=2, column=0, sticky="nsew")
         cls_frame.rowconfigure(0, weight=1)
         cls_frame.columnconfigure(0, weight=1)
         self.cls_listbox = tk.Listbox(
@@ -262,6 +351,7 @@ class AddObjectDialog(tk.Toplevel):
         flt    = self.filter_var.get().strip().lower()
         cat    = self._active_category()
         by_cnt = self._sort_by_count.get()
+        scope  = self._scope_var.get()
 
         self.cls_listbox.delete(0, tk.END)
         self._cls_items = []
@@ -269,6 +359,8 @@ class AddObjectDialog(tk.Toplevel):
         # ── User presets ─────────────────────────────────────────────
         if cat == _PRESETS_CAT:
             self._sort_cb.config(state="disabled")
+            for control in self._scope_controls:
+                control.config(state="disabled")
             presets = (self._preset_store.presets
                        if self._preset_store else [])
             for p in presets:
@@ -285,6 +377,8 @@ class AddObjectDialog(tk.Toplevel):
 
         # ── Catalog classes ───────────────────────────────────────────
         self._sort_cb.config(state="normal")
+        for control in self._scope_controls:
+            control.config(state="normal")
 
         if cat == "__all__":
             candidates = list(self._catalog_classes.keys())
@@ -292,7 +386,7 @@ class AddObjectDialog(tk.Toplevel):
             candidates = list(self._by_cat.get(cat, []))
 
         # Also prepend matching presets when "All" is selected
-        if cat == "__all__" and self._preset_store:
+        if cat == "__all__" and self._preset_store and scope == _SCOPE_ALL:
             for p in self._preset_store.presets:
                 if flt and flt not in p.name.lower():
                     continue
@@ -305,6 +399,10 @@ class AddObjectDialog(tk.Toplevel):
         # Apply text filter to catalog classes
         if flt:
             candidates = [c for c in candidates if flt in c.lower()]
+        candidates = [
+            c for c in candidates
+            if _class_matches_scope(self._catalog_classes[c], scope)
+        ]
 
         # Sort: instance-count descending or alphabetical
         if by_cnt:
@@ -317,8 +415,7 @@ class AddObjectDialog(tk.Toplevel):
             entry    = self._catalog_classes[cls]
             item_cat = entry.get("category", "other")
             color    = CATEGORY_COLORS.get(item_cat, "#808080")
-            count    = entry.get("instance_count", 0)
-            label    = f"{cls}  ({count}×)" if count else cls
+            label    = _class_display_label(cls, entry)
             self._cls_items.append(("class", cls))
             self.cls_listbox.insert(tk.END, label)
             self.cls_listbox.itemconfig(tk.END, fg=color)
@@ -358,16 +455,8 @@ class AddObjectDialog(tk.Toplevel):
                 return
 
         # Catalog class detail
-        entry    = self._catalog_classes.get(value, {})
-        template = entry.get("template") or {}
-        cat      = entry.get("category", "other")
-        self.detail.config(text=(
-            f"{value}  ·  category: {cat}  ·  "
-            f"{entry.get('instance_count', 0)} instances across "
-            f"{len(entry.get('levels', []))} levels  ·  "
-            f"template: {template.get('source_instance', '?')} "
-            f"from {template.get('source_level', '?')}"
-        ))
+        entry = self._catalog_classes.get(value, {})
+        self.detail.config(text=_class_detail_text(value, entry))
 
     # ------------------------------------------------------------------
     # Actions

@@ -334,6 +334,43 @@ class ObjectTextureBindingTests(unittest.TestCase):
             ["skins\\Orbus3.dtx"],
         )
 
+    def test_actor_table_accessory_skin_is_available_for_piece_binding(self):
+        header = (
+            "Number\tMonster Name\tModelName\tSkinName\tSkinName2\tSkinName3\t"
+            "Type/Picture\n"
+        )
+        actor_visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                header
+                + "191\tLizard-Orc Mage\tlizardorc.abc\tLizardOrc.dtx\tLizOrcCutlass.dtx\t\tLizard-Orc C\n",
+            ),
+        ])
+        obj = FakeObject(
+            "LizardOrcMage",
+            Name="LizardOrcMage0",
+            Filename="models\\Skeleton.abc",
+        )
+
+        skins = _object_skin_names(obj, actor_visuals=actor_visuals)
+
+        self.assertEqual(
+            skins,
+            ["skins\\LizardOrc.dtx", "skins\\LizOrcCutlass.dtx"],
+        )
+        self.assertEqual(
+            _resolve_skin_for_piece(
+                "Cutlass",
+                1,
+                2,
+                skins,
+                _object_model_filename(obj, actor_visuals=actor_visuals),
+                "LizardOrcMage",
+                skin_cache=self.cache,
+            ),
+            "skins\\LizOrcCutlass.dtx",
+        )
+
     def test_skeleton_master_uses_actor_table_body_and_weapon_skins(self):
         self.assertEqual(
             self.resolve(
