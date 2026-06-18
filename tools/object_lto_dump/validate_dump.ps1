@@ -1,5 +1,6 @@
 param(
-    [string]$ObjectLto = "C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9\data\object.lto",
+    [Parameter(Mandatory=$true)]
+    [string]$ObjectLto,
     [string]$Exe = "$PSScriptRoot\bin\object_lto_dump.exe"
 )
 

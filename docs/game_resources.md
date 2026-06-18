@@ -45,18 +45,20 @@
   `changed_entries/RUDE/*.RUDE`. There is no loose RUDE staging workflow.
 - Explicit install is in place. `File -> Install Output to Game...`
   asks the user to choose an `output/<batch>` folder, reads its manifest-aware
-  patched archive list, confirms the affected archives, backs up the live game
-  `data/*.REZ` files under `backups/install_<timestamp>/data/`, then replaces
-  only those archives in the detected game `data` folder. The installer logic
-  lives in `core/install_manager.py`; it writes an `install_manifest.json` next to
-  the backup and uses a temporary `<archive>.installing` copy before
-  `os.replace()`.
+  patched archive list and any manifest-declared loose files, confirms the
+  affected files, backs up the live game files under
+  `backups/install_<timestamp>/data/`, then replaces only those files in the
+  detected game `data` folder. Loose files are used by experimental
+  `object.lto` batches. The installer logic lives in `core/install_manager.py`;
+  it writes an `install_manifest.json` next to the backup and uses a temporary
+  `<name>.installing` copy before `os.replace()`.
 - Restore is in place. `File -> Restore Installed Backup...` accepts
   an install backup folder, its `data` subfolder, or a folder with
-  `install_manifest.json`. It backs up the current live archives under
+  `install_manifest.json`. It backs up the current live files under
   `backups/restore_<timestamp>_current/data/`, then restores the original REZ
-  files from the selected install backup. `restore_manifest.json` records what
-  was restored and where the pre-restore live files were saved.
+  and loose files from the selected install backup. Loose files that did not
+  exist before install are removed on restore. `restore_manifest.json` records
+  what was restored and where the pre-restore live files were saved.
 - LoMM-to-MM9 conversion is in place. The dropdown option
   `Conversion -> LoMM to MM9` opens a dialog that accepts a LoMM install folder,
   lists v66 DAT levels from LoMM `WORLDS.REZ`, asks for the new MM9 level name,

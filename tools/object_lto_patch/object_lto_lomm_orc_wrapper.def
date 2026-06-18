@@ -1,0 +1,5 @@
+EXPORTS
+    GetServerShellFunctions @1
+    GetServerShellVersion @2
+    ObjectDLLSetup @3
+    SetInstanceHandle @4

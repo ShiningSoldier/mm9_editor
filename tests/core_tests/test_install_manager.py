@@ -115,6 +115,67 @@ class InstallManagerTests(unittest.TestCase):
 
             self.assertEqual(archives, [os.path.join(backup_data, "WORLDS.REZ")])
 
+    def test_manifest_loose_files_install_and_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            batch = os.path.join(tmp, "output", "lomm_orc_runtime")
+            game_data = os.path.join(tmp, "game", "data")
+            backups = os.path.join(tmp, "backups")
+            write(os.path.join(batch, "data", "DATA.REZ"), b"patched data")
+            write(os.path.join(batch, "data", "object.lto"), b"patched object")
+            write(os.path.join(batch, "data", "object_lto_base.lto"), b"base object")
+            write(os.path.join(game_data, "DATA.REZ"), b"original data")
+            write(os.path.join(game_data, "object.lto"), b"original object")
+            manifest = {
+                "archives": [
+                    {"output_archive": os.path.join(batch, "data", "DATA.REZ")},
+                ],
+                "loose_files": [
+                    {
+                        "output_file": os.path.join(batch, "data", "object.lto"),
+                        "target_relative": "data\\object.lto",
+                    },
+                    {
+                        "output_file": os.path.join(batch, "data", "object_lto_base.lto"),
+                        "target_relative": "data\\object_lto_base.lto",
+                    },
+                ],
+            }
+            with open(os.path.join(batch, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f)
+
+            self.assertEqual(
+                [item["target_relative"] for item in install_manager.loose_files_to_install(batch)],
+                ["object.lto", "object_lto_base.lto"],
+            )
+            result = install_manager.install_batch(batch, game_data, backups)
+
+            self.assertEqual(read(os.path.join(game_data, "DATA.REZ")), b"patched data")
+            self.assertEqual(read(os.path.join(game_data, "object.lto")), b"patched object")
+            self.assertEqual(read(os.path.join(game_data, "object_lto_base.lto")), b"base object")
+            self.assertEqual(len(result.loose_files), 2)
+            self.assertTrue(result.loose_files[0].existed_before_install)
+            self.assertFalse(result.loose_files[1].existed_before_install)
+            with open(result.manifest_path, "r", encoding="utf-8") as f:
+                install_manifest = json.load(f)
+            self.assertEqual(len(install_manifest["loose_files"]), 2)
+            self.assertEqual(
+                [item["name"] for item in install_manager.loose_files_to_restore(
+                    os.path.dirname(result.backup_dir))],
+                ["object.lto", "object_lto_base.lto"],
+            )
+
+            restore = install_manager.restore_backup(
+                os.path.dirname(result.backup_dir),
+                safety_backup_root=backups,
+            )
+
+            self.assertEqual(read(os.path.join(game_data, "DATA.REZ")), b"original data")
+            self.assertEqual(read(os.path.join(game_data, "object.lto")), b"original object")
+            self.assertFalse(os.path.exists(os.path.join(game_data, "object_lto_base.lto")))
+            self.assertEqual(len(restore.loose_files), 2)
+            self.assertFalse(restore.loose_files[0].removed)
+            self.assertTrue(restore.loose_files[1].removed)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,6 @@ import _path_setup  # noqa: F401
 from core.rezmgr import RezReader, RezWriter, _restype_for_filename
 
 
-DEFAULT_MM9_ROOT = r"C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9"
 ENTRY_ACTOR = "DATA/ACTOR"
 ENTRY_MONSTERS = "DATA/MONSTERS"
 STRATEGY_REPLACE_ROW = "replace-row"
@@ -331,7 +330,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build an installable DATA.REZ patch for ACTOR/MONSTERS rows."
     )
-    parser.add_argument("--mm9-root", default=DEFAULT_MM9_ROOT)
+    parser.add_argument("--mm9-root", required=True, help="Path to the MM9 install root.")
     parser.add_argument("--out", required=True)
     parser.add_argument(
         "--strategy",

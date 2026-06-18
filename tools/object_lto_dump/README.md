@@ -22,7 +22,28 @@ powershell -ExecutionPolicy Bypass -File .\tools\object_lto_dump\build.ps1
 Usage:
 
 ```powershell
-.\tools\object_lto_dump\bin\object_lto_dump.exe "C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9\data\object.lto" > object_lto_dump.json
+$mm9Root = "C:\Path\To\Might and Magic IX"
+.\tools\object_lto_dump\bin\object_lto_dump.exe "$mm9Root\data\object.lto" > object_lto_dump.json
+```
+
+The helper tools no longer assume local install paths. Pass the MM9 and LoMM
+install roots explicitly:
+
+```powershell
+$mm9Root = "C:\Path\To\Might and Magic IX"
+$lommRoot = "C:\Path\To\Legends of Might and Magic"
+
+.\tools\object_lto_dump\validate_dump.ps1 -ObjectLto "$mm9Root\data\object.lto"
+
+.\tools\object_lto_patch\build_lomm_orc_object_lto.ps1 `
+    -MM9Root $mm9Root
+
+python .\tools\lomm_orc_asset_batch.py `
+    --mm9-root $mm9Root `
+    --lomm-root $lommRoot
+
+python .\tools\lomm_orc_runtime_batch.py `
+    --mm9-root $mm9Root
 ```
 
 The JSON schema is `mm9_editor.object_lto_dump.v1`. Each class includes:
@@ -30,6 +51,9 @@ The JSON schema is `mm9_editor.object_lto_dump.v1`. Each class includes:
 - `name`, `parent`, and `hierarchy`
 - raw class `flags`, decoded `flag_names`, `hidden_in_dedit`, and
   `runtime_loadable`
+- `abi` metadata with per-pointer module names and RVAs for the `ClassDef`,
+  class-name string, parent `ClassDef`, constructor, destructor, and plugin /
+  message callback pointer
 - `declared_properties`
 - flattened `properties`
 

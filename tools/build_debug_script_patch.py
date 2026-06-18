@@ -18,7 +18,6 @@ import _path_setup  # noqa: F401
 from core.rezmgr import RezReader, RezWriter, _restype_for_filename
 
 
-DEFAULT_MM9_ROOT = r"C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9"
 DEBUG_SCRIPT_NAME = "MM9ED_DEBUG_ACTOR.SCR"
 DEBUG_SCRIPT_ENTRY_NAME = "MM9ED_DEBUG_ACTOR"
 DEBUG_SCRIPT_VPATH = f"SCRIPTS/{DEBUG_SCRIPT_ENTRY_NAME}"
@@ -169,7 +168,7 @@ def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build an installable SCRIPTS.REZ patch for MM9 debug scripts."
     )
-    parser.add_argument("--mm9-root", default=DEFAULT_MM9_ROOT)
+    parser.add_argument("--mm9-root", required=True, help="Path to the MM9 install root.")
     parser.add_argument("--script", default=None)
     parser.add_argument(
         "--out",

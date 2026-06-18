@@ -27,9 +27,6 @@ import _path_setup  # noqa: F401
 from core.rezmgr import RezReader
 
 
-DEFAULT_MM9_ROOT = r"C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9"
-DEFAULT_LOMM_ROOT = r"C:\games\Legends of Might and Magic"
-
 STRATEGY_REPLACE_ROW = "replace-row"
 STRATEGY_APPEND_ROW = "append-row"
 STRATEGY_NEW_CLASS = "new-class"
@@ -462,8 +459,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Audit a proposed LoMM creature import into MM9."
     )
-    parser.add_argument("--mm9-root", default=DEFAULT_MM9_ROOT)
-    parser.add_argument("--lomm-root", default=DEFAULT_LOMM_ROOT)
+    parser.add_argument("--mm9-root", required=True, help="Path to the MM9 install root.")
+    parser.add_argument("--lomm-root", required=True, help="Path to the LoMM install root.")
     parser.add_argument("--creature-name", required=True)
     parser.add_argument("--target-class", required=True)
     parser.add_argument(

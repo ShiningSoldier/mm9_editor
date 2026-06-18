@@ -104,6 +104,8 @@ struct ClassDef {
 
 using ObjectDLLSetupFn = ClassDef **(__cdecl *)(int *nDefs, void *pServer, int *version);
 
+std::uintptr_t g_module_base = 0;
+
 std::string narrow(const std::wstring &value) {
     if (value.empty()) {
         return std::string();
@@ -171,6 +173,57 @@ void write_json_string(std::ostream &out, const std::string &value) {
         }
     }
     out << '"';
+}
+
+std::uintptr_t pointer_module_base(const void *ptr) {
+    if (!ptr) {
+        return 0;
+    }
+    MEMORY_BASIC_INFORMATION info = {};
+    if (!VirtualQuery(ptr, &info, sizeof(info))) {
+        return 0;
+    }
+    return reinterpret_cast<std::uintptr_t>(info.AllocationBase);
+}
+
+std::string pointer_module_name(const void *ptr) {
+    std::uintptr_t base = pointer_module_base(ptr);
+    if (!base) {
+        return std::string();
+    }
+    wchar_t path[MAX_PATH] = {};
+    if (!GetModuleFileNameW(reinterpret_cast<HMODULE>(base), path, MAX_PATH)) {
+        return std::string();
+    }
+    std::wstring full(path);
+    std::size_t slash = full.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        full = full.substr(slash + 1);
+    }
+    return narrow(full);
+}
+
+void write_rva_or_null(std::ostream &out, const void *ptr) {
+    if (!ptr) {
+        out << "null";
+        return;
+    }
+    const std::uintptr_t value = reinterpret_cast<std::uintptr_t>(ptr);
+    const std::uintptr_t base = pointer_module_base(ptr);
+    if (!base || value < base) {
+        out << "null";
+        return;
+    }
+    out << (value - base);
+}
+
+void write_module_name(std::ostream &out, const void *ptr) {
+    std::string name = pointer_module_name(ptr);
+    if (name.empty()) {
+        out << "null";
+        return;
+    }
+    write_json_string(out, name);
 }
 
 std::string prop_type_name(int type) {
@@ -380,6 +433,32 @@ void write_class(std::ostream &out, ClassDef *class_def) {
     out << ",\"hidden_in_dedit\":" << ((flags & CF_HIDDEN) ? "true" : "false");
     out << ",\"runtime_loadable\":" << ((flags & CF_NORUNTIME) ? "false" : "true");
     out << ",\"class_object_size\":" << class_def->m_ClassObjectSize;
+    out << ",\"abi\":{";
+    out << "\"class_def_rva\":";
+    write_rva_or_null(out, class_def);
+    out << ",\"class_def_module\":";
+    write_module_name(out, class_def);
+    out << ",\"class_name_rva\":";
+    write_rva_or_null(out, class_def->m_ClassName);
+    out << ",\"class_name_module\":";
+    write_module_name(out, class_def->m_ClassName);
+    out << ",\"parent_class_def_rva\":";
+    write_rva_or_null(out, class_def->m_ParentClass);
+    out << ",\"parent_class_def_module\":";
+    write_module_name(out, class_def->m_ParentClass);
+    out << ",\"construct_fn_rva\":";
+    write_rva_or_null(out, class_def->m_ConstructFn);
+    out << ",\"construct_fn_module\":";
+    write_module_name(out, class_def->m_ConstructFn);
+    out << ",\"destruct_fn_rva\":";
+    write_rva_or_null(out, class_def->m_DestructFn);
+    out << ",\"destruct_fn_module\":";
+    write_module_name(out, class_def->m_DestructFn);
+    out << ",\"plugin_fn_rva\":";
+    write_rva_or_null(out, class_def->m_PluginFn);
+    out << ",\"plugin_fn_module\":";
+    write_module_name(out, class_def->m_PluginFn);
+    out << '}';
 
     out << ",\"declared_properties\":[";
     for (int i = 0; i < class_def->m_nProps; ++i) {
@@ -434,6 +513,7 @@ int dump_object_lto(const std::wstring &object_lto_path, std::ostream &out) {
         std::cerr << "ERROR: failed to load object.lto: " << last_error_message(err) << "\n";
         return 2;
     }
+    g_module_base = reinterpret_cast<std::uintptr_t>(module);
 
     auto setup = reinterpret_cast<ObjectDLLSetupFn>(GetProcAddress(module, "ObjectDLLSetup"));
     if (!setup) {

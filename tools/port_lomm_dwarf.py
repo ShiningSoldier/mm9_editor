@@ -25,8 +25,6 @@ import _path_setup  # noqa: F401
 from core.rezmgr import RezReader, RezWriter, _restype_for_filename
 
 
-DEFAULT_MM9_ROOT = r"C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9"
-DEFAULT_LOMM_ROOT = r"C:\games\Legends of Might and Magic"
 DWARF_MODEL_VPATH = "MODELS/DWARF"
 DWARF_SKIN_VPATH = "SKINS/DWARF"
 
@@ -155,8 +153,8 @@ def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build a reversible MM9 output batch for the LoMM Dwarf."
     )
-    parser.add_argument("--mm9-root", default=DEFAULT_MM9_ROOT)
-    parser.add_argument("--lomm-root", default=DEFAULT_LOMM_ROOT)
+    parser.add_argument("--mm9-root", required=True, help="Path to the MM9 install root.")
+    parser.add_argument("--lomm-root", required=True, help="Path to the LoMM install root.")
     parser.add_argument(
         "--out",
         default=os.path.join(
