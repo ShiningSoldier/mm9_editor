@@ -144,6 +144,24 @@ class Polygon:
 
 
 @dataclass
+class WorldTreeLayout:
+    min_box: Tuple[float, float, float]
+    max_box: Tuple[float, float, float]
+    declared_node_count: int
+    dummy_terrain_depth: int
+    decoded_node_count: int
+    internal_node_count: int
+    leaf_node_count: int
+    max_depth: int
+    layout_start: int
+    layout_end: int
+    byte_count: int
+    bit_count: int
+    valid_node_count: bool
+    depth_limit_exceeded: bool = False
+
+
+@dataclass
 class WorldModelMesh:
     name:          str
     min_box:       Tuple[float, float, float]
@@ -207,6 +225,10 @@ class BspWorld:
     world_model_table_start: int = 0
     world_models:    List[WorldModelMesh] = field(default_factory=list)
     parse_warnings:  List[str] = field(default_factory=list)
+    lightmap_grid_size: float = 0.0
+    world_extents_min: Optional[Tuple[float, float, float]] = None
+    world_extents_max: Optional[Tuple[float, float, float]] = None
+    world_tree: Optional[WorldTreeLayout] = None
 
     def all_edges_xz(self) -> List[Tuple[Tuple[float, float], Tuple[float, float], int]]:
         """Yield (xz_a, xz_b, model_index) for every edge of every polygon.
@@ -371,25 +393,70 @@ def raycast_floor_y(
 # WorldTree: bit-packed quadtree subdivision data — has to be skipped
 # --------------------------------------------------------------------------
 
-def _walk_world_tree(s: _Stream, max_depth: int = 16) -> None:
-    """Consume the bit-packed quadtree subdivision data. Each bit says
-    whether the current quad subdivides into 4. New bytes are pulled when
-    the current bit cursor exhausts the byte. Pure consumption — no
-    structure preserved."""
+def _read_world_tree_layout(
+    s: _Stream,
+    min_box: Tuple[float, float, float],
+    max_box: Tuple[float, float, float],
+    declared_node_count: int,
+    dummy_terrain_depth: int,
+    *,
+    max_depth: int = 16,
+) -> WorldTreeLayout:
+    """Consume and summarize the bit-packed quadtree subdivision layout."""
+    layout_start = s.pos
     state = {"current_byte": 0, "current_bit": 8}
+    decoded_nodes = 0
+    internal_nodes = 0
+    max_seen_depth = 0
+    depth_limit_exceeded = False
 
     def step(depth: int) -> None:
+        nonlocal decoded_nodes, internal_nodes, max_seen_depth, depth_limit_exceeded
+        decoded_nodes += 1
+        max_seen_depth = max(max_seen_depth, int(depth))
         if state["current_bit"] == 8:
             state["current_byte"] = s.u8()
             state["current_bit"] = 0
         subdivide = (state["current_byte"] & (1 << state["current_bit"])) != 0
         state["current_bit"] += 1
-        if depth > max_depth: return
+        if depth > max_depth:
+            depth_limit_exceeded = True
+            return
         if subdivide:
+            internal_nodes += 1
             for _ in range(4):
                 step(depth + 1)
 
     step(0)
+    layout_end = s.pos
+    bit_count = int(decoded_nodes)
+    return WorldTreeLayout(
+        min_box=min_box,
+        max_box=max_box,
+        declared_node_count=int(declared_node_count),
+        dummy_terrain_depth=int(dummy_terrain_depth),
+        decoded_node_count=int(decoded_nodes),
+        internal_node_count=int(internal_nodes),
+        leaf_node_count=max(0, int(decoded_nodes) - int(internal_nodes)),
+        max_depth=int(max_seen_depth),
+        layout_start=int(layout_start),
+        layout_end=int(layout_end),
+        byte_count=int(layout_end) - int(layout_start),
+        bit_count=int(bit_count),
+        valid_node_count=int(decoded_nodes) == int(declared_node_count),
+        depth_limit_exceeded=bool(depth_limit_exceeded),
+    )
+
+
+def _walk_world_tree(s: _Stream, max_depth: int = 16) -> None:
+    _read_world_tree_layout(
+        s,
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
+        0,
+        0,
+        max_depth=max_depth,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -574,15 +641,23 @@ def parse(data: bytes) -> BspWorld:
     # WorldInfo: u32 length + string + float LMGridSize + 2× vec3 bounds
     info_len = s.u32()
     world_info = s.read(info_len).decode("latin-1", errors="replace")
-    s.f32()                   # LMGridSize
-    s.skip(24)                # min/max bounds (vec3 × 2)
+    lightmap_grid_size = s.f32()       # LMGridSize
+    world_extents_min = s.vec3()
+    world_extents_max = s.vec3()
 
     # WorldTree: vec3 min/max + int NumNodes + int DummyTerrainDepth +
     # bit-packed quadtree
-    s.skip(24)                # bounds
-    s.u32()                   # num_nodes
-    s.u32()                   # dummy_terrain_depth
-    _walk_world_tree(s)
+    tree_min = s.vec3()
+    tree_max = s.vec3()
+    tree_node_count = s.u32()
+    dummy_terrain_depth = s.u32()
+    world_tree = _read_world_tree_layout(
+        s,
+        tree_min,
+        tree_max,
+        tree_node_count,
+        dummy_terrain_depth,
+    )
 
     # WorldModelHeader: int Count + WorldModel[Count]
     world_model_table_start = s.pos
@@ -593,6 +668,10 @@ def parse(data: bytes) -> BspWorld:
         obj_pos=obj_pos,
         ren_pos=ren_pos,
         world_model_table_start=world_model_table_start,
+        lightmap_grid_size=lightmap_grid_size,
+        world_extents_min=world_extents_min,
+        world_extents_max=world_extents_max,
+        world_tree=world_tree,
     )
 
     for mi in range(world_model_count):

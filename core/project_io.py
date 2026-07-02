@@ -23,10 +23,11 @@ Format version history
 5  Prefab import collision helper mode
 6  Prefab collision helper thickness
 7  Prefab collision helper max segment length
-8  Blender OBJ mesh imports
-9  Blender OBJ collision helper mode
-10 BSP vertex edit operations
-11 BSP submodel replacement operations
+8  retired mesh-sidecar imports
+9  retired mesh-sidecar collision helper mode
+10 retired direct BSP vertex edit operations
+11 retired direct BSP submodel replacement operations
+12 rejects retired editable mesh-sidecar operations on load/save
 """
 
 from __future__ import annotations
@@ -40,6 +41,21 @@ from typing import Any, Dict, List, Optional, Tuple
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
 from core import project as P
+
+
+RETIRED_OP_KINDS = {
+    "import_mesh_bsp",
+    "edit_bsp_vertices",
+    "edit_terrain_vertices",
+    "replace_bsp_submodel",
+}
+
+
+def _retired_op_error(kind: str) -> ValueError:
+    return ValueError(
+        f"Project operation {kind!r} belongs to the retired editable mesh-sidecar "
+        "workflow. Recreate the work through DAT -> ED reconstruction instead."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -153,30 +169,6 @@ def op_to_dict(op: Any) -> Dict[str, Any]:
             "collision_thickness": float(op.collision_thickness),
             "collision_segment_length": float(op.collision_segment_length),
         }
-    if isinstance(op, P.ImportMeshBspOp):
-        return {
-            "op":          "import_mesh_bsp",
-            "obj_path":    op.obj_path,
-            "meta_path":   op.meta_path,
-            "new_name":    op.new_name,
-            "target_pos":  list(op.target_pos) if op.target_pos is not None else None,
-            "target_yaw":  float(op.target_yaw),
-            "collision_mode": op.collision_mode,
-            "collision_thickness": float(op.collision_thickness),
-            "collision_segment_length": float(op.collision_segment_length),
-        }
-    if isinstance(op, P.EditBspVerticesOp):
-        return {
-            "op":        "edit_bsp_vertices",
-            "obj_path":  op.obj_path,
-            "meta_path": op.meta_path,
-        }
-    if isinstance(op, P.ReplaceBspSubmodelOp):
-        return {
-            "op":        "replace_bsp_submodel",
-            "obj_path":  op.obj_path,
-            "meta_path": op.meta_path,
-        }
     raise TypeError(f"Unknown op type: {type(op)}")
 
 
@@ -235,28 +227,8 @@ def dict_to_op(d: Dict[str, Any]) -> Any:
             collision_thickness = float(d.get("collision_thickness", 8.0)),
             collision_segment_length = float(d.get("collision_segment_length", 512.0)),
         )
-    if kind == "import_mesh_bsp":
-        target_pos = d.get("target_pos")
-        return P.ImportMeshBspOp(
-            obj_path   = str(d["obj_path"]),
-            meta_path  = str(d.get("meta_path") or ""),
-            new_name   = str(d["new_name"]),
-            target_pos = tuple(float(x) for x in target_pos) if target_pos is not None else None,
-            target_yaw = float(d.get("target_yaw", 0.0)),
-            collision_mode = str(d.get("collision_mode", "none")),
-            collision_thickness = float(d.get("collision_thickness", 8.0)),
-            collision_segment_length = float(d.get("collision_segment_length", 512.0)),
-        )
-    if kind == "edit_bsp_vertices":
-        return P.EditBspVerticesOp(
-            obj_path=str(d["obj_path"]),
-            meta_path=str(d.get("meta_path") or ""),
-        )
-    if kind == "replace_bsp_submodel":
-        return P.ReplaceBspSubmodelOp(
-            obj_path=str(d["obj_path"]),
-            meta_path=str(d.get("meta_path") or ""),
-        )
+    if kind in RETIRED_OP_KINDS:
+        raise _retired_op_error(kind)
     raise ValueError(f"Unknown op kind: {kind!r}")
 
 
@@ -295,8 +267,8 @@ def dict_to_leveledit(d: Dict[str, Any]) -> P.LevelEdit:
 # Project save / load
 # ─────────────────────────────────────────────────────────────────────────────
 
-FORMAT_VERSION = 11
-SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+FORMAT_VERSION = 12
+SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 
 
 def project_to_json(project: P.Project, path: str) -> None:

@@ -54,9 +54,9 @@ from core import project as P
 from core import project_io
 from features.doors import clone as door_clone
 from features.doors import links as door_links
-from features.dat_editing import export_roundtrip as dat_roundtrip_export
+from features.dat_editing import compiler_strategy as dat_compiler_strategy
 from features.dat_editing import gltf_export as dat_gltf_export
-from features.dat_editing import mesh_import as dat_mesh_import
+from features.dat_editing import terrain_semantics
 from features.prefabs import import_static as prefab_import
 from features.prefabs import inspector as prefab_inspector
 from catalog import build_catalog_from_rez, load_catalog, save_catalog
@@ -67,6 +67,11 @@ CatalogPanel = PropertiesPanel = SaveDialog = LommConversionDialog = None  # typ
 View3D = None          # type: ignore
 OPENGL_AVAILABLE = False
 _view3d_missing: list = []   # packages still needed; populated by _import_gui()
+
+
+DAT_TO_ED_DEFAULT_TERRAIN_SUPPORT_RADIUS = 4096.0
+DAT_TO_ED_PROCESSOR_BRUSH_BUDGET = 1500
+DAT_TO_ED_PROCESSOR_POLYGON_BUDGET = 12000
 
 
 def _ask_prefab_collision_options(parent, title: str = "Prefab Collision") -> Optional[Dict[str, Any]]:
@@ -344,16 +349,10 @@ class EditorApp:
         m_tools.add_command(label="Import Static Prefab BSP...",
                             command=self.cmd_import_static_prefab_bsp)
         m_tools.add_separator()
-        m_tools.add_command(label="Export DAT Geometry for Blender...",
-                            command=self.cmd_export_dat_geometry_roundtrip)
-        m_tools.add_command(label="Export DAT Geometry as glTF...",
+        m_tools.add_command(label="Generate DEDit ED from DAT...",
+                            command=self.cmd_generate_dedit_ed_from_dat)
+        m_tools.add_command(label="Export DAT Geometry as glTF for Inspection...",
                             command=self.cmd_export_dat_geometry_gltf)
-        m_tools.add_command(label="Import Blender OBJ/glTF Geometry...",
-                            command=self.cmd_import_blender_obj_geometry)
-        m_tools.add_command(label="Import Blender Vertex Edits...",
-                            command=self.cmd_import_blender_vertex_edits)
-        m_tools.add_command(label="Import Blender Submodel Replacement...",
-                            command=self.cmd_import_blender_submodel_replacement)
 
         m_presets = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Presets", menu=m_presets)
@@ -1062,51 +1061,6 @@ class EditorApp:
         if self.view3d is not None:
             self.view3d.set_place_mode(True)
 
-
-
-    def cmd_export_dat_geometry_roundtrip(self) -> None:
-        if not getattr(self, "active", None):
-            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
-            return
-        L = self.active
-        bsp_world = L.get_bsp()
-        if bsp_world is None:
-            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
-            return
-
-        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
-        output_dir = filedialog.askdirectory(
-            title="Export DAT geometry for Blender",
-            initialdir=editor_dir,
-        )
-        if not output_dir:
-            return
-
-        try:
-            source_name = L.display_name or L.rez_vpath or L.path or "level"
-            base_name = os.path.splitext(os.path.basename(source_name))[0] or "level"
-            result = dat_roundtrip_export.export_roundtrip(
-                bsp_world,
-                L.source_bytes(),
-                output_dir,
-                source_path=source_name,
-                base_name=base_name,
-                objects=L.materialize().objects if L.world is not None else None,
-            )
-        except Exception as e:
-            messagebox.showerror("Export failed", str(e))
-            return
-
-        messagebox.showinfo(
-            "Export complete",
-            "Wrote Blender round-trip files:\n\n"
-            f"{result.obj_path}\n"
-            f"{result.mtl_path}\n"
-            f"{result.meta_path}\n\n"
-            f"Models: {result.model_count}; polygons: {result.polygon_count}",
-        )
-
-
     def cmd_export_dat_geometry_gltf(self) -> None:
         if not getattr(self, "active", None):
             messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
@@ -1119,7 +1073,7 @@ class EditorApp:
 
         editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
         output_dir = filedialog.askdirectory(
-            title="Export DAT geometry as glTF",
+            title="Export DAT geometry as inspection glTF",
             initialdir=editor_dir,
         )
         if not output_dir:
@@ -1128,7 +1082,7 @@ class EditorApp:
         try:
             source_name = L.display_name or L.rez_vpath or L.path or "level"
             base_name = os.path.splitext(os.path.basename(source_name))[0] or "level"
-            result = dat_gltf_export.export_gltf_roundtrip(
+            result = dat_gltf_export.export_gltf_inspection(
                 bsp_world,
                 L.source_bytes(),
                 output_dir,
@@ -1142,7 +1096,7 @@ class EditorApp:
 
         messagebox.showinfo(
             "glTF export complete",
-            "Wrote Blender glTF files:\n\n"
+            "Wrote inspection glTF files:\n\n"
             f"{result.gltf_path}\n"
             f"{result.bin_path}\n"
             f"{result.meta_path}\n\n"
@@ -1150,8 +1104,7 @@ class EditorApp:
             f"triangles: {result.triangle_count}",
         )
 
-
-    def cmd_import_blender_obj_geometry(self) -> None:
+    def cmd_generate_dedit_ed_from_dat(self) -> None:
         if not getattr(self, "active", None):
             messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
             return
@@ -1161,183 +1114,174 @@ class EditorApp:
             messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
             return
 
-        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
-        obj_path = filedialog.askopenfilename(
-            title="Import Blender geometry",
-            initialdir=editor_dir,
-            filetypes=[("Blender geometry", "*.obj *.gltf *.glb"), ("OBJ files", "*.obj"), ("glTF files", "*.gltf *.glb"), ("All files", "*.*")],
+        model_names = self._default_dat_to_ed_model_names(bsp_world)
+        has_terrain0 = any(
+            str(name or "").lower() == terrain_semantics.DEFAULT_TERRAIN_MODEL.lower()
+            for name in terrain_semantics.terrain_model_names(bsp_world)
         )
-        if not obj_path:
-            return
-        default_meta = dat_mesh_import._default_meta_path(obj_path)
-        if os.path.exists(default_meta):
-            meta_path = default_meta
-        elif os.path.splitext(obj_path)[1].lower() in {".gltf", ".glb"}:
-            meta_path = ""
-        else:
-            meta_path = filedialog.askopenfilename(
-                title="Select DAT sidecar metadata",
-                initialdir=os.path.dirname(os.path.abspath(obj_path)),
-                filetypes=[("DAT metadata", "*.datmeta.json"), ("JSON files", "*.json"), ("All files", "*.*")],
+        has_physics_bsp = any(
+            terrain_semantics.is_physics_bsp_model(model)
+            for model in getattr(bsp_world, "world_models", []) or []
+        )
+        if not model_names and not has_terrain0:
+            messagebox.showerror(
+                "DAT to ED generation failed",
+                "No eligible DAT world models were found for ED generation.",
             )
-            if not meta_path:
-                return
-
-        try:
-            default_name = dat_mesh_import.suggest_import_name(L.preview_bsp() or bsp_world, obj_path)
-        except Exception:
-            default_name = os.path.splitext(os.path.basename(obj_path))[0] or "MeshImport"
-        name = simpledialog.askstring(
-            "Import Blender Geometry",
-            "New BSP model name prefix:",
-            initialvalue=default_name,
-            parent=self.root,
+            return
+        include_terrain_support_patch = bool(has_terrain0 and model_names)
+        include_physics_shell_patch = bool((not has_terrain0) and model_names and has_physics_bsp)
+        terrain_support_brush_budget = max(
+            1,
+            DAT_TO_ED_PROCESSOR_BRUSH_BUDGET - len(model_names or ()),
         )
-        if name is None:
-            return
-        name = str(name).strip()
-        if not name:
-            messagebox.showerror("Mesh import failed", "The BSP model name cannot be empty.")
-            return
-
-        collision_options = _ask_prefab_collision_options(self.root, title="Mesh Collision")
-        if collision_options is None:
-            return
-        collision_mode = str(collision_options.get("collision_mode", "none"))
-        collision_thickness = float(collision_options.get("collision_thickness", 8.0))
-        collision_segment_length = float(collision_options.get("collision_segment_length", 512.0))
-
-        op = P.ImportMeshBspOp(
-            obj_path=obj_path,
-            meta_path=meta_path,
-            new_name=name,
-            collision_mode=collision_mode,
-            collision_thickness=collision_thickness,
-            collision_segment_length=collision_segment_length,
+        selected_model_name_set = {str(name).lower() for name in model_names or ()}
+        selected_polygon_count = sum(
+            len(getattr(model, "polygons", []) or [])
+            for model in getattr(bsp_world, "world_models", []) or []
+            if str(getattr(model, "name", "") or "").lower() in selected_model_name_set
         )
-        try:
-            plan = op.build_plan(L)
-        except Exception as e:
-            messagebox.showerror("Mesh import failed", str(e))
-            return
-        if not messagebox.askokcancel(
-            "Confirm mesh import",
-            dat_mesh_import.import_summary(plan)
-            + "\n\nCreate this preview import operation?",
-            parent=self.root,
-        ):
-            return
-
-        L.append_op(op)
-        mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
-        helper_index = next(
-            (i for i, obj in enumerate(mat.objects) if (obj.get("Name") or "") == name),
-            len(mat.objects) - 1,
+        remaining_polygon_budget = max(1, DAT_TO_ED_PROCESSOR_POLYGON_BUDGET - selected_polygon_count)
+        physics_shell_polygon_budget = min(
+            terrain_support_brush_budget,
+            max(1, remaining_polygon_budget // 6),
         )
-        self._selected_world_index = helper_index
-        self._refresh_after_edit(helper_index)
-        messagebox.showinfo(
-            "Mesh imported for preview",
-            "Imported Blender geometry into the editor preview.\n\n"
-            "DAT save uses an experimental minimal BSP compiler. Reopen the "
-            "output DAT and validate in-game before relying on it.",
-        )
-
-
-    def cmd_import_blender_vertex_edits(self) -> None:
-        if not getattr(self, "active", None):
-            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
-            return
-        L = self.active
-        if L.get_bsp() is None:
-            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
-            return
 
         editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
-        obj_path = filedialog.askopenfilename(
-            title="Import Blender vertex edits",
-            initialdir=editor_dir,
-            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")],
+        initial_dir = getattr(self.cfg, "work_dir", None) or editor_dir
+        output_dir = filedialog.askdirectory(
+            title="Generate DEDit ED from DAT",
+            initialdir=initial_dir,
         )
-        if not obj_path:
+        if not output_dir:
             return
-        default_meta = dat_mesh_import._default_meta_path(obj_path)
-        if os.path.exists(default_meta):
-            meta_path = default_meta
-        else:
-            meta_path = filedialog.askopenfilename(
-                title="Select DAT sidecar metadata",
-                initialdir=os.path.dirname(os.path.abspath(obj_path)),
-                filetypes=[("DAT metadata", "*.datmeta.json"), ("JSON files", "*.json"), ("All files", "*.*")],
-            )
-            if not meta_path:
-                return
 
-        op = P.EditBspVerticesOp(obj_path=obj_path, meta_path=meta_path)
         try:
-            plan = op.build_plan(L)
-        except Exception as e:
-            messagebox.showerror("Vertex edit import failed", str(e))
-            return
-        L.append_op(op)
-        self._refresh_after_edit(None)
-        model_names = ", ".join(item.name for item in plan.models[:8])
-        extra = "" if len(plan.models) <= 8 else f" (+{len(plan.models) - 8} more)"
-        messagebox.showinfo(
-            "Vertex edits imported",
-            "Imported topology-preserving BSP vertex edits.\n\n"
-            f"Edited model(s): {model_names}{extra}\n\n"
-            "Save will patch existing BSP records in place; test the output in-game.",
-        )
+            source_name = L.display_name or L.rez_vpath or L.path or "level"
+            stem = self._dat_to_ed_output_stem(source_name)
+            os.makedirs(output_dir, exist_ok=True)
+            staged_dir = os.path.join(output_dir, "source_dat")
+            os.makedirs(staged_dir, exist_ok=True)
+            staged_dat = os.path.join(staged_dir, f"{stem}.DAT")
+            with open(staged_dat, "wb") as f:
+                f.write(L.source_bytes())
 
+            worlds_install_dir = ""
+            game_data_dir = getattr(self.cfg, "game_data_dir", None)
+            if game_data_dir:
+                worlds_install_dir = os.path.join(game_data_dir, "WORLDS")
 
-    def cmd_import_blender_submodel_replacement(self) -> None:
-        if not getattr(self, "active", None):
-            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
-            return
-        L = self.active
-        if L.get_bsp() is None:
-            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
-            return
-
-        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
-        obj_path = filedialog.askopenfilename(
-            title="Import Blender submodel replacement",
-            initialdir=editor_dir,
-            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")],
-        )
-        if not obj_path:
-            return
-        default_meta = dat_mesh_import._default_meta_path(obj_path)
-        if os.path.exists(default_meta):
-            meta_path = default_meta
-        else:
-            meta_path = filedialog.askopenfilename(
-                title="Select DAT sidecar metadata",
-                initialdir=os.path.dirname(os.path.abspath(obj_path)),
-                filetypes=[("DAT metadata", "*.datmeta.json"), ("JSON files", "*.json"), ("All files", "*.*")],
+            report = dat_compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=staged_dat,
+                model_names=model_names or (terrain_semantics.DEFAULT_TERRAIN_MODEL,),
+                group_name=f"{stem}_ReconstructedDAT",
+                work_dir=output_dir,
+                worlds_install_dir=worlds_install_dir,
+                output_filename=f"{stem}_reconstructed.ed",
+                output_prefix=stem,
+                include_terrain_support_patch=include_terrain_support_patch,
+                terrain_support_name_prefix=f"{stem}_TerrainSupport",
+                terrain_support_margin=0.0,
+                terrain_support_selection_mode="connected_budget",
+                terrain_support_radius=DAT_TO_ED_DEFAULT_TERRAIN_SUPPORT_RADIUS,
+                terrain_support_brush_mode="single_polygon",
+                terrain_support_thickness=128.0,
+                terrain_support_max_polygons=terrain_support_brush_budget,
+                include_physics_shell_patch=include_physics_shell_patch,
+                physics_shell_name_prefix=f"{stem}_PhysicsShell",
+                physics_shell_max_polygons=physics_shell_polygon_budget,
+                physics_shell_thickness=16.0,
+                include_terrain_support_source_coverage=include_terrain_support_patch,
+                terrain_support_source_coverage_sample_grid=3,
+                terrain_support_source_coverage_max_gaps=128,
+                max_processor_brushes=DAT_TO_ED_PROCESSOR_BRUSH_BUDGET,
+                max_processor_polygons=DAT_TO_ED_PROCESSOR_POLYGON_BUDGET,
+                block_unreconstructed_physics_shell=True,
+                max_models=512,
+                max_model_points=16384,
+                max_model_polygons=16384,
+                max_total_points=65536,
+                max_total_polygons=65536,
             )
-            if not meta_path:
-                return
-
-        op = P.ReplaceBspSubmodelOp(obj_path=obj_path, meta_path=meta_path)
-        try:
-            plan = op.build_plan(L)
+            report_text = dat_compiler_strategy.format_full_world_skeleton_acceptance_report(report)
+            report_path = os.path.join(output_dir, f"{stem}_dat_to_ed_report.txt")
+            self._write_text_file(report_path, report_text)
+            selection_report_path = os.path.join(output_dir, f"{stem}_dat_to_ed_selection_report.json")
+            selection_report = dat_compiler_strategy.build_dat_to_ed_selection_report(
+                source_dat_path=staged_dat,
+                requested_model_names=model_names or (terrain_semantics.DEFAULT_TERRAIN_MODEL,),
+                selected_model_names=report.selected_model_names,
+                terrain_support_model_name=terrain_semantics.DEFAULT_TERRAIN_MODEL,
+                include_terrain_support_patch=include_terrain_support_patch,
+                physics_shell_model_name=terrain_semantics.PHYSICS_BSP_MODEL,
+                include_physics_shell_patch=include_physics_shell_patch,
+                include_skyboxes=False,
+                max_models=512,
+                max_model_points=16384,
+                max_model_polygons=16384,
+                max_total_points=65536,
+                max_total_polygons=65536,
+            )
+            dat_compiler_strategy.write_dat_to_ed_selection_report(
+                selection_report,
+                selection_report_path,
+                acceptance_report=report,
+            )
+            manifest_path = os.path.join(output_dir, f"{stem}_dat_to_ed_acceptance_manifest.json")
+            dat_compiler_strategy.write_full_world_skeleton_acceptance_manifest(
+                report,
+                manifest_path,
+                original_source=source_name,
+                staged_source_dat_path=staged_dat,
+                text_report_path=report_path,
+                selection_report_path=selection_report_path,
+            )
         except Exception as e:
-            messagebox.showerror("Submodel replacement failed", str(e))
+            messagebox.showerror("DAT to ED generation failed", str(e))
             return
-        L.append_op(op)
-        self._refresh_after_edit(None)
-        model_names = ", ".join(item.name for item in plan.models[:8])
-        extra = "" if len(plan.models) <= 8 else f" (+{len(plan.models) - 8} more)"
+
+        if report.blockers:
+            messagebox.showerror(
+                "DAT to ED generation blocked",
+                "The DAT to ED report contains blockers.\n\n"
+                f"Report:\n{report_path}\n\n"
+                f"Selection report:\n{selection_report_path}\n\n"
+                f"Manifest:\n{manifest_path}\n\n"
+                + "\n".join(f"- {item}" for item in report.blockers[:8]),
+            )
+            return
+
         messagebox.showinfo(
-            "Submodel replacement imported",
-            "Imported BSP submodel topology replacement.\n\n"
-            f"Replaced model(s): {model_names}{extra}\n\n"
-            "PhysicsBSP, VisBSP, and skyboxes are blocked. Save will rebuild "
-            "the selected BSP records with the experimental compiler; test "
-            "the output in-game.",
+            "DAT to ED generation complete",
+            "Generated a DEDit ED candidate from the active DAT.\n\n"
+            f"ED:\n{report.generated_ed_path}\n\n"
+            f"Report:\n{report_path}\n\n"
+            f"Selection report:\n{selection_report_path}\n\n"
+            f"Manifest:\n{manifest_path}\n\n"
+            f"Selected models: {len(report.selected_model_names)}; "
+            f"generated brushes/objects: {report.object_count}; "
+            f"polygons: {report.polygon_count}\n\n"
+            "Next: open the ED in old DEDit, save it, process it with LithTech 2.1 "
+            "Processor.exe, then fresh-load the DAT in game.",
         )
+
+    @staticmethod
+    def _dat_to_ed_output_stem(source_name: str) -> str:
+        base = os.path.splitext(os.path.basename(str(source_name or "level")))[0] or "level"
+        safe = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_")
+        return safe or "level"
+
+    @staticmethod
+    def _write_text_file(path: str, text: str) -> None:
+        os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            if not text.endswith("\n"):
+                f.write("\n")
+
+    @staticmethod
+    def _default_dat_to_ed_model_names(bsp_world: Any) -> tuple:
+        return terrain_semantics.default_dat_to_ed_model_names(bsp_world)
 
 
     def cmd_import_static_prefab_bsp(self) -> None:
@@ -1793,18 +1737,6 @@ class EditorApp:
                 self._refresh_after_edit(None)
                 return
 
-            mesh_op = L.mesh_import_for_materialized(selected_idx)
-            if mesh_op is not None:
-                try:
-                    L.ops.remove(mesh_op)
-                except ValueError:
-                    pass
-                L.clear_redo()
-                self.props_panel.show(None)
-                self._selected_world_index = None
-                self._refresh_after_edit(None)
-                return
-
             baseline_idx = L.existing_index_for_materialized(selected_idx)
             if baseline_idx is not None:
                 L.append_op(P.DeleteOp(target_index=baseline_idx))
@@ -1865,12 +1797,7 @@ class EditorApp:
             L.clear_redo()
             refresh_clone_preview = True
         else:
-            mesh_op = L.mesh_import_for_materialized(world_index)
-            if mesh_op is not None:
-                mesh_op.target_pos = new_pos
-                L.clear_redo()
-                refresh_clone_preview = True
-            elif baseline_idx is not None:
+            if baseline_idx is not None:
                 L.coalesce_move_op(baseline_idx, new_pos=new_pos)
             else:
                 pending = L.pending_add_offset_for_materialized(world_index)
@@ -1913,12 +1840,7 @@ class EditorApp:
             L.clear_redo()
             refresh_clone_preview = True
         else:
-            mesh_op = L.mesh_import_for_materialized(world_index)
-            if mesh_op is not None:
-                mesh_op.target_yaw = float(rot[1])
-                L.clear_redo()
-                refresh_clone_preview = True
-            elif baseline_idx is not None:
+            if baseline_idx is not None:
                 mat = L.materialize()
                 if not (0 <= world_index < len(mat.objects)):
                     return
@@ -1972,19 +1894,7 @@ class EditorApp:
             L.clear_redo()
             refresh_clone_preview = True
         else:
-            mesh_op = L.mesh_import_for_materialized(world_index)
-            if mesh_op is not None:
-                old = mesh_op.target_pos
-                if old is None:
-                    mat = L.materialize()
-                    if not (0 <= world_index < len(mat.objects)):
-                        return
-                    old = mat.objects[world_index].get("Pos")
-                if old is not None:
-                    mesh_op.target_pos = (float(old[0]), float(new_y), float(old[2]))
-                    L.clear_redo()
-                    refresh_clone_preview = True
-            elif baseline_idx is not None:
+            if baseline_idx is not None:
                 mat = L.materialize()
                 if not (0 <= world_index < len(mat.objects)):
                     return

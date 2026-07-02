@@ -8,9 +8,9 @@ from tests._path import ROOT  # noqa: F401
 
 from core import project
 from features.dat_editing import bsp_compile
+from features.dat_editing import geometry_mesh
 from features.dat_editing import gltf_export
 from features.dat_editing import legacy_ed
-from features.dat_editing import mesh_import
 from features.dat_editing import source_world
 
 
@@ -146,11 +146,11 @@ class SourcePrefabGoldenTests(unittest.TestCase):
         self.assertGreater(scene.metadata["skipped_range_count"], 0)
         self.assertTrue(scene.metadata["skipped_ranges"])
         meshes = [
-            mesh_import._parsed_obj_to_mesh(
+            geometry_mesh.geometry_model_to_bsp_mesh(
                 source_model,
                 f"GoldenEdBrush{index}",
                 scene.material_texture_map(),
-                mesh_import._identity_matrix(),
+                geometry_mesh.identity_matrix(),
             )
             for index, source_model in enumerate(scene.mesh_models())
         ]
@@ -189,11 +189,11 @@ class SourcePrefabGoldenTests(unittest.TestCase):
 
         scene = legacy_ed.load_legacy_ed_geometry_scene(path)
         meshes = [
-            mesh_import._parsed_obj_to_mesh(
+            geometry_mesh.geometry_model_to_bsp_mesh(
                 source_model,
                 f"GoldenDoorBrush{index}",
                 scene.material_texture_map(),
-                mesh_import._identity_matrix(),
+                geometry_mesh.identity_matrix(),
             )
             for index, source_model in enumerate(scene.mesh_models())
         ]
@@ -208,11 +208,11 @@ class SourcePrefabGoldenTests(unittest.TestCase):
 
 def _compile_first_source_model(scene, model_name):
     source_model = scene.mesh_models()[0]
-    return mesh_import._parsed_obj_to_mesh(
+    return geometry_mesh.geometry_model_to_bsp_mesh(
         source_model,
         model_name,
         scene.material_texture_map(),
-        mesh_import._identity_matrix(),
+        geometry_mesh.identity_matrix(),
     )
 
 

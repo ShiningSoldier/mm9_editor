@@ -11,12 +11,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import _path_setup  # noqa: F401
 from core import bsp
-from features.dat_editing import export_roundtrip
+from features.dat_editing import geometry_export_common as export_common
 
 
 Vec3 = Tuple[float, float, float]
 Vec2 = Tuple[float, float]
-TextureSizeLookup = export_roundtrip.TextureSizeLookup
+TextureSizeLookup = export_common.TextureSizeLookup
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ def export_geometry_scene_gltf(
     if scene is None:
         raise ValueError("GeometryScene is required")
     os.makedirs(output_dir, exist_ok=True)
-    label = export_roundtrip._sanitize_material(base_name or os.path.splitext(os.path.basename(scene.source_path or "source_prefab"))[0])
+    label = export_common._sanitize_material(base_name or os.path.splitext(os.path.basename(scene.source_path or "source_prefab"))[0])
     gltf_path = os.path.abspath(os.path.join(output_dir, f"{label}_source_geometry.gltf"))
     bin_path = os.path.abspath(os.path.join(output_dir, f"{label}_source_geometry.bin"))
     meta_path = os.path.abspath(os.path.join(output_dir, f"{label}_source_geometry.gltf.datmeta.json"))
@@ -52,7 +52,7 @@ def export_geometry_scene_gltf(
         {
             "name": name,
             "pbrMetallicRoughness": {
-                "baseColorFactor": [*export_roundtrip._fallback_color(((index * 37) % 100) / 100.0), 1.0],
+                "baseColorFactor": [*export_common._fallback_color(((index * 37) % 100) / 100.0), 1.0],
                 "metallicFactor": 0.0,
                 "roughnessFactor": 1.0,
             },
@@ -151,8 +151,8 @@ def export_geometry_scene_gltf(
         },
         "coordinate_system": {
             "export_space": "raw_source",
-            "dat_to_export_matrix": export_roundtrip._identity_transform(),
-            "export_to_dat_matrix": export_roundtrip._identity_transform(),
+            "dat_to_export_matrix": export_common._identity_transform(),
+            "export_to_dat_matrix": export_common._identity_transform(),
             "notes": "Inspection-only source-prefab glTF; not a full DAT rebuild target.",
         },
         "files": {
@@ -193,7 +193,7 @@ def export_geometry_scene_gltf(
     )
 
 
-def export_gltf_roundtrip(
+def export_gltf_inspection(
     bsp_world: bsp.BspWorld,
     source_dat: bytes,
     output_dir: str,
@@ -210,7 +210,7 @@ def export_gltf_roundtrip(
         raise ValueError("BSP world is required")
     os.makedirs(output_dir, exist_ok=True)
 
-    label = export_roundtrip._export_base_name(base_name, source_path, bsp_world)
+    label = export_common._export_base_name(base_name, source_path, bsp_world)
     gltf_path = os.path.abspath(os.path.join(output_dir, f"{label}_geometry.gltf"))
     bin_path = os.path.abspath(os.path.join(output_dir, f"{label}_geometry.bin"))
     meta_path = os.path.abspath(os.path.join(output_dir, f"{label}_geometry.gltf.datmeta.json"))
@@ -218,18 +218,18 @@ def export_gltf_roundtrip(
     effective_include_helpers = bool(
         include_helper_geometry or raw_coordinates or selected_model_names
     )
-    models = export_roundtrip._selected_models(
+    models = export_common._selected_models(
         bsp_world,
         selected_model_names,
         include_helper_geometry=effective_include_helpers,
     )
-    material_names = export_roundtrip._material_names(models)
+    material_names = export_common._material_names(models)
     material_by_texture = {texture: material for texture, material in material_names}
     gltf_materials = [
         {
             "name": material,
             "pbrMetallicRoughness": {
-                "baseColorFactor": [*export_roundtrip._fallback_color(((index * 37) % 100) / 100.0), 1.0],
+                "baseColorFactor": [*export_common._fallback_color(((index * 37) % 100) / 100.0), 1.0],
                 "metallicFactor": 0.0,
                 "roughnessFactor": 1.0,
             },
@@ -254,7 +254,7 @@ def export_gltf_roundtrip(
     total_triangles = 0
 
     for model_index, model in enumerate(models):
-        object_name = export_roundtrip._obj_name(model.name, model_index)
+        object_name = export_common._obj_name(model.name, model_index)
         primitive_groups = _primitive_groups_for_model(
             model,
             material_by_texture,
@@ -321,10 +321,10 @@ def export_gltf_roundtrip(
             "mesh": mesh_index,
             "extras": {
                 "MM9_model_name": model.name,
-                "MM9_role": export_roundtrip._model_role(model, objects or []),
+                "MM9_role": export_common._model_role(model, objects or []),
             },
         })
-        meta_models.append(export_roundtrip._model_metadata(model_index, model, objects or [], poly_meta))
+        meta_models.append(export_common._model_metadata(model_index, model, objects or [], poly_meta))
         total_polygons += len(poly_meta)
         total_vertices += model_vertex_count
         total_triangles += model_triangle_count
@@ -381,6 +381,11 @@ def export_gltf_roundtrip(
     )
 
 
+def export_gltf_roundtrip(*args, **kwargs) -> GltfExportResult:
+    """Backward-compatible wrapper for the inspection-only glTF exporter."""
+    return export_gltf_inspection(*args, **kwargs)
+
+
 def _primitive_groups_for_model(
     model: bsp.WorldModelMesh,
     material_by_texture: Dict[str, str],
@@ -392,10 +397,10 @@ def _primitive_groups_for_model(
 ) -> List[Dict[str, Any]]:
     groups: Dict[str, Dict[str, Any]] = {}
     for poly_index, polygon in enumerate(model.polygons):
-        if not effective_include_helpers and export_roundtrip._is_non_render_polygon(model, polygon):
+        if not effective_include_helpers and export_common._is_non_render_polygon(model, polygon):
             continue
         texture_name = model.texture_name_for(polygon) or "Default"
-        material_name = material_by_texture.get(texture_name, export_roundtrip._sanitize_material(texture_name))
+        material_name = material_by_texture.get(texture_name, export_common._sanitize_material(texture_name))
         group = groups.setdefault(material_name, {
             "positions": [],
             "texcoords": [],
@@ -412,8 +417,8 @@ def _primitive_groups_for_model(
             if source_vertex_index < 0 or source_vertex_index >= len(model.points):
                 continue
             point = model.points[source_vertex_index]
-            position = export_roundtrip._transform_point(point, raw_coordinates)
-            uv = export_roundtrip._uv_for_vertex(model, polygon, point, texture_name, texture_size_lookup)
+            position = export_common._transform_point(point, raw_coordinates)
+            uv = export_common._uv_for_vertex(model, polygon, point, texture_name, texture_size_lookup)
             corner_indices.append(len(group["positions"]))
             group["positions"].append(position)
             group["texcoords"].append(uv)
@@ -450,10 +455,10 @@ def _metadata(
     raw_coordinates: bool,
     include_helper_geometry: bool,
 ) -> Dict[str, Any]:
-    transform = export_roundtrip._identity_transform() if raw_coordinates else export_roundtrip._display_transform()
+    transform = export_common._identity_transform() if raw_coordinates else export_common._display_transform()
     return {
         "version": 1,
-        "kind": "mm9_dat_geometry_roundtrip",
+        "kind": "mm9_dat_geometry_inspection",
         "format": "gltf",
         "source": {
             "path": source_path,
@@ -465,11 +470,11 @@ def _metadata(
             "world_model_table_start": bsp_world.world_model_table_start,
         },
         "coordinate_system": {
-            "export_space": "raw_dat" if raw_coordinates else "blender_display",
+            "export_space": "raw_dat" if raw_coordinates else "editor_display",
             "dat_to_export_matrix": transform,
             "export_to_dat_matrix": transform,
             "notes": (
-                "glTF export reflects X by default to match the editor viewport. "
+                "glTF inspection export reflects X by default to match the editor viewport. "
                 "MM9 metadata is embedded in glTF extras and duplicated in the sidecar."
             ),
         },

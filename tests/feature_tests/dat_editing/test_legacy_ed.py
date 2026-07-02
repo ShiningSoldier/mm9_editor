@@ -43,6 +43,7 @@ class LegacyEdTests(unittest.TestCase):
         self.assertEqual(scene.metadata["version"], legacy_ed.LEGACY_ED_VERSION)
         self.assertEqual(scene.metadata["recovered_brush_count"], 1)
         self.assertEqual(scene.metadata["recovered_polygon_count"], 1)
+        self.assertEqual(scene.metadata["recovered_object_count"], 0)
         self.assertEqual(scene.material_texture_map()["TEXTURES\\World\\Floor.dtx"], "TEXTURES\\World\\Floor.dtx")
 
         model = scene.mesh_models()[0]
@@ -57,10 +58,39 @@ class LegacyEdTests(unittest.TestCase):
         self.assertEqual(face.extras["uv_p"], [1.0, 0.0, 0.0])
         self.assertEqual(face.extras["uv_q"], [0.0, 0.0, 1.0])
         self.assertEqual(face.extras["texture_flags"], 1)
+        self.assertEqual(face.extras["surface_flags"], 0)
+        self.assertEqual(face.extras["shade_rgb"], [0, 0, 0])
 
     def test_legacy_ed_rejects_wrong_version(self):
         with self.assertRaisesRegex(legacy_ed.LegacyEdParseError, "unsupported legacy ED version"):
             legacy_ed.legacy_ed_bytes_to_geometry_scene(struct.pack("<I", 1))
+
+    def test_real_barrel_prefab_recovers_object_properties_when_available(self):
+        path = r"C:\lithtech\PreFabs\Props\Barrel.ed"
+        if not os.path.exists(path):
+            self.skipTest(f"missing legacy ED prefab: {path}")
+
+        scene = legacy_ed.load_legacy_ed_geometry_scene(path)
+        report = legacy_ed.load_legacy_ed_object_scan_report(path)
+
+        self.assertEqual(scene.metadata["version"], legacy_ed.LEGACY_ED_VERSION)
+        self.assertEqual(scene.metadata["recovered_brush_count"], 0)
+        self.assertEqual(scene.metadata["recovered_object_count"], 1)
+        self.assertEqual(scene.metadata["object_class_counts"], {"DestructableProp": 1})
+        self.assertEqual(report.object_count, 1)
+        self.assertEqual(report.property_count, 68)
+        self.assertEqual(report.class_counts, {"DestructableProp": 1})
+
+        record = report.records[0]
+        self.assertEqual(record.class_name, "DestructableProp")
+        self.assertEqual(record.property_value("Name"), "Barrel1")
+        self.assertEqual(record.property_value("Filename"), "MODELS\\Props\\Barrel.ABC")
+        self.assertEqual(record.property_value("Skin"), "Skins\\Props\\Barrel.dtx")
+        self.assertEqual(record.property_value("Pos"), (0.0, 0.0, 0.0))
+
+        formatted = legacy_ed.format_legacy_ed_object_scan_report(report)
+        self.assertIn("DestructableProp=1", formatted)
+        self.assertIn("Filename=MODELS\\Props\\Barrel.ABC", formatted)
 
     def test_real_chair_prefab_recovers_expected_brushes_when_available(self):
         path = r"C:\lithtech\PreFabs\Furniture\Chair.ed"
@@ -72,7 +102,27 @@ class LegacyEdTests(unittest.TestCase):
         self.assertEqual(scene.metadata["version"], legacy_ed.LEGACY_ED_VERSION)
         self.assertEqual(scene.metadata["recovered_brush_count"], 6)
         self.assertEqual(scene.metadata["recovered_polygon_count"], 38)
+        self.assertEqual(scene.metadata["recovered_object_count"], 6)
+        self.assertEqual(scene.metadata["object_class_counts"], {"Brush": 6})
         self.assertIn("TEXTURES\\LevelTextures\\21_DeathMatch\\ClankersFloor.dtx", scene.material_texture_map())
+
+        report = legacy_ed.load_legacy_ed_object_scan_report(path)
+        self.assertEqual(report.object_count, 6)
+        self.assertEqual(report.property_count, 156)
+        self.assertEqual(report.class_counts, {"Brush": 6})
+        self.assertEqual(report.records[0].property_value("Name"), "Brush46")
+
+        layout = legacy_ed.load_legacy_ed_node_layout_report(path)
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.polyhedron_count, 6)
+        self.assertEqual(layout.surface_count, 38)
+        self.assertEqual(layout.surface_trailing_field_count, 38)
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes")
+        self.assertEqual(layout.root_child_count, 1)
+        self.assertEqual(layout.group_child_count, 6)
+        self.assertEqual(layout.brush_object_count, 6)
+        formatted = legacy_ed.format_legacy_ed_node_layout_report(layout)
+        self.assertIn("named_group_brush_nodes", formatted)
 
     def test_shipped_full_level_ed_decompresses_and_recovers_brush_records(self):
         path = os.path.join(ROOT, "mm9_data", "WORLDS", "BEETHOVEN.ED")
@@ -86,8 +136,11 @@ class LegacyEdTests(unittest.TestCase):
         self.assertEqual(scene.metadata["block_count"], 129)
         self.assertIn("PBlockSize 2048", scene.metadata["infostring"])
         self.assertEqual(scene.metadata["declared_brush_count"], 3774)
-        self.assertEqual(scene.metadata["recovered_brush_count"], 3748)
-        self.assertEqual(scene.metadata["recovered_polygon_count"], 22041)
+        self.assertEqual(scene.metadata["recovered_brush_count"], 3774)
+        self.assertEqual(scene.metadata["recovered_polygon_count"], 22191)
+        self.assertEqual(scene.metadata["recovered_object_count"], 4961)
+        self.assertEqual(scene.metadata["object_class_counts"]["Brush"], 3774)
+        self.assertEqual(scene.metadata["object_class_counts"]["WorldProperties"], 1)
         self.assertIn("TEXTURES\\A3Sturmgaard\\floors\\keepstonefloor128a.dtx", scene.material_texture_map())
 
 

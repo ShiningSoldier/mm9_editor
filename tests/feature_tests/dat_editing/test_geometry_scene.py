@@ -4,7 +4,7 @@ import unittest
 
 from tests._path import ROOT  # noqa: F401
 
-from features.dat_editing import mesh_import
+from features.dat_editing import geometry_mesh
 
 
 class GeometrySceneTests(unittest.TestCase):
@@ -30,7 +30,7 @@ class GeometrySceneTests(unittest.TestCase):
                     "f 4 5 6\n"
                 )
 
-            scene = mesh_import.load_obj_geometry_scene(
+            scene = geometry_mesh.load_obj_geometry_scene(
                 obj_path,
                 {
                     "materials": [

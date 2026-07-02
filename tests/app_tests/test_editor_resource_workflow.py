@@ -244,6 +244,329 @@ class EditorResourceWorkflowTests(unittest.TestCase):
 
         self.assertEqual(errors[0][0], "MM9 game folder not detected")
 
+    def test_dat_to_ed_default_model_selection_skips_system_models(self):
+        class FakeModel:
+            def __init__(self, name, *, skybox=False, points=True, polygons=True, texture=""):
+                self.name = name
+                self.points = [(0.0, 0.0, 0.0)] if points else []
+                self.polygons = [object()] if polygons else []
+                self._skybox = skybox
+                self._texture = texture
+
+            def is_skybox(self):
+                return self._skybox
+
+            def texture_name_for(self, _polygon):
+                return self._texture
+
+        world = types.SimpleNamespace(world_models=[
+            FakeModel("Terrain0"),
+            FakeModel("PhysicsBSP"),
+            FakeModel("VisBSP"),
+            FakeModel("SkyBox0", skybox=True),
+            FakeModel("EmptyThing", points=False),
+            FakeModel("AITrk0", texture="TEXTURES\\LevelTextures\\Misc\\rail.dtx"),
+            FakeModel("WorldObject1"),
+            FakeModel("MonsterDoor1"),
+        ])
+
+        names = mm9_editor_app.EditorApp._default_dat_to_ed_model_names(world)
+
+        self.assertEqual(names, ("WorldObject1", "MonsterDoor1"))
+
+    def test_dat_to_ed_command_stages_active_dat_and_writes_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = os.path.join(tmp, "out")
+            staged_calls = {}
+            infos = []
+
+            class FakeModel:
+                def __init__(self, name):
+                    self.name = name
+                    self.points = [(0.0, 0.0, 0.0)]
+                    self.polygons = [object()]
+
+                def is_skybox(self):
+                    return False
+
+            class FakeLevel:
+                display_name = "BOOTCAMP.DAT"
+                rez_vpath = "WORLDS/BOOTCAMP.DAT"
+                path = ""
+
+                def get_bsp(self):
+                    return types.SimpleNamespace(world_models=[
+                        FakeModel("Terrain0"),
+                        FakeModel("WorldObject1"),
+                    ])
+
+                def source_bytes(self):
+                    return b"fake dat bytes"
+
+            class FakeFileDialog:
+                @staticmethod
+                def askdirectory(**_kwargs):
+                    return output_dir
+
+            class FakeMessagebox:
+                @staticmethod
+                def showinfo(title, body):
+                    infos.append((title, body))
+
+                @staticmethod
+                def showerror(title, body):
+                    raise AssertionError(f"unexpected error: {title}: {body}")
+
+                @staticmethod
+                def showwarning(title, body):
+                    raise AssertionError(f"unexpected warning: {title}: {body}")
+
+            class FakeCompilerStrategy:
+                @staticmethod
+                def build_full_world_skeleton_acceptance_report(**kwargs):
+                    staged_calls.update(kwargs)
+                    with open(kwargs["source_dat_path"], "rb") as f:
+                        self.assertEqual(f.read(), b"fake dat bytes")
+                    generated_ed = os.path.join(
+                        kwargs["work_dir"],
+                        "full_world_skeleton_source",
+                        kwargs["output_filename"],
+                    )
+                    os.makedirs(os.path.dirname(generated_ed), exist_ok=True)
+                    with open(generated_ed, "wb") as f:
+                        f.write(b"ed")
+                    return types.SimpleNamespace(
+                        blockers=(),
+                        generated_ed_path=generated_ed,
+                        selected_model_names=("WorldObject1",),
+                        object_count=4,
+                        polygon_count=12,
+                    )
+
+                @staticmethod
+                def format_full_world_skeleton_acceptance_report(report):
+                    return f"formatted report for {report.generated_ed_path}"
+
+                @staticmethod
+                def build_dat_to_ed_selection_report(**kwargs):
+                    staged_calls["selection_kwargs"] = kwargs
+                    return types.SimpleNamespace(
+                        status="selection_report_built",
+                        selected_model_count=len(kwargs["selected_model_names"]),
+                    )
+
+                @staticmethod
+                def write_dat_to_ed_selection_report(report, output_path, **kwargs):
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "kind": "mm9_dat_to_ed_selection_report",
+                            "status": report.status,
+                            "selected_model_count": report.selected_model_count,
+                            "diagnostics_linked": bool(kwargs.get("acceptance_report")),
+                        }, f)
+                    return output_path
+
+                @staticmethod
+                def write_full_world_skeleton_acceptance_manifest(report, manifest_path, **kwargs):
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "kind": "mm9_dat_to_ed_acceptance",
+                            "source": {
+                                "original_source": kwargs["original_source"],
+                                "staged_source_dat_path": kwargs["staged_source_dat_path"],
+                            },
+                            "artifacts": {
+                                "generated_ed_path": report.generated_ed_path,
+                                "text_report_path": kwargs["text_report_path"],
+                                "selection_report_path": kwargs["selection_report_path"],
+                            },
+                        }, f)
+                    return manifest_path
+
+            method_globals = mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat.__globals__
+            old_filedialog = method_globals.get("filedialog")
+            old_messagebox = method_globals.get("messagebox")
+            old_compiler = method_globals.get("dat_compiler_strategy")
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(app)
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(staged_calls["model_names"], ("WorldObject1",))
+            self.assertTrue(staged_calls["include_terrain_support_patch"])
+            self.assertTrue(staged_calls["include_terrain_support_source_coverage"])
+            self.assertFalse(staged_calls["include_physics_shell_patch"])
+            self.assertEqual(staged_calls["terrain_support_selection_mode"], "connected_budget")
+            self.assertGreater(staged_calls["terrain_support_radius"], 0.0)
+            self.assertEqual(staged_calls["terrain_support_max_polygons"], 1499)
+            self.assertEqual(staged_calls["max_processor_brushes"], 1500)
+            self.assertEqual(staged_calls["max_processor_polygons"], 12000)
+            self.assertTrue(staged_calls["block_unreconstructed_physics_shell"])
+            self.assertEqual(
+                staged_calls["worlds_install_dir"],
+                os.path.join(tmp, "game", "data", "WORLDS"),
+            )
+            self.assertTrue(os.path.exists(os.path.join(output_dir, "source_dat", "BOOTCAMP.DAT")))
+            report_path = os.path.join(output_dir, "BOOTCAMP_dat_to_ed_report.txt")
+            with open(report_path, "r", encoding="utf-8") as f:
+                self.assertIn("formatted report", f.read())
+            selection_path = os.path.join(output_dir, "BOOTCAMP_dat_to_ed_selection_report.json")
+            with open(selection_path, "r", encoding="utf-8") as f:
+                selection = json.load(f)
+            self.assertEqual(selection["kind"], "mm9_dat_to_ed_selection_report")
+            self.assertTrue(selection["diagnostics_linked"])
+            self.assertEqual(staged_calls["selection_kwargs"]["selected_model_names"], ("WorldObject1",))
+            self.assertTrue(staged_calls["selection_kwargs"]["include_terrain_support_patch"])
+            self.assertFalse(staged_calls["selection_kwargs"]["include_physics_shell_patch"])
+            manifest_path = os.path.join(output_dir, "BOOTCAMP_dat_to_ed_acceptance_manifest.json")
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest["kind"], "mm9_dat_to_ed_acceptance")
+            self.assertEqual(manifest["source"]["original_source"], "BOOTCAMP.DAT")
+            self.assertEqual(
+                manifest["source"]["staged_source_dat_path"],
+                os.path.join(output_dir, "source_dat", "BOOTCAMP.DAT"),
+            )
+            self.assertEqual(manifest["artifacts"]["text_report_path"], report_path)
+            self.assertEqual(manifest["artifacts"]["selection_report_path"], selection_path)
+            self.assertEqual(infos[0][0], "DAT to ED generation complete")
+
+    def test_dat_to_ed_command_enables_physics_shell_patch_for_non_terrain_levels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = os.path.join(tmp, "out")
+            staged_calls = {}
+            infos = []
+
+            class FakeModel:
+                def __init__(self, name, polygon_count=1):
+                    self.name = name
+                    self.points = [(0.0, 0.0, 0.0)]
+                    self.polygons = [object()] * polygon_count
+
+                def is_skybox(self):
+                    return False
+
+            class FakeLevel:
+                display_name = "ANSKRAMKEEP.DAT"
+                rez_vpath = "WORLDS/ANSKRAMKEEP.DAT"
+                path = ""
+
+                def get_bsp(self):
+                    return types.SimpleNamespace(world_models=[
+                        FakeModel("PhysicsBSP", polygon_count=6450),
+                        FakeModel("WorldObject1", polygon_count=12),
+                    ])
+
+                def source_bytes(self):
+                    return b"fake dat bytes"
+
+            class FakeFileDialog:
+                @staticmethod
+                def askdirectory(**_kwargs):
+                    return output_dir
+
+            class FakeMessagebox:
+                @staticmethod
+                def showinfo(title, body):
+                    infos.append((title, body))
+
+                @staticmethod
+                def showerror(title, body):
+                    raise AssertionError(f"unexpected error: {title}: {body}")
+
+                @staticmethod
+                def showwarning(title, body):
+                    raise AssertionError(f"unexpected warning: {title}: {body}")
+
+            class FakeCompilerStrategy:
+                @staticmethod
+                def build_full_world_skeleton_acceptance_report(**kwargs):
+                    staged_calls.update(kwargs)
+                    generated_ed = os.path.join(
+                        kwargs["work_dir"],
+                        "full_world_skeleton_source",
+                        kwargs["output_filename"],
+                    )
+                    os.makedirs(os.path.dirname(generated_ed), exist_ok=True)
+                    with open(generated_ed, "wb") as f:
+                        f.write(b"ed")
+                    return types.SimpleNamespace(
+                        blockers=(),
+                        generated_ed_path=generated_ed,
+                        selected_model_names=("WorldObject1",),
+                        object_count=4,
+                        polygon_count=12,
+                    )
+
+                @staticmethod
+                def format_full_world_skeleton_acceptance_report(report):
+                    return f"formatted report for {report.generated_ed_path}"
+
+                @staticmethod
+                def build_dat_to_ed_selection_report(**kwargs):
+                    staged_calls["selection_kwargs"] = kwargs
+                    return types.SimpleNamespace(
+                        status="selection_report_built",
+                        selected_model_count=len(kwargs["selected_model_names"]),
+                    )
+
+                @staticmethod
+                def write_dat_to_ed_selection_report(report, output_path, **kwargs):
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump({"kind": "mm9_dat_to_ed_selection_report"}, f)
+                    return output_path
+
+                @staticmethod
+                def write_full_world_skeleton_acceptance_manifest(report, manifest_path, **kwargs):
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        json.dump({"kind": "mm9_dat_to_ed_acceptance"}, f)
+                    return manifest_path
+
+            method_globals = mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat.__globals__
+            old_filedialog = method_globals.get("filedialog")
+            old_messagebox = method_globals.get("messagebox")
+            old_compiler = method_globals.get("dat_compiler_strategy")
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(app)
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(staged_calls["model_names"], ("WorldObject1",))
+            self.assertFalse(staged_calls["include_terrain_support_patch"])
+            self.assertFalse(staged_calls["include_terrain_support_source_coverage"])
+            self.assertTrue(staged_calls["include_physics_shell_patch"])
+            self.assertEqual(staged_calls["physics_shell_max_polygons"], 1499)
+            self.assertEqual(staged_calls["physics_shell_thickness"], 16.0)
+            self.assertTrue(staged_calls["selection_kwargs"]["include_physics_shell_patch"])
+            self.assertFalse(staged_calls["selection_kwargs"]["include_terrain_support_patch"])
+            self.assertEqual(infos[0][0], "DAT to ED generation complete")
+
 
 if __name__ == "__main__":
     unittest.main()

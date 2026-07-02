@@ -1,17 +1,9 @@
-"""
-OBJ + sidecar export for MM9 DAT BSP geometry round trips.
-
-Stage 1 is intentionally read-only: it writes inspection/editing artifacts for
-Blender, but it does not create pending ops or write patched DAT bytes.
-"""
+"""Shared read-only geometry export helpers for MM9 DAT inspection."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import re
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import _path_setup  # noqa: F401
@@ -20,175 +12,6 @@ from core import bsp
 
 Vec3 = Tuple[float, float, float]
 TextureSizeLookup = Callable[[str], Optional[Tuple[int, int]]]
-
-
-@dataclass(frozen=True)
-class RoundTripExportResult:
-    obj_path: str
-    mtl_path: str
-    meta_path: str
-    model_count: int
-    polygon_count: int
-    vertex_count: int
-
-
-def export_roundtrip(
-    bsp_world: bsp.BspWorld,
-    source_dat: bytes,
-    output_dir: str,
-    *,
-    source_path: str = "",
-    base_name: str = "",
-    objects: Optional[Sequence[Any]] = None,
-    selected_model_names: Optional[Sequence[str]] = None,
-    raw_coordinates: bool = False,
-    include_helper_geometry: bool = False,
-    texture_size_lookup: Optional[TextureSizeLookup] = None,
-) -> RoundTripExportResult:
-    """Export *bsp_world* to OBJ/MTL plus ``.datmeta.json`` sidecar.
-
-    By default coordinates are reflected from DAT game-space into the editor's
-    display/Blender space (X becomes -X).  Use ``raw_coordinates=True`` for a
-    debugging export that leaves DAT coordinates untouched.
-    """
-    if bsp_world is None:
-        raise ValueError("BSP world is required")
-    os.makedirs(output_dir, exist_ok=True)
-
-    label = _export_base_name(base_name, source_path, bsp_world)
-    obj_path = os.path.abspath(os.path.join(output_dir, f"{label}_geometry.obj"))
-    mtl_path = os.path.abspath(os.path.join(output_dir, f"{label}_geometry.mtl"))
-    meta_path = os.path.abspath(os.path.join(output_dir, f"{label}_geometry.datmeta.json"))
-
-    effective_include_helpers = bool(
-        include_helper_geometry or raw_coordinates or selected_model_names
-    )
-    models = _selected_models(
-        bsp_world,
-        selected_model_names,
-        include_helper_geometry=effective_include_helpers,
-    )
-    material_names = _material_names(models)
-    material_by_texture = {texture: name for texture, name in material_names}
-
-    transform = _identity_transform() if raw_coordinates else _display_transform()
-    reverse_winding = not raw_coordinates
-
-    obj_lines: List[str] = [
-        "# MM9 DAT geometry export",
-        "# Edit with the accompanying .datmeta.json sidecar; material names are not authoritative.",
-        f"mtllib {os.path.basename(mtl_path)}",
-        "",
-    ]
-    meta_models: List[Dict[str, Any]] = []
-    vertex_index = 1
-    vt_index = 1
-    total_polygons = 0
-    total_vertices = 0
-
-    for model_index, model in enumerate(models):
-        object_name = _obj_name(model.name, model_index)
-        obj_lines.append(f"o {object_name}")
-        obj_lines.append(f"g {object_name}")
-
-        point_indices: List[int] = []
-        for point in model.points:
-            x, y, z = _transform_point(point, raw_coordinates)
-            obj_lines.append(f"v {_fmt_float(x)} {_fmt_float(y)} {_fmt_float(z)}")
-            point_indices.append(vertex_index)
-            vertex_index += 1
-            total_vertices += 1
-
-        last_material = None
-        poly_meta: List[Dict[str, Any]] = []
-        for poly_index, polygon in enumerate(model.polygons):
-            if not effective_include_helpers and _is_non_render_polygon(model, polygon):
-                continue
-            texture_name = model.texture_name_for(polygon) or "Default"
-            material_name = material_by_texture.get(texture_name, _sanitize_material(texture_name))
-            if material_name != last_material:
-                obj_lines.append(f"usemtl {material_name}")
-                last_material = material_name
-
-            face_parts: List[str] = []
-            poly_vertices = list(polygon.vertex_indices)
-            if reverse_winding:
-                poly_vertices.reverse()
-            for source_vertex_index in poly_vertices:
-                if source_vertex_index < 0 or source_vertex_index >= len(model.points):
-                    continue
-                pos = model.points[source_vertex_index]
-                u, v = _uv_for_vertex(model, polygon, pos, texture_name, texture_size_lookup)
-                obj_lines.append(f"vt {_fmt_float(u)} {_fmt_float(v)}")
-                face_parts.append(f"{point_indices[source_vertex_index]}/{vt_index}")
-                vt_index += 1
-            if len(face_parts) >= 3:
-                obj_lines.append("f " + " ".join(face_parts))
-                total_polygons += 1
-
-            poly_meta.append({
-                "index": poly_index,
-                "surface_index": polygon.surface_index,
-                "plane_index": polygon.plane_index,
-                "vertex_indices": list(polygon.vertex_indices),
-                "texture_name": texture_name,
-                "material_name": material_name,
-            })
-
-        obj_lines.append("")
-        meta_models.append(_model_metadata(model_index, model, objects or [], poly_meta))
-
-    mtl_lines = _build_mtl_lines(material_names)
-    meta = {
-        "version": 1,
-        "kind": "mm9_dat_geometry_roundtrip",
-        "source": {
-            "path": source_path,
-            "sha256": hashlib.sha256(source_dat).hexdigest(),
-            "size": len(source_dat),
-            "dat_version": bsp_world.version,
-            "object_data_pos": bsp_world.obj_pos,
-            "render_data_pos": bsp_world.ren_pos,
-            "world_model_table_start": bsp_world.world_model_table_start,
-        },
-        "coordinate_system": {
-            "export_space": "raw_dat" if raw_coordinates else "blender_display",
-            "dat_to_export_matrix": transform,
-            "export_to_dat_matrix": transform,
-            "notes": (
-                "Default export reflects X to match the editor viewport. "
-                "Skyboxes, VisBSP, helper materials, and PhysicsBSP top caps "
-                "are omitted unless include_helper_geometry is enabled."
-            ),
-        },
-        "export_options": {
-            "include_helper_geometry": bool(effective_include_helpers),
-            "raw_coordinates": bool(raw_coordinates),
-        },
-        "files": {
-            "obj": os.path.basename(obj_path),
-            "mtl": os.path.basename(mtl_path),
-        },
-        "materials": [
-            {"material_name": material, "texture_name": texture}
-            for texture, material in material_names
-        ],
-        "models": meta_models,
-        "parse_warnings": list(getattr(bsp_world, "parse_warnings", []) or []),
-    }
-
-    _write_text(obj_path, "\n".join(obj_lines).rstrip() + "\n")
-    _write_text(mtl_path, "\n".join(mtl_lines).rstrip() + "\n")
-    _write_text(meta_path, json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
-
-    return RoundTripExportResult(
-        obj_path=obj_path,
-        mtl_path=mtl_path,
-        meta_path=meta_path,
-        model_count=len(models),
-        polygon_count=total_polygons,
-        vertex_count=total_vertices,
-    )
 
 
 def _selected_models(
@@ -252,28 +75,9 @@ def _sanitize_material(texture_name: str) -> str:
     return cleaned or "Default"
 
 
-def _build_mtl_lines(material_names: Sequence[Tuple[str, str]]) -> List[str]:
-    lines = [
-        "# MM9 DAT material names. Exact texture paths are stored in the .datmeta.json sidecar.",
-        "",
-    ]
-    for index, (texture, material) in enumerate(material_names):
-        hue = ((index * 37) % 100) / 100.0
-        r, g, b = _fallback_color(hue)
-        lines.extend([
-            f"newmtl {material}",
-            f"# mm9_texture {texture}",
-            f"Kd {_fmt_float(r)} {_fmt_float(g)} {_fmt_float(b)}",
-            "Ka 0.000000 0.000000 0.000000",
-            "Ks 0.000000 0.000000 0.000000",
-            "",
-        ])
-    return lines
-
-
 def _fallback_color(hue: float) -> Tuple[float, float, float]:
-    # Tiny HSV-ish fallback so Blender distinguishes material slots even when
-    # DTX files are unavailable.
+    # Tiny HSV-ish fallback so external viewers distinguish material slots even
+    # when DTX files are unavailable.
     h = (hue % 1.0) * 6.0
     c = 0.65
     x = c * (1.0 - abs((h % 2.0) - 1.0))
@@ -481,12 +285,3 @@ def _identity_transform() -> List[List[float]]:
         [0.0, 0.0, 1.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ]
-
-
-def _fmt_float(value: float) -> str:
-    return f"{float(value):.6f}"
-
-
-def _write_text(path: str, text: str) -> None:
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
