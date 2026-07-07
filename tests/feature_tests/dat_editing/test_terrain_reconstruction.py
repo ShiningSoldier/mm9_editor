@@ -204,6 +204,162 @@ class TerrainReconstructionTests(unittest.TestCase):
         self.assertEqual(fallback_normal, (0.0, 1.0, 0.0))
         self.assertEqual(fallback_distance, 5.0)
 
+    def test_physics_shell_roles_classify_orientation_and_helpers(self):
+        model = types.SimpleNamespace(
+            points=(
+                (0.0, 2.0, 0.0),
+                (0.0, 2.0, 4.0),
+                (4.0, 2.0, 4.0),
+                (4.0, 2.0, 0.0),
+                (0.0, 0.0, 0.0),
+                (0.0, 4.0, 0.0),
+                (0.0, 4.0, 4.0),
+                (0.0, 0.0, 4.0),
+            ),
+            polygons=(
+                types.SimpleNamespace(vertex_indices=(0, 1, 2, 3), surface_index=0),
+                types.SimpleNamespace(vertex_indices=(3, 2, 1, 0), surface_index=0),
+                types.SimpleNamespace(vertex_indices=(4, 5, 6, 7), surface_index=0),
+                types.SimpleNamespace(vertex_indices=(0, 1, 2, 3), surface_index=1),
+                types.SimpleNamespace(vertex_indices=(0, 1), surface_index=0),
+            ),
+            surfaces=(
+                types.SimpleNamespace(texture_index=0),
+                types.SimpleNamespace(texture_index=1),
+            ),
+            texture_names=(
+                "TEXTURES\\LevelTextures\\Stone\\wall.dtx",
+                "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx",
+            ),
+        )
+
+        roles = terrain_reconstruction.physics_shell_source_polygon_roles(model)
+        candidates = terrain_reconstruction.physics_shell_candidates(model)
+
+        self.assertEqual(
+            roles,
+            {
+                0: "floor",
+                1: "ceiling",
+                2: "side_wall",
+                3: "helper/special",
+                4: "degenerate",
+            },
+        )
+        self.assertEqual([candidate.role for candidate in candidates], ["floor", "ceiling", "side_wall", "helper/special"])
+        self.assertEqual([candidate.generated_face_count for candidate in candidates], [6, 6, 6, 6])
+
+    def test_physics_shell_quality_filter_simplifies_or_rejects_warning_prone_slabs(self):
+        model = types.SimpleNamespace(
+            points=(
+                (0.0, 2.0, 0.0),
+                (4.0, 2.0, 0.0),
+                (4.01, 2.0, 0.0),
+                (4.0, 2.0, 4.0),
+                (0.0, 2.0, 4.0),
+                (10.0, 0.0, 0.0),
+                (10.1, 0.0, 0.0),
+                (10.0, 0.0, 0.1),
+                (20.0, 0.0, 0.0),
+                (24.0, 0.0, 0.0),
+                (24.0, 0.0, 4.0),
+                (20.0, 1.0, 4.0),
+            ),
+            polygons=(
+                types.SimpleNamespace(vertex_indices=(0, 1, 2, 3, 4), surface_index=0),
+                types.SimpleNamespace(vertex_indices=(5, 6, 7), surface_index=0),
+                types.SimpleNamespace(vertex_indices=(8, 9, 10, 11), surface_index=0),
+            ),
+            surfaces=(types.SimpleNamespace(texture_index=0),),
+            texture_names=("TEXTURES\\LevelTextures\\Stone\\wall.dtx",),
+        )
+
+        roles = terrain_reconstruction.physics_shell_source_polygon_roles(model)
+        candidates = terrain_reconstruction.physics_shell_candidates(model)
+
+        self.assertEqual(roles[0], "ceiling")
+        self.assertEqual(roles[1], "degenerate")
+        self.assertEqual(roles[2], "degenerate")
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].indices, (0, 1, 3, 4))
+        self.assertEqual(candidates[0].generated_face_count, 6)
+        self.assertFalse(
+            terrain_reconstruction.physics_shell_slab_quality_ok(
+                candidates[0].points,
+                thickness=0.5,
+            )
+        )
+
+    def test_balanced_physics_shell_selection_prioritizes_walls_before_helper_fill(self):
+        def candidate(index: int, area: float, role: str) -> terrain_reconstruction.PhysicsShellCandidate:
+            return terrain_reconstruction.PhysicsShellCandidate(
+                polygon_index=index,
+                polygon=types.SimpleNamespace(vertex_indices=(0, 1, 2)),
+                indices=(0, 1, 2),
+                points=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+                area=area,
+                role=role,
+                generated_face_count=5,
+            )
+
+        candidates = (
+            candidate(0, 1000.0, "helper/special"),
+            candidate(1, 90.0, "side_wall"),
+            candidate(2, 80.0, "side_wall"),
+            candidate(3, 70.0, "floor"),
+            candidate(4, 60.0, "ceiling"),
+            candidate(5, 50.0, "floor"),
+        )
+
+        selected = terrain_reconstruction.balanced_physics_shell_candidates(candidates, 4)
+
+        self.assertEqual([item.polygon_index for item in selected], [1, 2, 3, 4])
+        self.assertEqual([item.role for item in selected], ["side_wall", "side_wall", "floor", "ceiling"])
+        self.assertEqual(
+            terrain_reconstruction.budgeted_balanced_physics_shell_source_polygon_count(
+                candidates,
+                requested_source_polygon_count=4,
+                generated_polygon_budget=15,
+            ),
+            3,
+        )
+
+    def test_balanced_physics_shell_selection_prefers_connected_structural_neighborhood(self):
+        def candidate(
+            index: int,
+            area: float,
+            role: str,
+            indices: tuple[int, int, int],
+        ) -> terrain_reconstruction.PhysicsShellCandidate:
+            return terrain_reconstruction.PhysicsShellCandidate(
+                polygon_index=index,
+                polygon=types.SimpleNamespace(vertex_indices=indices),
+                indices=indices,
+                points=tuple((float(value), 0.0, float(value)) for value in indices),
+                area=area,
+                role=role,
+                generated_face_count=5,
+            )
+
+        local_room = (
+            candidate(10, 90.0, "side_wall", (0, 1, 2)),
+            candidate(11, 20.0, "floor", (2, 3, 0)),
+            candidate(12, 19.0, "ceiling", (3, 4, 2)),
+        )
+        distant_support = (
+            candidate(20, 1000.0, "floor", (100, 101, 102)),
+            candidate(21, 900.0, "ceiling", (102, 103, 100)),
+            candidate(22, 850.0, "helper/special", (100, 103, 104)),
+        )
+
+        selected = terrain_reconstruction.balanced_physics_shell_candidates(
+            local_room + distant_support,
+            3,
+        )
+
+        self.assertEqual([item.polygon_index for item in selected], [10, 11, 12])
+        self.assertEqual([item.role for item in selected], ["side_wall", "floor", "ceiling"])
+
     def test_builds_terrain_coverage_items_with_texture_filtering(self):
         terrain = types.SimpleNamespace(
             points=(

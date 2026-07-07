@@ -279,6 +279,7 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             output_dir = os.path.join(tmp, "out")
             staged_calls = {}
             infos = []
+            source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
 
             class FakeModel:
                 def __init__(self, name):
@@ -341,6 +342,11 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                         selected_model_names=("WorldObject1",),
                         object_count=4,
                         polygon_count=12,
+                        include_low_risk_behavior_prop_objects=bool(
+                            kwargs.get("include_low_risk_behavior_prop_objects")
+                        ),
+                        include_wall_torch_objects=bool(kwargs.get("include_wall_torch_objects")),
+                        include_fire_objects=bool(kwargs.get("include_fire_objects")),
                     )
 
                 @staticmethod
@@ -409,6 +415,38 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertTrue(staged_calls["include_terrain_support_patch"])
             self.assertTrue(staged_calls["include_terrain_support_source_coverage"])
             self.assertFalse(staged_calls["include_physics_shell_patch"])
+            self.assertFalse(staged_calls["include_physics_shell_source_coverage"])
+            self.assertFalse(staged_calls["include_door_objects"])
+            self.assertEqual(staged_calls["door_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_airail_objects"])
+            self.assertEqual(staged_calls["airail_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_sky_objects"])
+            self.assertEqual(staged_calls["sky_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_sky_marker_brushes"])
+            self.assertFalse(staged_calls["include_sound_objects"])
+            self.assertEqual(staged_calls["sound_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_collision_helper_objects"])
+            self.assertFalse(staged_calls["include_collision_helper_brushes"])
+            self.assertEqual(staged_calls["collision_helper_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_trigger_helper_objects"])
+            self.assertFalse(staged_calls["include_trigger_helper_brushes"])
+            self.assertEqual(staged_calls["trigger_helper_source_ed_path"], "")
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], source_ed)
             self.assertEqual(staged_calls["terrain_support_selection_mode"], "connected_budget")
             self.assertGreater(staged_calls["terrain_support_radius"], 0.0)
             self.assertEqual(staged_calls["terrain_support_max_polygons"], 1499)
@@ -431,6 +469,10 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertEqual(staged_calls["selection_kwargs"]["selected_model_names"], ("WorldObject1",))
             self.assertTrue(staged_calls["selection_kwargs"]["include_terrain_support_patch"])
             self.assertFalse(staged_calls["selection_kwargs"]["include_physics_shell_patch"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_airail_semantics"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_sky_semantics"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_sound_semantics"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_trigger_semantics"])
             manifest_path = os.path.join(output_dir, "BOOTCAMP_dat_to_ed_acceptance_manifest.json")
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
@@ -443,6 +485,9 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertEqual(manifest["artifacts"]["text_report_path"], report_path)
             self.assertEqual(manifest["artifacts"]["selection_report_path"], selection_path)
             self.assertEqual(infos[0][0], "DAT to ED generation complete")
+            self.assertIn("Low-risk behavior prop objects: included", infos[0][1])
+            self.assertIn("Validated light/fire behavior prop objects: included", infos[0][1])
+            self.assertIn("Behavior prop validation profile: not included", infos[0][1])
 
     def test_dat_to_ed_command_enables_physics_shell_patch_for_non_terrain_levels(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -450,14 +495,23 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             staged_calls = {}
             infos = []
 
+            source_ed = os.path.join(tmp, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+            os.makedirs(os.path.dirname(source_ed), exist_ok=True)
+            with open(source_ed, "wb") as f:
+                f.write(b"source ed oracle")
+
             class FakeModel:
-                def __init__(self, name, polygon_count=1):
+                def __init__(self, name, polygon_count=1, texture="TEXTURES\\LevelTextures\\Stone.dtx"):
                     self.name = name
                     self.points = [(0.0, 0.0, 0.0)]
                     self.polygons = [object()] * polygon_count
+                    self._texture = texture
 
                 def is_skybox(self):
                     return False
+
+                def texture_name_for(self, _polygon):
+                    return self._texture
 
             class FakeLevel:
                 display_name = "ANSKRAMKEEP.DAT"
@@ -467,6 +521,11 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                 def get_bsp(self):
                     return types.SimpleNamespace(world_models=[
                         FakeModel("PhysicsBSP", polygon_count=6450),
+                        FakeModel("AITrk2", polygon_count=6, texture="TEXTURES\\LevelTextures\\Misc\\rail.dtx"),
+                        FakeModel("SkyMarkerProbe", polygon_count=6, texture="TEXTURES\\SkyBox\\SkyMarker.dtx"),
+                        FakeModel("SoundOnlyProbe", polygon_count=6, texture="TEXTURES\\LevelTextures\\Misc\\SoundOnly.dtx"),
+                        FakeModel("InvisibleBrush7", polygon_count=6, texture="TEXTURES\\LevelTextures\\Misc\\Invisible.dtx"),
+                        FakeModel("Tavernzone", polygon_count=6, texture="TEXTURES\\LevelTextures\\Misc\\greenscreen.dtx"),
                         FakeModel("WorldObject1", polygon_count=12),
                     ])
 
@@ -509,6 +568,17 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                         selected_model_names=("WorldObject1",),
                         object_count=4,
                         polygon_count=12,
+                        include_low_risk_behavior_prop_objects=bool(
+                            kwargs.get("include_low_risk_behavior_prop_objects")
+                        ),
+                        include_door_objects=bool(kwargs.get("include_door_objects")),
+                        include_airail_objects=bool(kwargs.get("include_airail_objects")),
+                        include_sky_objects=bool(kwargs.get("include_sky_objects")),
+                        include_sound_objects=bool(kwargs.get("include_sound_objects")),
+                        include_collision_helper_objects=bool(kwargs.get("include_collision_helper_objects")),
+                        include_collision_helper_brushes=bool(kwargs.get("include_collision_helper_brushes")),
+                        include_trigger_helper_objects=bool(kwargs.get("include_trigger_helper_objects")),
+                        include_trigger_helper_brushes=bool(kwargs.get("include_trigger_helper_brushes")),
                     )
 
                 @staticmethod
@@ -560,12 +630,970 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertEqual(staged_calls["model_names"], ("WorldObject1",))
             self.assertFalse(staged_calls["include_terrain_support_patch"])
             self.assertFalse(staged_calls["include_terrain_support_source_coverage"])
-            self.assertTrue(staged_calls["include_physics_shell_patch"])
-            self.assertEqual(staged_calls["physics_shell_max_polygons"], 1499)
+            self.assertTrue(staged_calls["include_validation_floor"])
+            self.assertFalse(staged_calls["include_physics_shell_patch"])
+            self.assertFalse(staged_calls["include_physics_shell_source_coverage"])
+            self.assertFalse(staged_calls["include_door_objects"])
+            self.assertEqual(staged_calls["door_source_ed_path"], "")
+            self.assertTrue(staged_calls["include_airail_objects"])
+            self.assertEqual(staged_calls["airail_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_sky_objects"])
+            self.assertEqual(staged_calls["sky_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_sky_marker_brushes"])
+            self.assertTrue(staged_calls["include_sound_objects"])
+            self.assertEqual(staged_calls["sound_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_collision_helper_objects"])
+            self.assertFalse(staged_calls["include_collision_helper_brushes"])
+            self.assertEqual(staged_calls["collision_helper_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_trigger_helper_objects"])
+            self.assertFalse(staged_calls["include_trigger_helper_brushes"])
+            self.assertEqual(staged_calls["trigger_helper_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], source_ed)
             self.assertEqual(staged_calls["physics_shell_thickness"], 16.0)
-            self.assertTrue(staged_calls["selection_kwargs"]["include_physics_shell_patch"])
+            self.assertFalse(staged_calls["block_unreconstructed_physics_shell"])
+            self.assertFalse(staged_calls["selection_kwargs"]["include_physics_shell_patch"])
             self.assertFalse(staged_calls["selection_kwargs"]["include_terrain_support_patch"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_airail_semantics"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_sky_semantics"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_sound_semantics"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_collision_semantics"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_trigger_semantics"])
             self.assertEqual(infos[0][0], "DAT to ED generation complete")
+
+    def test_dat_to_ed_behavior_prop_validation_command_enables_explicit_prop_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = os.path.join(tmp, "out")
+            staged_calls = {}
+            infos = []
+
+            source_ed = os.path.join(tmp, "game", "data", "WORLDS", "BATHHOUSE.ED")
+            os.makedirs(os.path.dirname(source_ed), exist_ok=True)
+            with open(source_ed, "wb") as f:
+                f.write(b"source ed oracle")
+
+            class FakeModel:
+                def __init__(self, name, polygon_count=1, texture="TEXTURES\\LevelTextures\\Stone.dtx"):
+                    self.name = name
+                    self.points = [(0.0, 0.0, 0.0)]
+                    self.polygons = [object()] * polygon_count
+                    self._texture = texture
+
+                def is_skybox(self):
+                    return False
+
+                def texture_name_for(self, _polygon):
+                    return self._texture
+
+            class FakeLevel:
+                display_name = "BATHHOUSE.DAT"
+                rez_vpath = "WORLDS/BATHHOUSE.DAT"
+                path = ""
+
+                def get_bsp(self):
+                    return types.SimpleNamespace(world_models=[
+                        FakeModel("Terrain0", polygon_count=20),
+                        FakeModel("WorldObject1", polygon_count=12),
+                    ])
+
+                def source_bytes(self):
+                    return b"fake dat bytes"
+
+            class FakeFileDialog:
+                @staticmethod
+                def askdirectory(**_kwargs):
+                    return output_dir
+
+            class FakeMessagebox:
+                @staticmethod
+                def showinfo(title, body):
+                    infos.append((title, body))
+
+                @staticmethod
+                def showerror(title, body):
+                    raise AssertionError(f"unexpected error: {title}: {body}")
+
+                @staticmethod
+                def showwarning(title, body):
+                    raise AssertionError(f"unexpected warning: {title}: {body}")
+
+            class FakeCompilerStrategy:
+                @staticmethod
+                def build_full_world_skeleton_acceptance_report(**kwargs):
+                    staged_calls.update(kwargs)
+                    generated_ed = os.path.join(
+                        kwargs["work_dir"],
+                        "full_world_skeleton_source",
+                        kwargs["output_filename"],
+                    )
+                    os.makedirs(os.path.dirname(generated_ed), exist_ok=True)
+                    with open(generated_ed, "wb") as f:
+                        f.write(b"ed")
+                    return types.SimpleNamespace(
+                        blockers=(),
+                        generated_ed_path=generated_ed,
+                        selected_model_names=("Terrain0", "WorldObject1"),
+                        object_count=42,
+                        polygon_count=32,
+                        include_low_risk_behavior_prop_objects=bool(
+                            kwargs.get("include_low_risk_behavior_prop_objects")
+                        ),
+                        include_wall_torch_objects=bool(
+                            kwargs.get("include_wall_torch_objects")
+                        ),
+                        include_fire_objects=bool(kwargs.get("include_fire_objects")),
+                        include_candle_prop_objects=bool(
+                            kwargs.get("include_candle_prop_objects")
+                        ),
+                        include_brazier_objects=bool(
+                            kwargs.get("include_brazier_objects")
+                        ),
+                        include_treasure_chest_objects=bool(
+                            kwargs.get("include_treasure_chest_objects")
+                        ),
+                        include_prop_damager_objects=bool(
+                            kwargs.get("include_prop_damager_objects")
+                        ),
+                        include_destructable_prop_objects=bool(
+                            kwargs.get("include_destructable_prop_objects")
+                        ),
+                    )
+
+                @staticmethod
+                def format_full_world_skeleton_acceptance_report(report):
+                    return f"formatted report for {report.generated_ed_path}"
+
+                @staticmethod
+                def build_behavior_prop_reconstruction_report(**kwargs):
+                    staged_calls["behavior_prop_report_kwargs"] = kwargs
+                    return types.SimpleNamespace(status="behavior_prop_reconstruction_report_built")
+
+                @staticmethod
+                def format_behavior_prop_reconstruction_report(report):
+                    return f"behavior prop report: {report.status}"
+
+                @staticmethod
+                def build_dat_to_ed_selection_report(**kwargs):
+                    staged_calls["selection_kwargs"] = kwargs
+                    return types.SimpleNamespace(
+                        status="selection_report_built",
+                        selected_model_count=len(kwargs["selected_model_names"]),
+                    )
+
+                @staticmethod
+                def write_dat_to_ed_selection_report(report, output_path, **kwargs):
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump({"kind": "mm9_dat_to_ed_selection_report"}, f)
+                    return output_path
+
+                @staticmethod
+                def write_full_world_skeleton_acceptance_manifest(report, manifest_path, **kwargs):
+                    staged_calls["manifest_kwargs"] = kwargs
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "kind": "mm9_dat_to_ed_acceptance",
+                            "behavior_prop_report_path": kwargs.get("behavior_prop_report_path", ""),
+                        }, f)
+                    return manifest_path
+
+            method_globals = mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat.__globals__
+            old_filedialog = method_globals.get("filedialog")
+            old_messagebox = method_globals.get("messagebox")
+            old_compiler = method_globals.get("dat_compiler_strategy")
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="all",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "BATHHOUSE_reconstructed_behavior_prop_validation.ed",
+            )
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], source_ed)
+            self.assertEqual(staged_calls["behavior_prop_report_kwargs"]["source_ed_path"], source_ed)
+            behavior_report_path = os.path.join(
+                output_dir,
+                "BATHHOUSE_dat_to_ed_behavior_prop_validation_report.txt",
+            )
+            self.assertEqual(
+                staged_calls["manifest_kwargs"]["behavior_prop_report_path"],
+                behavior_report_path,
+            )
+            with open(behavior_report_path, "r", encoding="utf-8") as f:
+                self.assertIn("behavior prop report", f.read())
+            self.assertIn("Behavior prop validation profile: all", infos[0][1])
+            self.assertIn(behavior_report_path, infos[0][1])
+
+    def test_dat_to_ed_destructable_brush_validation_uses_dat_objects_without_source_ed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = os.path.join(tmp, "out")
+            staged_calls = {}
+            infos = []
+
+            class FakeModel:
+                def __init__(self, name, polygon_count=1, texture="TEXTURES\\LevelTextures\\Stone.dtx"):
+                    self.name = name
+                    self.points = [(0.0, 0.0, 0.0)]
+                    self.polygons = [object()] * polygon_count
+                    self._texture = texture
+
+                def is_skybox(self):
+                    return False
+
+                def texture_name_for(self, _polygon):
+                    return self._texture
+
+            class FakeLevel:
+                display_name = "DRAGONSTADIUM.DAT"
+                rez_vpath = "WORLDS/DRAGONSTADIUM.DAT"
+                path = ""
+                world = types.SimpleNamespace(objects=[
+                    patcher.WorldObject("DestructableBrush", [
+                        patcher.Property("Name", 0, 0, "p1 level 1"),
+                    ]),
+                    patcher.WorldObject("DestructableBrush", [
+                        patcher.Property("Name", 0, 0, "p1 level 2"),
+                    ]),
+                ])
+
+                def get_bsp(self):
+                    return types.SimpleNamespace(world_models=[
+                        FakeModel("PhysicsBSP", polygon_count=120),
+                        FakeModel("p1 level 1", polygon_count=28),
+                        FakeModel("p1 level 2", polygon_count=32),
+                    ])
+
+                def source_bytes(self):
+                    return b"fake dat bytes"
+
+            class FakeFileDialog:
+                @staticmethod
+                def askdirectory(**_kwargs):
+                    return output_dir
+
+            class FakeMessagebox:
+                @staticmethod
+                def showinfo(title, body):
+                    infos.append((title, body))
+
+                @staticmethod
+                def showerror(title, body):
+                    raise AssertionError(f"unexpected error: {title}: {body}")
+
+                @staticmethod
+                def showwarning(title, body):
+                    raise AssertionError(f"unexpected warning: {title}: {body}")
+
+            class FakeCompilerStrategy:
+                @staticmethod
+                def build_full_world_skeleton_acceptance_report(**kwargs):
+                    staged_calls.update(kwargs)
+                    generated_ed = os.path.join(
+                        kwargs["work_dir"],
+                        "full_world_skeleton_source",
+                        kwargs["output_filename"],
+                    )
+                    os.makedirs(os.path.dirname(generated_ed), exist_ok=True)
+                    with open(generated_ed, "wb") as f:
+                        f.write(b"ed")
+                    return types.SimpleNamespace(
+                        blockers=(),
+                        generated_ed_path=generated_ed,
+                        selected_model_names=tuple(kwargs["model_names"]),
+                        object_count=7,
+                        polygon_count=60,
+                        include_destructable_brush_objects=bool(
+                            kwargs.get("include_destructable_brush_objects")
+                        ),
+                    )
+
+                @staticmethod
+                def format_full_world_skeleton_acceptance_report(report):
+                    return f"formatted report for {report.generated_ed_path}"
+
+                @staticmethod
+                def build_behavior_prop_reconstruction_report(**_kwargs):
+                    raise AssertionError("source-ED behavior prop report should not be generated")
+
+                @staticmethod
+                def build_dat_to_ed_selection_report(**kwargs):
+                    staged_calls["selection_kwargs"] = kwargs
+                    return types.SimpleNamespace(
+                        status="selection_report_built",
+                        selected_model_count=len(kwargs["selected_model_names"]),
+                    )
+
+                @staticmethod
+                def write_dat_to_ed_selection_report(report, output_path, **kwargs):
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump({"kind": "mm9_dat_to_ed_selection_report"}, f)
+                    return output_path
+
+                @staticmethod
+                def write_full_world_skeleton_acceptance_manifest(report, manifest_path, **kwargs):
+                    staged_calls["manifest_kwargs"] = kwargs
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "kind": "mm9_dat_to_ed_acceptance",
+                            "behavior_prop_report_path": kwargs.get("behavior_prop_report_path", ""),
+                        }, f)
+                    return manifest_path
+
+            method_globals = mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat.__globals__
+            old_filedialog = method_globals.get("filedialog")
+            old_messagebox = method_globals.get("messagebox")
+            old_compiler = method_globals.get("dat_compiler_strategy")
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="destructable_brush",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "DRAGONSTADIUM_reconstructed_destructable_brush_validation.ed",
+            )
+            self.assertEqual(staged_calls["model_names"], ("p1 level 1", "p1 level 2"))
+            self.assertTrue(staged_calls["include_destructable_brush_objects"])
+            self.assertTrue(staged_calls["include_validation_floor"])
+            self.assertFalse(staged_calls["include_terrain_support_patch"])
+            self.assertFalse(staged_calls["include_physics_shell_patch"])
+            self.assertFalse(staged_calls["block_unreconstructed_physics_shell"])
+            self.assertFalse(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertFalse(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], "")
+            self.assertEqual(staged_calls["manifest_kwargs"]["behavior_prop_report_path"], "")
+            self.assertIn("Behavior prop validation report:\nnot generated", infos[0][1])
+            self.assertIn("DestructableBrush objects: included", infos[0][1])
+            self.assertIn("Behavior prop validation profile: destructable_brush", infos[0][1])
+
+    def test_dat_to_ed_normal_command_auto_uses_dat_native_destructable_brushes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = os.path.join(tmp, "out")
+            staged_calls = {}
+            infos = []
+
+            class FakeModel:
+                def __init__(self, name, polygon_count=1, texture="TEXTURES\\LevelTextures\\Stone.dtx"):
+                    self.name = name
+                    self.points = [(0.0, 0.0, 0.0)]
+                    self.polygons = [object()] * polygon_count
+                    self._texture = texture
+
+                def is_skybox(self):
+                    return False
+
+                def texture_name_for(self, _polygon):
+                    return self._texture
+
+            class FakeLevel:
+                display_name = "DRAGONSTADIUM.DAT"
+                rez_vpath = "WORLDS/DRAGONSTADIUM.DAT"
+                path = ""
+                world = types.SimpleNamespace(objects=[
+                    patcher.WorldObject("DestructableBrush", [
+                        patcher.Property("Name", 0, 0, "p1 level 1"),
+                    ]),
+                    patcher.WorldObject("DestructableBrush", [
+                        patcher.Property("Name", 0, 0, "p1 level 2"),
+                    ]),
+                ])
+
+                def get_bsp(self):
+                    return types.SimpleNamespace(world_models=[
+                        FakeModel("PhysicsBSP", polygon_count=120),
+                        FakeModel("p1 level 1", polygon_count=28),
+                        FakeModel("p1 level 2", polygon_count=32),
+                    ])
+
+                def source_bytes(self):
+                    return b"fake dat bytes"
+
+            class FakeFileDialog:
+                @staticmethod
+                def askdirectory(**_kwargs):
+                    return output_dir
+
+            class FakeMessagebox:
+                @staticmethod
+                def showinfo(title, body):
+                    infos.append((title, body))
+
+                @staticmethod
+                def showerror(title, body):
+                    raise AssertionError(f"unexpected error: {title}: {body}")
+
+                @staticmethod
+                def showwarning(title, body):
+                    raise AssertionError(f"unexpected warning: {title}: {body}")
+
+            class FakeCompilerStrategy:
+                @staticmethod
+                def build_full_world_skeleton_acceptance_report(**kwargs):
+                    staged_calls.update(kwargs)
+                    generated_ed = os.path.join(
+                        kwargs["work_dir"],
+                        "full_world_skeleton_source",
+                        kwargs["output_filename"],
+                    )
+                    os.makedirs(os.path.dirname(generated_ed), exist_ok=True)
+                    with open(generated_ed, "wb") as f:
+                        f.write(b"ed")
+                    return types.SimpleNamespace(
+                        blockers=(),
+                        generated_ed_path=generated_ed,
+                        selected_model_names=tuple(kwargs["model_names"]),
+                        object_count=7,
+                        polygon_count=60,
+                        include_destructable_brush_objects=bool(
+                            kwargs.get("include_destructable_brush_objects")
+                        ),
+                    )
+
+                @staticmethod
+                def format_full_world_skeleton_acceptance_report(report):
+                    return f"formatted report for {report.generated_ed_path}"
+
+                @staticmethod
+                def build_behavior_prop_reconstruction_report(**_kwargs):
+                    raise AssertionError("normal DAT-native generation should not build a source-ED behavior report")
+
+                @staticmethod
+                def build_dat_to_ed_selection_report(**kwargs):
+                    staged_calls["selection_kwargs"] = kwargs
+                    return types.SimpleNamespace(
+                        status="selection_report_built",
+                        selected_model_count=len(kwargs["selected_model_names"]),
+                    )
+
+                @staticmethod
+                def write_dat_to_ed_selection_report(report, output_path, **kwargs):
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump({"kind": "mm9_dat_to_ed_selection_report"}, f)
+                    return output_path
+
+                @staticmethod
+                def write_full_world_skeleton_acceptance_manifest(report, manifest_path, **kwargs):
+                    staged_calls["manifest_kwargs"] = kwargs
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "kind": "mm9_dat_to_ed_acceptance",
+                            "behavior_prop_report_path": kwargs.get("behavior_prop_report_path", ""),
+                        }, f)
+                    return manifest_path
+
+            method_globals = mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat.__globals__
+            old_filedialog = method_globals.get("filedialog")
+            old_messagebox = method_globals.get("messagebox")
+            old_compiler = method_globals.get("dat_compiler_strategy")
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(app)
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "DRAGONSTADIUM_reconstructed.ed",
+            )
+            self.assertEqual(staged_calls["model_names"], ("p1 level 1", "p1 level 2"))
+            self.assertTrue(staged_calls["include_destructable_brush_objects"])
+            self.assertTrue(staged_calls["include_validation_floor"])
+            self.assertFalse(staged_calls["include_terrain_support_patch"])
+            self.assertFalse(staged_calls["include_physics_shell_patch"])
+            self.assertFalse(staged_calls["block_unreconstructed_physics_shell"])
+            self.assertEqual(staged_calls["manifest_kwargs"]["behavior_prop_report_path"], "")
+            self.assertIn("Behavior prop validation report:\nnot generated", infos[0][1])
+            self.assertIn("DestructableBrush objects: included", infos[0][1])
+            self.assertIn("Behavior prop validation profile: not included", infos[0][1])
+
+    def test_dat_to_ed_medium_light_prop_validation_command_excludes_high_risk_props(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = os.path.join(tmp, "out")
+            staged_calls = {}
+            infos = []
+
+            source_ed = os.path.join(tmp, "game", "data", "WORLDS", "ANSKRAMKEEP.ED")
+            os.makedirs(os.path.dirname(source_ed), exist_ok=True)
+            with open(source_ed, "wb") as f:
+                f.write(b"source ed oracle")
+
+            class FakeModel:
+                def __init__(self, name, polygon_count=1, texture="TEXTURES\\LevelTextures\\Stone.dtx"):
+                    self.name = name
+                    self.points = [(0.0, 0.0, 0.0)]
+                    self.polygons = [object()] * polygon_count
+                    self._texture = texture
+
+                def is_skybox(self):
+                    return False
+
+                def texture_name_for(self, _polygon):
+                    return self._texture
+
+            class FakeLevel:
+                display_name = "ANSKRAMKEEP.DAT"
+                rez_vpath = "WORLDS/ANSKRAMKEEP.DAT"
+                path = ""
+
+                def get_bsp(self):
+                    return types.SimpleNamespace(world_models=[
+                        FakeModel("PhysicsBSP", polygon_count=6450),
+                        FakeModel("WorldObject1", polygon_count=12),
+                    ])
+
+                def source_bytes(self):
+                    return b"fake dat bytes"
+
+            class FakeFileDialog:
+                @staticmethod
+                def askdirectory(**_kwargs):
+                    return output_dir
+
+            class FakeMessagebox:
+                @staticmethod
+                def showinfo(title, body):
+                    infos.append((title, body))
+
+                @staticmethod
+                def showerror(title, body):
+                    raise AssertionError(f"unexpected error: {title}: {body}")
+
+                @staticmethod
+                def showwarning(title, body):
+                    raise AssertionError(f"unexpected warning: {title}: {body}")
+
+            class FakeCompilerStrategy:
+                @staticmethod
+                def build_full_world_skeleton_acceptance_report(**kwargs):
+                    staged_calls.update(kwargs)
+                    generated_ed = os.path.join(
+                        kwargs["work_dir"],
+                        "full_world_skeleton_source",
+                        kwargs["output_filename"],
+                    )
+                    os.makedirs(os.path.dirname(generated_ed), exist_ok=True)
+                    with open(generated_ed, "wb") as f:
+                        f.write(b"ed")
+                    return types.SimpleNamespace(
+                        blockers=(),
+                        generated_ed_path=generated_ed,
+                        selected_model_names=("WorldObject1",),
+                        object_count=42,
+                        polygon_count=32,
+                        include_low_risk_behavior_prop_objects=bool(
+                            kwargs.get("include_low_risk_behavior_prop_objects")
+                        ),
+                        include_wall_torch_objects=bool(
+                            kwargs.get("include_wall_torch_objects")
+                        ),
+                        include_fire_objects=bool(kwargs.get("include_fire_objects")),
+                        include_candle_prop_objects=bool(
+                            kwargs.get("include_candle_prop_objects")
+                        ),
+                        include_brazier_objects=bool(
+                            kwargs.get("include_brazier_objects")
+                        ),
+                        include_treasure_chest_objects=bool(
+                            kwargs.get("include_treasure_chest_objects")
+                        ),
+                        include_prop_damager_objects=bool(
+                            kwargs.get("include_prop_damager_objects")
+                        ),
+                        include_destructable_prop_objects=bool(
+                            kwargs.get("include_destructable_prop_objects")
+                        ),
+                    )
+
+                @staticmethod
+                def format_full_world_skeleton_acceptance_report(report):
+                    return f"formatted report for {report.generated_ed_path}"
+
+                @staticmethod
+                def build_behavior_prop_reconstruction_report(**kwargs):
+                    staged_calls["behavior_prop_report_kwargs"] = kwargs
+                    return types.SimpleNamespace(status="behavior_prop_reconstruction_report_built")
+
+                @staticmethod
+                def format_behavior_prop_reconstruction_report(report):
+                    return f"behavior prop report: {report.status}"
+
+                @staticmethod
+                def build_dat_to_ed_selection_report(**kwargs):
+                    staged_calls["selection_kwargs"] = kwargs
+                    return types.SimpleNamespace(
+                        status="selection_report_built",
+                        selected_model_count=len(kwargs["selected_model_names"]),
+                    )
+
+                @staticmethod
+                def write_dat_to_ed_selection_report(report, output_path, **kwargs):
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump({"kind": "mm9_dat_to_ed_selection_report"}, f)
+                    return output_path
+
+                @staticmethod
+                def write_full_world_skeleton_acceptance_manifest(report, manifest_path, **kwargs):
+                    staged_calls["manifest_kwargs"] = kwargs
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "kind": "mm9_dat_to_ed_acceptance",
+                            "behavior_prop_report_path": kwargs.get("behavior_prop_report_path", ""),
+                        }, f)
+                    return manifest_path
+
+            method_globals = mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat.__globals__
+            old_filedialog = method_globals.get("filedialog")
+            old_messagebox = method_globals.get("messagebox")
+            old_compiler = method_globals.get("dat_compiler_strategy")
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="medium_light",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "ANSKRAMKEEP_reconstructed_medium_light_prop_validation.ed",
+            )
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], "")
+            self.assertEqual(staged_calls["behavior_prop_report_kwargs"]["source_ed_path"], source_ed)
+            self.assertIn("Behavior prop validation profile: medium_light", infos[0][1])
+
+            staged_calls.clear()
+            infos.clear()
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="candle_prop",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "ANSKRAMKEEP_reconstructed_candle_prop_validation.ed",
+            )
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], "")
+            self.assertEqual(staged_calls["behavior_prop_report_kwargs"]["source_ed_path"], source_ed)
+            self.assertIn("Behavior prop validation profile: candle_prop", infos[0][1])
+
+            staged_calls.clear()
+            infos.clear()
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="brazier",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "ANSKRAMKEEP_reconstructed_brazier_validation.ed",
+            )
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], "")
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], "")
+            self.assertEqual(staged_calls["behavior_prop_report_kwargs"]["source_ed_path"], source_ed)
+            self.assertIn("Behavior prop validation profile: brazier", infos[0][1])
+
+            staged_calls.clear()
+            infos.clear()
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="treasure_chest",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "ANSKRAMKEEP_reconstructed_treasure_chest_validation.ed",
+            )
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], "")
+            self.assertEqual(staged_calls["behavior_prop_report_kwargs"]["source_ed_path"], source_ed)
+            self.assertIn("Behavior prop validation profile: treasure_chest", infos[0][1])
+
+            staged_calls.clear()
+            infos.clear()
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="prop_damager",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "ANSKRAMKEEP_reconstructed_prop_damager_validation.ed",
+            )
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], "")
+            self.assertEqual(staged_calls["behavior_prop_report_kwargs"]["source_ed_path"], source_ed)
+            self.assertIn("Behavior prop validation profile: prop_damager", infos[0][1])
+
+            staged_calls.clear()
+            infos.clear()
+            try:
+                method_globals["filedialog"] = FakeFileDialog
+                method_globals["messagebox"] = FakeMessagebox
+                method_globals["dat_compiler_strategy"] = FakeCompilerStrategy
+                app = object.__new__(mm9_editor_app.EditorApp)
+                app.active = FakeLevel()
+                app.cfg = types.SimpleNamespace(
+                    work_dir=tmp,
+                    editor_dir=tmp,
+                    game_data_dir=os.path.join(tmp, "game", "data"),
+                )
+
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    behavior_prop_validation_profile="destructable_prop",
+                )
+            finally:
+                method_globals["filedialog"] = old_filedialog
+                method_globals["messagebox"] = old_messagebox
+                method_globals["dat_compiler_strategy"] = old_compiler
+
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "ANSKRAMKEEP_reconstructed_destructable_prop_validation.ed",
+            )
+            self.assertTrue(staged_calls["include_validation_floor"])
+            self.assertFalse(staged_calls["include_physics_shell_patch"])
+            self.assertTrue(staged_calls["include_low_risk_behavior_prop_objects"])
+            self.assertEqual(staged_calls["low_risk_behavior_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_wall_torch_objects"])
+            self.assertEqual(staged_calls["wall_torch_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_fire_objects"])
+            self.assertEqual(staged_calls["fire_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_candle_prop_objects"])
+            self.assertEqual(staged_calls["candle_prop_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_brazier_objects"])
+            self.assertEqual(staged_calls["brazier_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_treasure_chest_objects"])
+            self.assertEqual(staged_calls["treasure_chest_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_prop_damager_objects"])
+            self.assertEqual(staged_calls["prop_damager_source_ed_path"], source_ed)
+            self.assertTrue(staged_calls["include_destructable_prop_objects"])
+            self.assertEqual(staged_calls["destructable_prop_source_ed_path"], source_ed)
+            self.assertEqual(staged_calls["behavior_prop_report_kwargs"]["source_ed_path"], source_ed)
+            self.assertIn("DestructableProp objects: included", infos[0][1])
+            self.assertIn("Behavior prop validation profile: destructable_prop", infos[0][1])
 
 
 if __name__ == "__main__":

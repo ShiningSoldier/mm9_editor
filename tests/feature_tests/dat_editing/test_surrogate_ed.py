@@ -66,6 +66,27 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(layout.node_layout_kind, "direct_root_brush_nodes")
         self.assertEqual(layout.brush_names, ("CoreBrush",))
 
+    def test_airail_object_property_template_matches_source_shape(self):
+        properties = legacy_ed_writer.airail_object_properties(
+            name="AITrk2",
+            pos=(0.0, -176.0, 1248.0),
+            rail_links=("AITrk3", "AITrk7"),
+        )
+        by_name = {prop.name: prop for prop in properties}
+
+        self.assertEqual(len(properties), 36)
+        self.assertEqual(by_name["Name"].value, "AITrk2")
+        self.assertEqual(by_name["Pos"].value, (0.0, -176.0, 1248.0))
+        self.assertEqual(by_name["Visible"].value, False)
+        self.assertEqual(by_name["BoxPhysics"].value, True)
+        self.assertEqual(by_name["StartOn"].value, True)
+        self.assertEqual(by_name["RailLink0"].value, "AITrk3")
+        self.assertEqual(by_name["RailLink1"].value, "AITrk7")
+        self.assertEqual(by_name["RailLink2"].value, "")
+        self.assertEqual(by_name["RailLink3"].value, "")
+        self.assertEqual(by_name["ShowSurface"].flags, 1)
+        self.assertEqual(by_name["NumSurfacePolies"].type_code, 6)
+
     def test_clean_legacy_ed_writer_builds_named_group_prefab(self):
         brush = legacy_ed_writer.LegacyEdBrush(
             points=(
@@ -343,6 +364,1213 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(light["item"]["properties"]["Name"], "Light0")
         self.assertEqual(len(light["item"]["properties"]), 11)
 
+    def test_full_world_skeleton_can_emit_airail_objects_from_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedAirailProbe",
+            include_airail_objects=True,
+            airail_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.object_count, 234)
+        self.assertEqual(report.object_property_count, 8370)
+        self.assertTrue(any("Generated AIRail object records: 230" in item for item in report.notes))
+        self.assertTrue(any("source ED oracle matches=230" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_airail_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["WorldProperties"], 1)
+        self.assertEqual(object_scan.class_counts["StartPoint"], 1)
+        self.assertEqual(object_scan.class_counts["Light"], 1)
+        self.assertEqual(object_scan.class_counts["AIRail"], 230)
+        airails = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "AIRail"
+        }
+        self.assertEqual(len(airails), 230)
+        self.assertEqual(airails["AITrk2"].property_value("RailLink0"), "AITrk3")
+        self.assertEqual(airails["AITrk2"].property_value("RailLink1"), "AITrk7")
+        self.assertAlmostEqual(airails["AITrk2"].property_value("Pos")[1], -176.0, places=2)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_airail_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 234)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_sky_objects_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedSkyProbe",
+            include_sky_objects=True,
+            sky_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 7)
+        self.assertEqual(report.object_property_count, 136)
+        self.assertTrue(any("Generated sky object records: 3" in item for item in report.notes))
+        self.assertTrue(any("Sky source ED oracle loaded 3 sky object" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_sky_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["WorldProperties"], 1)
+        self.assertEqual(object_scan.class_counts["StartPoint"], 1)
+        self.assertEqual(object_scan.class_counts["Light"], 1)
+        self.assertEqual(object_scan.class_counts["SkyPointer"], 1)
+        self.assertEqual(object_scan.class_counts["DemoSkyWorldModel"], 1)
+        self.assertEqual(object_scan.class_counts["TOD_Sky"], 1)
+        sky_objects = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name in {"SkyPointer", "DemoSkyWorldModel", "TOD_Sky"}
+        }
+        self.assertEqual(sky_objects["SkyPointer0"].property_value("SkyDims"), (0.0, 0.0, 0.0))
+        self.assertEqual(sky_objects["SkyBox0"].property_value("SkyDims"), (128.0, 128.0, 128.0))
+        self.assertEqual(sky_objects["TOD_Sky0"].property_value("Visible"), True)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_sky_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 7)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_sound_objects_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedSoundProbe",
+            include_sound_objects=True,
+            sound_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 24)
+        self.assertEqual(report.object_property_count, 470)
+        self.assertTrue(any("Generated AmbientSound object records: 20" in item for item in report.notes))
+        self.assertTrue(any("Sound source ED oracle loaded 20 AmbientSound" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_sound_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["AmbientSound"], 20)
+        sounds = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "AmbientSound"
+        }
+        self.assertEqual(sounds["beachsound1"].property_value("Filename"), "Sounds\\Ambient\\Water\\waves02.wav")
+        self.assertEqual(sounds["beachsound1"].property_value("OuterRadius"), 3500.0)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_sound_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 24)
+        self.assertEqual(layout.group_child_count, 1)
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="bootcamp_sound_probe.ed",
+        )
+        sound_faces = [
+            face for model in scene.models for face in model.faces
+            if terrain_semantics.helper_texture_role(face.material_name) == "sound"
+        ]
+        self.assertEqual(sound_faces, [])
+
+    def test_full_world_skeleton_can_emit_gameplay_trigger_objects_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedGameplayTriggerProbe",
+            include_gameplay_trigger_objects=True,
+            gameplay_trigger_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 6)
+        self.assertEqual(report.object_property_count, 161)
+        self.assertTrue(any("Generated gameplay trigger object records: 2" in item for item in report.notes))
+        self.assertTrue(any("Gameplay trigger source ED oracle loaded 2" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_gameplay_trigger_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["Trigger"], 1)
+        self.assertEqual(object_scan.class_counts["ExitTrigger"], 1)
+        triggers = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name in {"Trigger", "ExitTrigger", "PortalTrigger"}
+        }
+        self.assertEqual(triggers["Trigger0"].property_value("TargetName1"), "ExitTrigger0")
+        self.assertEqual(triggers["Trigger0"].property_value("MessageName1"), "trigger")
+        self.assertEqual(triggers["Trigger0"].property_value("Dims"), (50.0, 50.0, 150.0))
+        self.assertEqual(triggers["ExitTrigger0"].property_value("DestinationWorld"), "IsleofAshes")
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_gameplay_trigger_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 6)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_static_prop_objects_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedStaticPropProbe",
+            include_static_prop_objects=True,
+            static_prop_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 147)
+        self.assertEqual(report.object_property_count, 5810)
+        self.assertTrue(any("Generated static Prop object records: 143" in item for item in report.notes))
+        self.assertTrue(any("Static prop source ED oracle loaded 143 Prop" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_static_prop_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["Prop"], 143)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "Prop"
+        }
+        self.assertEqual(props["Boat0"].property_value("Filename"), "models\\props\\vikingship.abc")
+        self.assertEqual(props["Boat0"].property_value("Skin"), "skins\\props\\vikingship.dtx")
+        self.assertEqual(props["Boat0"].property_value("Pos"), (13820.0, 401.0, 4960.0))
+        self.assertEqual(props["Boat0"].property_value("Solid"), False)
+        self.assertEqual(props["Prop31"].property_value("MoveToFloor"), False)
+        self.assertEqual(len(props["Boat0"].properties), 40)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_static_prop_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 147)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_low_risk_behavior_prop_objects_from_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedLowRiskBehaviorPropProbe",
+            include_low_risk_behavior_prop_objects=True,
+            low_risk_behavior_prop_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 56)
+        self.assertEqual(report.object_count, 12)
+        self.assertEqual(report.object_property_count, 426)
+        self.assertTrue(any("Generated low-risk behavior prop object records: 8" in item for item in report.notes))
+        self.assertTrue(any("Barrel=4, BonePile=4" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_low_risk_behavior_prop_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["Barrel"], 4)
+        self.assertEqual(object_scan.class_counts["BonePile"], 4)
+        self.assertNotIn("WallTorch", object_scan.class_counts)
+        self.assertNotIn("Fire", object_scan.class_counts)
+        self.assertNotIn("TreasureChest", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name in {"Barrel", "BonePile"}
+        }
+        self.assertEqual(props["Barrel8"].property_value("Filename"), "models\\Props\\Barrel03.ABC")
+        self.assertEqual(props["Barrel8"].property_value("Solid"), True)
+        self.assertEqual(props["Barrel8"].property_value("MoveToFloor"), True)
+        self.assertEqual(props["BonePile0"].property_value("Filename"), "models\\Props\\Trashpile.ABC")
+        self.assertEqual(len(props["Barrel8"].properties), 41)
+        self.assertEqual(len(props["BonePile0"].properties), 43)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_low_risk_behavior_prop_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 12)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_wall_torch_objects_from_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedWallTorchProbe",
+            include_wall_torch_objects=True,
+            wall_torch_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 56)
+        self.assertEqual(report.object_count, 105)
+        self.assertEqual(report.object_property_count, 6049)
+        self.assertTrue(any("WallTorch source ED oracle loaded 101" in item for item in report.notes))
+        self.assertTrue(any("Generated WallTorch object records: 101" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_wall_torch_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["WallTorch"], 101)
+        self.assertNotIn("Fire", object_scan.class_counts)
+        self.assertNotIn("TreasureChest", object_scan.class_counts)
+        self.assertNotIn("PropDamager", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "WallTorch"
+        }
+        self.assertEqual(props["WallTorch3"].property_value("Filename"), "models\\props\\walltorch.abc")
+        self.assertEqual(props["WallTorch3"].property_value("Skin"), "skins\\props\\walltorch.dtx")
+        self.assertEqual(props["WallTorch3"].property_value("On"), True)
+        self.assertEqual(props["WallTorch3"].property_value("SoundRadius"), 200.0)
+        self.assertEqual(props["WallTorch3"].property_value("SoundFile"), "Sounds\\ambient\\torchlight.wav")
+        self.assertEqual(props["WallTorch3"].property_value("Fire"), True)
+        self.assertEqual(props["WallTorch3"].property_value("Solid"), True)
+        self.assertEqual(props["WallTorch3"].property_value("MoveToFloor"), False)
+        self.assertEqual(len(props["WallTorch3"].properties), 59)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_wall_torch_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 105)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_fire_objects_from_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedFireProbe",
+            include_fire_objects=True,
+            fire_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 56)
+        self.assertEqual(report.object_count, 12)
+        self.assertEqual(report.object_property_count, 458)
+        self.assertTrue(any("Fire source ED oracle loaded 8" in item for item in report.notes))
+        self.assertTrue(any("Generated Fire object records: 8" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_fire_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["Fire"], 8)
+        self.assertNotIn("WallTorch", object_scan.class_counts)
+        self.assertNotIn("TreasureChest", object_scan.class_counts)
+        self.assertNotIn("PropDamager", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "Fire"
+        }
+        self.assertEqual(props["ImpGateFire7"].property_value("Pos"), (-2340.0, -224.0, 2893.0))
+        self.assertEqual(props["ImpGateFire7"].property_value("On"), True)
+        self.assertEqual(props["ImpGateFire7"].property_value("SoundRadius"), 400.0)
+        self.assertEqual(props["ImpGateFire7"].property_value("SoundFile"), "Sounds\\Ambient\\inferno.wav")
+        self.assertEqual(props["ImpGateFire7"].property_value("Fire"), True)
+        self.assertEqual(props["ImpGateFire7"].property_value("LightMinRadius"), 55.0)
+        self.assertEqual(props["ImpGateFire7"].property_value("LightMaxRadius"), 80.0)
+        self.assertEqual(props["ImpGateFire7"].property_value("MoveToFloor"), False)
+        self.assertEqual(len(props["ImpGateFire7"].properties), 46)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_fire_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 12)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_candle_prop_objects_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedCandlePropProbe",
+            include_candle_prop_objects=True,
+            candle_prop_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 33)
+        self.assertEqual(report.object_property_count, 1337)
+        self.assertTrue(any("CandleProp source ED oracle loaded 29" in item for item in report.notes))
+        self.assertTrue(any("Generated CandleProp object records: 29" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_candle_prop_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["CandleProp"], 29)
+        self.assertNotIn("Brazier", object_scan.class_counts)
+        self.assertNotIn("Fire", object_scan.class_counts)
+        self.assertNotIn("TreasureChest", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "CandleProp"
+        }
+        self.assertEqual(props["BrazierBowl17"].property_value("Filename"), "models\\Props\\Chandelier2.ABC")
+        self.assertEqual(props["BrazierBowl17"].property_value("Skin"), "Skins\\Props\\Chandelier2.dtx")
+        self.assertEqual(props["BrazierBowl17"].property_value("Pos"), (10737.0, 659.0, -850.0))
+        self.assertEqual(props["BrazierBowl17"].property_value("Visible"), True)
+        self.assertEqual(props["BrazierBowl17"].property_value("Solid"), False)
+        self.assertEqual(props["BrazierBowl17"].property_value("MoveToFloor"), False)
+        self.assertEqual(len(props["BrazierBowl17"].properties), 43)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_candle_prop_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 33)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_brazier_objects_from_source_oracle(self):
+        terrors = os.path.join(ROOT, "mm9_data", "WORLDS", "1000TERRORS.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "1000TERRORS.ED")
+        if not os.path.exists(terrors):
+            self.skipTest(f"missing test level: {terrors}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(terrors, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=terrors,
+            model_names=["BoardObj1"],
+            group_name="GeneratedBrazierProbe",
+            include_brazier_objects=True,
+            brazier_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 11)
+        self.assertEqual(report.object_property_count, 503)
+        self.assertTrue(any("Brazier source ED oracle loaded 7" in item for item in report.notes))
+        self.assertTrue(any("Generated Brazier object records: 7" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="terrors_brazier_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["Brazier"], 7)
+        self.assertNotIn("CandleProp", object_scan.class_counts)
+        self.assertNotIn("Fire", object_scan.class_counts)
+        self.assertNotIn("TreasureChest", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "Brazier"
+        }
+        self.assertEqual(props["Brazier46"].property_value("Filename"), "models\\props\\Brazier.abc")
+        self.assertEqual(props["Brazier46"].property_value("Skin"), "skins\\props\\Brazier.dtx")
+        self.assertEqual(props["Brazier46"].property_value("Pos"), (1185.0, 909.0, -5032.0))
+        self.assertEqual(props["Brazier46"].property_value("On"), True)
+        self.assertEqual(props["Brazier46"].property_value("SoundRadius"), 200.0)
+        self.assertEqual(props["Brazier46"].property_value("SoundFile"), "Sounds\\ambient\\torchlight.wav")
+        self.assertEqual(props["Brazier46"].property_value("Fire"), True)
+        self.assertEqual(props["Brazier46"].property_value("Visible"), True)
+        self.assertEqual(props["Brazier46"].property_value("Solid"), False)
+        self.assertEqual(props["Brazier46"].property_value("MoveToFloor"), True)
+        self.assertEqual(len(props["Brazier46"].properties), 59)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="terrors_brazier_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 11)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_treasure_chest_objects_from_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedTreasureChestProbe",
+            include_treasure_chest_objects=True,
+            treasure_chest_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 56)
+        self.assertEqual(report.object_count, 11)
+        self.assertEqual(report.object_property_count, 531)
+        self.assertTrue(any("TreasureChest source ED oracle loaded 7" in item for item in report.notes))
+        self.assertTrue(any("1 trigger target reference" in item for item in report.notes))
+        self.assertTrue(any("Generated TreasureChest object records: 7" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_treasure_chest_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["TreasureChest"], 7)
+        self.assertNotIn("PropDamager", object_scan.class_counts)
+        self.assertNotIn("DestructableProp", object_scan.class_counts)
+        self.assertNotIn("Fire", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "TreasureChest"
+        }
+        self.assertEqual(props["TreasureChest1"].property_value("Filename"), "models\\Props\\Chest1.ABC")
+        self.assertEqual(props["TreasureChest1"].property_value("Skin"), "Skins\\Props\\Chest1.dtx")
+        self.assertEqual(props["TreasureChest1"].property_value("Pos"), (1344.0, -128.0, 480.0))
+        self.assertEqual(props["TreasureChest1"].property_value("OpenSoundName"), "Sounds\\Events\\chestopeningwood.wav")
+        self.assertEqual(props["TreasureChest1"].property_value("CloseSoundName"), "Sounds\\Events\\chestclosingwood.wav")
+        self.assertEqual(props["TreasureChest1"].property_value("Locked"), False)
+        self.assertEqual(props["TreasureChest1"].property_value("TriggerTarget"), "TreasureShooterTrigger1")
+        self.assertEqual(props["TreasureChest1"].property_value("TreasureLevel"), 2.0)
+        self.assertEqual(props["TreasureChest1"].property_value("Solid"), True)
+        self.assertEqual(props["TreasureChest1"].property_value("MoveToFloor"), True)
+        self.assertEqual(len(props["TreasureChest1"].properties), 63)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_treasure_chest_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 11)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_prop_damager_objects_from_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedPropDamagerProbe",
+            include_prop_damager_objects=True,
+            prop_damager_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 56)
+        self.assertEqual(report.object_count, 10)
+        self.assertEqual(report.object_property_count, 378)
+        self.assertTrue(any("PropDamager source ED oracle loaded 6" in item for item in report.notes))
+        self.assertTrue(any("0 damage trigger target reference" in item for item in report.notes))
+        self.assertTrue(any("Generated PropDamager object records: 6" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_prop_damager_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["PropDamager"], 6)
+        self.assertNotIn("DestructableProp", object_scan.class_counts)
+        self.assertNotIn("TreasureChest", object_scan.class_counts)
+        self.assertNotIn("Fire", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "PropDamager"
+        }
+        self.assertEqual(props["Spikes14"].property_value("Filename"), "models\\props\\SpikePit.abc")
+        self.assertEqual(props["Spikes14"].property_value("Skin"), "skins\\props\\SpikePit.dtx")
+        self.assertEqual(props["Spikes14"].property_value("Pos"), (1344.0, -395.9999694824219, 708.0))
+        self.assertEqual(props["Spikes14"].property_value("DamagerStuff"), 0.0)
+        self.assertEqual(props["Spikes14"].property_value("Visible"), True)
+        self.assertEqual(props["Spikes14"].property_value("Solid"), False)
+        self.assertEqual(props["Spikes14"].property_value("MoveToFloor"), False)
+        self.assertEqual(len(props["Spikes14"].properties), 48)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_prop_damager_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 10)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_emit_destructable_prop_objects_from_source_oracle(self):
+        bathhouse = os.path.join(ROOT, "mm9_data", "WORLDS", "BATHHOUSE.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BATHHOUSE.ED")
+        if not os.path.exists(bathhouse):
+            self.skipTest(f"missing test level: {bathhouse}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bathhouse, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bathhouse,
+            model_names=["Door5"],
+            group_name="GeneratedDestructablePropProbe",
+            include_destructable_prop_objects=True,
+            destructable_prop_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 25)
+        self.assertEqual(report.object_property_count, 1959)
+        self.assertTrue(any("DestructableProp source ED oracle loaded 21" in item for item in report.notes))
+        self.assertTrue(any("0 damage trigger target reference" in item for item in report.notes))
+        self.assertTrue(any("Generated DestructableProp object records: 21" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bathhouse_destructable_prop_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["DestructableProp"], 21)
+        self.assertNotIn("PropDamager", object_scan.class_counts)
+        self.assertNotIn("TreasureChest", object_scan.class_counts)
+        self.assertNotIn("Fire", object_scan.class_counts)
+        props = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "DestructableProp"
+        }
+        self.assertEqual(props["Urn0"].property_value("Filename"), "models\\Props\\UrnGargoyle.abc")
+        self.assertEqual(props["Urn0"].property_value("Skin"), "Skins\\Props\\UrnGargoyle.dtx")
+        self.assertEqual(props["Urn0"].property_value("Pos"), (-64.0, -80.0, 384.0))
+        self.assertEqual(props["Urn0"].property_value("Scale"), 1.5)
+        self.assertEqual(props["Urn0"].property_value("HitPoints"), 1.0)
+        self.assertEqual(props["Urn0"].property_value("DamageHitPoints"), 1.0)
+        self.assertEqual(props["Urn0"].property_value("CanDamage"), True)
+        self.assertEqual(props["Urn0"].property_value("DestroyVisible"), True)
+        self.assertEqual(props["Urn0"].property_value("DestroySolid"), True)
+        self.assertEqual(props["Urn0"].property_value("DestroyGravity"), True)
+        self.assertEqual(props["Urn0"].property_value("CustomSound"), "Sounds\\Events\\glass_smash.wav")
+        self.assertEqual(props["Urn0"].property_value("ExplodeDamage"), 100.0)
+        self.assertEqual(props["Urn0"].property_value("DamageRadius"), 200.0)
+        self.assertEqual(props["Urn0"].property_value("Solid"), True)
+        self.assertEqual(props["Urn0"].property_value("MoveToFloor"), True)
+        self.assertEqual(len(props["Urn0"].properties), 89)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bathhouse_destructable_prop_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 25)
+        self.assertEqual(layout.group_child_count, 1)
+
+    def test_full_world_skeleton_can_copy_sky_marker_brushes_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedSkyMarkerProbe",
+            include_sky_objects=True,
+            sky_source_ed_path=source_ed,
+            include_sky_marker_brushes=True,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 24)
+        self.assertEqual(report.point_count, 228)
+        self.assertEqual(report.polygon_count, 162)
+        self.assertEqual(report.object_count, 30)
+        self.assertEqual(report.object_property_count, 780)
+        self.assertTrue(any("copied 23 Brush record(s) with 156 SkyMarker face(s)" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_sky_marker_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 24)
+        self.assertEqual(object_scan.class_counts["SkyPointer"], 1)
+        self.assertEqual(object_scan.class_counts["DemoSkyWorldModel"], 1)
+        self.assertEqual(object_scan.class_counts["TOD_Sky"], 1)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_sky_marker_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 7)
+        self.assertEqual(layout.group_child_count, 24)
+        self.assertEqual(layout.brush_names[0], "Brush_MonsterDoor1_0")
+        self.assertTrue(layout.brush_names[1].startswith("Brush_SkyMarker_"))
+
+        sky_brush_records = [
+            record for record in object_scan.records
+            if record.class_name == "Brush"
+            and str(record.property_value("Name", "")).startswith("Brush_SkyMarker_")
+        ]
+        self.assertEqual(len(sky_brush_records), 23)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("SkyPortal")), 4)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("FullyBright")), 4)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("GouraudShade")), 18)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("LightMap")), 14)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("Subdivide")), 14)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("NotAStep")), 1)
+        self.assertEqual(
+            sorted(record.property_value("DetailLevel") for record in sky_brush_records),
+            [0.0] * 12 + [1.0] * 11,
+        )
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="bootcamp_sky_marker_probe.ed",
+        )
+        sky_faces = [
+            face for model in scene.models for face in model.faces
+            if terrain_semantics.helper_texture_role(face.material_name) == "skyVisibility"
+        ]
+        self.assertEqual(len(sky_faces), 156)
+        self.assertTrue(all("SkyMarker.dtx" in face.material_name for face in sky_faces))
+        texture_flag_counts = {}
+        for face in sky_faces:
+            flags = int(face.extras["texture_flags"])
+            texture_flag_counts[flags] = texture_flag_counts.get(flags, 0) + 1
+        self.assertEqual(texture_flag_counts, {0: 33, 1: 123})
+
+    def test_full_world_skeleton_can_emit_sky_marker_residue_brushes_from_reference(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedSkyMarkerResidueProbe",
+            include_sky_objects=True,
+            sky_source_ed_path=source_ed,
+            include_sky_marker_residue_brushes=True,
+            sky_marker_residue_reference_dat_path=bootcamp,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 24)
+        self.assertEqual(report.point_count, 228)
+        self.assertEqual(report.polygon_count, 33)
+        self.assertEqual(report.object_count, 30)
+        self.assertEqual(report.object_property_count, 780)
+        self.assertTrue(any("23 diagnostic Brush record(s) with 27 matched SkyMarker face(s)" in item for item in report.notes))
+        self.assertTrue(any("No non-oracle SkyMarker residue rule is exact yet" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_sky_marker_residue_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 24)
+        self.assertEqual(object_scan.class_counts["SkyPointer"], 1)
+        self.assertEqual(object_scan.class_counts["DemoSkyWorldModel"], 1)
+        self.assertEqual(object_scan.class_counts["TOD_Sky"], 1)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_sky_marker_residue_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 7)
+        self.assertEqual(layout.group_child_count, 24)
+        self.assertEqual(layout.brush_names[0], "Brush_MonsterDoor1_0")
+        self.assertTrue(layout.brush_names[1].startswith("Brush_SkyMarkerResidue_"))
+
+        sky_brush_records = [
+            record for record in object_scan.records
+            if record.class_name == "Brush"
+            and str(record.property_value("Name", "")).startswith("Brush_SkyMarkerResidue_")
+        ]
+        self.assertEqual(len(sky_brush_records), 23)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("SkyPortal")), 4)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("FullyBright")), 4)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("GouraudShade")), 18)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("LightMap")), 14)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("Subdivide")), 14)
+        self.assertEqual(sum(1 for record in sky_brush_records if record.property_value("NotAStep")), 1)
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="bootcamp_sky_marker_residue_probe.ed",
+        )
+        sky_faces = [
+            face for model in scene.models for face in model.faces
+            if terrain_semantics.helper_texture_role(face.material_name) == "skyVisibility"
+        ]
+        self.assertEqual(len(sky_faces), 27)
+        self.assertTrue(all("SkyMarker.dtx" in face.material_name for face in sky_faces))
+        texture_flag_counts = {}
+        for face in sky_faces:
+            flags = int(face.extras["texture_flags"])
+            texture_flag_counts[flags] = texture_flag_counts.get(flags, 0) + 1
+        self.assertEqual(texture_flag_counts, {1: 27})
+
+    def test_full_world_skeleton_can_emit_collision_helpers_from_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedCollisionHelperProbe",
+            include_collision_helper_objects=True,
+            collision_helper_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 27)
+        self.assertEqual(report.polygon_count, 212)
+        self.assertEqual(report.object_count, 56)
+        self.assertEqual(report.object_property_count, 1327)
+        self.assertTrue(any("Generated collision helper object records: 26" in item for item in report.notes))
+        self.assertTrue(any("source ED object matches=26" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_collision_helper_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 27)
+        self.assertEqual(object_scan.class_counts["WorldProperties"], 1)
+        self.assertEqual(object_scan.class_counts["StartPoint"], 1)
+        self.assertEqual(object_scan.class_counts["Light"], 1)
+        self.assertEqual(object_scan.class_counts["Ladder"], 3)
+        self.assertEqual(object_scan.class_counts["WorldObject"], 3)
+        self.assertEqual(object_scan.class_counts["InvisibleBrush"], 8)
+        self.assertEqual(object_scan.class_counts["PerceptionBrush"], 12)
+        helpers = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name in {"InvisibleBrush", "PerceptionBrush", "Ladder", "WorldObject"}
+        }
+        self.assertEqual(helpers["InvisibleBrush7"].property_value("Solid"), True)
+        self.assertEqual(helpers["PerceptionBrush0"].property_value("PerceptionValue"), 2.0)
+        self.assertEqual(helpers["Ladder4"].property_value("SurfaceType"), 9.0)
+        self.assertEqual(helpers["LadderBlocker3"].class_name, "WorldObject")
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_collision_helper_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 30)
+        self.assertEqual(layout.group_child_count, 27)
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="anskramkeep_collision_helper_probe.ed",
+        )
+        helper_faces = [
+            face for model in scene.models for face in model.faces
+            if "invisible.dtx" in face.material_name.lower()
+            or "firethrough.dtx" in face.material_name.lower()
+            or "sprites" in face.material_name.lower()
+        ]
+        self.assertGreaterEqual(len(helper_faces), 156)
+        self.assertTrue(all(int(face.extras["texture_flags"]) != 0 for face in helper_faces))
+
+    def test_full_world_skeleton_can_emit_collision_helper_objects_without_helper_brushes(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["ExitStairs"],
+            group_name="GeneratedCollisionObjectOnlyProbe",
+            include_collision_helper_objects=True,
+            include_collision_helper_brushes=False,
+            collision_helper_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.object_count, 30)
+        self.assertTrue(any("Generated collision helper object records: 26" in item for item in report.notes))
+        self.assertTrue(any("emitted Brush records=0" in item for item in report.notes))
+        self.assertTrue(any("Brush records were intentionally skipped" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="anskramkeep_collision_object_only_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["Ladder"], 3)
+        self.assertEqual(object_scan.class_counts["WorldObject"], 3)
+        self.assertEqual(object_scan.class_counts["InvisibleBrush"], 8)
+        self.assertEqual(object_scan.class_counts["PerceptionBrush"], 12)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_collision_object_only_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.root_child_count, 30)
+        self.assertEqual(layout.group_child_count, 1)
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="anskramkeep_collision_object_only_probe.ed",
+        )
+        helper_faces = [
+            face for model in scene.models for face in model.faces
+            if "invisible.dtx" in face.material_name.lower()
+            or "firethrough.dtx" in face.material_name.lower()
+            or "sprites" in face.material_name.lower()
+        ]
+        self.assertEqual(helper_faces, [])
+
+    def test_full_world_skeleton_can_emit_trigger_helpers_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedTriggerHelperProbe",
+            include_trigger_helper_objects=True,
+            trigger_helper_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.selected_model_names, ("MonsterDoor1",))
+        self.assertEqual(report.model_count, 3)
+        self.assertEqual(report.point_count, 24)
+        self.assertEqual(report.polygon_count, 18)
+        self.assertEqual(report.object_count, 8)
+        self.assertEqual(report.object_property_count, 222)
+        self.assertTrue(any("Generated trigger helper object records: 2" in item for item in report.notes))
+        self.assertTrue(any("source ED object matches=2" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_trigger_helper_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 3)
+        self.assertEqual(object_scan.class_counts["WorldProperties"], 1)
+        self.assertEqual(object_scan.class_counts["StartPoint"], 1)
+        self.assertEqual(object_scan.class_counts["Light"], 1)
+        self.assertEqual(object_scan.class_counts["PortalZone"], 2)
+        portal_zones = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "PortalZone"
+        }
+        self.assertEqual(portal_zones["Tavernzone"].property_value("PortalName"), "Tavernportal")
+        self.assertEqual(portal_zones["Storezone"].property_value("PortalName"), "Storeportal")
+        self.assertAlmostEqual(portal_zones["Tavernzone"].property_value("Pos")[0], 10883.0, places=2)
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_trigger_helper_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.node_layout_kind, "named_group_brush_nodes_with_root_objects")
+        self.assertEqual(layout.root_child_count, 6)
+        self.assertEqual(layout.group_child_count, 3)
+        self.assertEqual(
+            layout.brush_names,
+            ("Brush_MonsterDoor1_0", "Brush_Tavernzone_1", "Brush_Storezone_2"),
+        )
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="bootcamp_trigger_helper_probe.ed",
+        )
+        helper_faces = [
+            face for model in scene.models for face in model.faces
+            if "greenscreen.dtx" in face.material_name.lower()
+        ]
+        self.assertEqual(len(helper_faces), 12)
+        self.assertTrue(all(int(face.extras["texture_flags"]) != 0 for face in helper_faces))
+
+    def test_full_world_skeleton_can_emit_trigger_objects_without_helper_brushes(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedTriggerObjectOnlyProbe",
+            include_trigger_helper_objects=True,
+            include_trigger_helper_brushes=False,
+            trigger_helper_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.selected_model_names, ("MonsterDoor1",))
+        self.assertEqual(report.model_count, 1)
+        self.assertEqual(report.point_count, 8)
+        self.assertEqual(report.polygon_count, 6)
+        self.assertEqual(report.object_count, 6)
+        self.assertTrue(any("Generated trigger helper object records: 2" in item for item in report.notes))
+        self.assertTrue(any("emitted Brush records=0" in item for item in report.notes))
+        self.assertTrue(any("Brush records were intentionally skipped" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_trigger_object_only_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["Brush"], 1)
+        self.assertEqual(object_scan.class_counts["PortalZone"], 2)
+        portal_zones = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name == "PortalZone"
+        }
+        self.assertEqual(portal_zones["Tavernzone"].property_value("PortalName"), "Tavernportal")
+        self.assertEqual(portal_zones["Storezone"].property_value("PortalName"), "Storeportal")
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_trigger_object_only_probe.ed",
+        )
+        self.assertEqual(layout.status, "layout_parsed")
+        self.assertEqual(layout.root_child_count, 6)
+        self.assertEqual(layout.group_child_count, 1)
+        self.assertEqual(layout.brush_names, ("Brush_MonsterDoor1_0",))
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="bootcamp_trigger_object_only_probe.ed",
+        )
+        helper_faces = [
+            face for model in scene.models for face in model.faces
+            if "greenscreen.dtx" in face.material_name.lower()
+        ]
+        self.assertEqual(helper_faces, [])
+
     def test_full_world_skeleton_can_add_budgeted_physics_shell_slabs(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         if not os.path.exists(bootcamp):
@@ -369,11 +1597,12 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
         self.assertEqual(len(shell_summaries), 4)
         self.assertEqual(report.model_count, 5)
-        self.assertEqual(report.point_count, 94)
-        self.assertEqual(report.polygon_count, 57)
+        self.assertEqual(report.point_count, 156)
+        self.assertEqual(report.polygon_count, 88)
         self.assertEqual(report.object_count, 8)
         self.assertEqual(report.object_property_count, 202)
         self.assertTrue(any("PhysicsBSP shell patch emitted 4/" in item for item in report.notes))
+        self.assertTrue(any("side_wall=2, floor=1, ceiling=1, helper/special=0" in item for item in report.notes))
         for summary in shell_summaries:
             self.assertEqual(summary.status, "written")
             self.assertGreaterEqual(summary.point_count, 6)
@@ -384,7 +1613,7 @@ class SurrogateEdTests(unittest.TestCase):
             source_path="physics_shell_probe.ed",
         )
         self.assertEqual(scene.metadata["recovered_brush_count"], 5)
-        self.assertEqual(scene.metadata["recovered_polygon_count"], 57)
+        self.assertEqual(scene.metadata["recovered_polygon_count"], 88)
         self.assertEqual(scene.metadata["recovered_object_count"], 8)
         invisible_faces = [
             face for model in scene.models for face in model.faces
@@ -427,18 +1656,20 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
         self.assertEqual(len(shell_summaries), 864)
         self.assertEqual(report.model_count, 970)
-        self.assertEqual(report.point_count, 19490)
-        self.assertEqual(report.polygon_count, 11721)
+        self.assertEqual(report.point_count, 19438)
+        self.assertEqual(report.polygon_count, 11695)
         self.assertEqual(report.object_count, 973)
         self.assertEqual(report.object_property_count, 27222)
-        self.assertTrue(any("PhysicsBSP shell patch emitted 864/6450" in item for item in report.notes))
+        self.assertTrue(any("PhysicsBSP shell patch emitted 864/6442" in item for item in report.notes))
+        self.assertTrue(any("side_wall=625, floor=164, ceiling=75, helper/special=0" in item for item in report.notes))
+        self.assertTrue(any("invalid=8, non-closed=80" in item for item in report.notes))
 
         scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
             generated,
             source_path="ANSKRAMKEEP_no_helper_physics_shell.ed",
         )
         self.assertEqual(scene.metadata["recovered_brush_count"], 970)
-        self.assertEqual(scene.metadata["recovered_polygon_count"], 11721)
+        self.assertEqual(scene.metadata["recovered_polygon_count"], 11695)
         self.assertEqual(scene.metadata["recovered_object_count"], 973)
         self.assertEqual(scene.metadata["object_class_counts"]["Brush"], 970)
         rail_faces = [
@@ -446,6 +1677,69 @@ class SurrogateEdTests(unittest.TestCase):
             if "rail.dtx" in face.material_name.lower()
         ]
         self.assertEqual(rail_faces, [])
+
+    def test_anskramkeep_physics_shell_start_point_uses_source_oracle_anchor(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+        parsed = bsp.parse(data)
+        selected_names = terrain_semantics.default_dat_to_ed_model_names(parsed)
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=selected_names,
+            group_name="ANSKRAMKEEP_SourceStartAnchor",
+            include_physics_shell_patch=True,
+            physics_shell_name_prefix="ANSKRAMKEEP_PhysicsShell",
+            physics_shell_max_polygons=864,
+            physics_shell_thickness=16.0,
+            door_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertTrue(any("Source StartPoint oracle loaded 2" in item for item in report.notes))
+        self.assertTrue(any("Source StartPoint support Brush copied for Anskramkeepback" in item for item in report.notes))
+        self.assertTrue(any("Source StartPoint support Brush replaced generated support Brush" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="ANSKRAMKEEP_source_start_anchor.ed",
+        )
+        start_point = next(record for record in object_scan.records if record.class_name == "StartPoint")
+        start_pos = start_point.property_value("Pos")
+        self.assertEqual((round(start_pos[0]), round(start_pos[2])), (0, 16))
+        self.assertAlmostEqual(start_pos[1], -104.0, places=2)
+        support_brush = next(
+            record for record in object_scan.records
+            if record.class_name == "Brush"
+            and str(record.property_value("Name", "")).startswith("Brush_SourceStartSupport_Anskramkeepback_Brush222")
+        )
+        self.assertTrue(support_brush.property_value("Solid"))
+        self.assertTrue(support_brush.property_value("LightMap"))
+        self.assertTrue(support_brush.property_value("Subdivide"))
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="ANSKRAMKEEP_source_start_anchor.ed",
+        )
+        support_index = [
+            index for index, record in enumerate(record for record in object_scan.records if record.class_name == "Brush")
+            if str(record.property_value("Name", "")).startswith("Brush_SourceStartSupport_Anskramkeepback_Brush222")
+        ][0]
+        support_model = scene.models[support_index]
+        self.assertEqual(len(support_model.points), 12)
+        self.assertEqual(len(support_model.faces), 8)
+        self.assertEqual(
+            {face.material_name for face in support_model.faces},
+            {"TEXTURES\\A4Drangheim\\floors\\anskramfloor.dtx"},
+        )
 
     def test_builds_multi_brush_full_world_skeleton_with_load_objects(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
@@ -513,6 +1807,185 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(parsed["children"][1]["item"]["class_name"], "WorldProperties")
         self.assertEqual(parsed["children"][2]["item"]["class_name"], "StartPoint")
         self.assertEqual(parsed["children"][3]["item"]["class_name"], "Light")
+
+    def test_full_world_skeleton_can_copy_matching_door_objects_from_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedDoorObjectProbe",
+            include_door_objects=True,
+            door_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.selected_model_names, ("MonsterDoor1", "MonsterDoor2"))
+        self.assertEqual(report.object_count, 7)
+        self.assertEqual(report.object_property_count, 282)
+        self.assertTrue(any("DoubleDoorName leaf/leaves: MonsterDoor2" in item for item in report.notes))
+        self.assertTrue(any("Door source ED oracle loaded 2 matched" in item for item in report.notes))
+        self.assertTrue(any("copied source child Brush records for 2/2" in item for item in report.notes))
+        self.assertTrue(any("child Brush replacement applied to 2" in item for item in report.notes))
+        self.assertTrue(any("Generated Door/RotatingDoor object records: 2" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_door_object_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["RotatingDoor"], 2)
+        door = next(
+            record for record in object_scan.records
+            if record.class_name == "RotatingDoor"
+            and record.property_value("Name") == "MonsterDoor1"
+        )
+        self.assertEqual(door.property_value("Name"), "MonsterDoor1")
+        self.assertEqual(door.property_value("DoubleDoorName"), "MonsterDoor2")
+        self.assertEqual(door.property_value("Pos"), (8224.0, 561.0, -2108.0))
+        self.assertTrue(door.property_value("Visible"))
+        self.assertTrue(door.property_value("Solid"))
+        pair = next(
+            record for record in object_scan.records
+            if record.class_name == "RotatingDoor"
+            and record.property_value("Name") == "MonsterDoor2"
+        )
+        self.assertEqual(pair.property_value("DoubleDoorName"), "MonsterDoor1")
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="bootcamp_door_object_probe.ed",
+        )
+        wrapper = legacy_ed._try_decompress_full_level_wrapper(generated)
+        self.assertIsNotNone(wrapper)
+        assert wrapper is not None
+        parsed, _end = _read_legacy_node_container(
+            wrapper["decompressed"],
+            layout.node_start,
+            include_entry=False,
+        )
+
+        def _walk(node):
+            yield node
+            for child in node["children"]:
+                yield from _walk(child)
+
+        door_node = next(
+            node for node in _walk(parsed)
+            if node["item"]["class_name"] == "RotatingDoor"
+            and node["item"]["properties"].get("Name") == "MonsterDoor1"
+        )
+        self.assertEqual(len(door_node["children"]), 1)
+        child_node = door_node["children"][0]
+        self.assertEqual(child_node["type"], legacy_ed_writer.NODE_BRUSH)
+        self.assertEqual(child_node["item"]["class_name"], "Brush")
+        self.assertTrue(child_node["item"]["properties"]["GouraudShade"])
+        self.assertTrue(child_node["item"]["properties"]["LightMap"])
+        self.assertTrue(child_node["item"]["properties"]["Subdivide"])
+
+        with open(source_ed, "rb") as f:
+            source_data = f.read()
+        source_layout = legacy_ed.scan_legacy_ed_node_layout(
+            source_data,
+            source_path=source_ed,
+        )
+        source_wrapper = legacy_ed._try_decompress_full_level_wrapper(source_data)
+        self.assertIsNotNone(source_wrapper)
+        assert source_wrapper is not None
+        source_parsed, _source_end = _read_legacy_node_container(
+            source_wrapper["decompressed"],
+            source_layout.node_start,
+            include_entry=False,
+        )
+        source_door_node = next(
+            node for node in _walk(source_parsed)
+            if node["item"]["class_name"] == "RotatingDoor"
+            and node["item"]["properties"].get("Name") == "MonsterDoor1"
+        )
+        source_child_index = source_door_node["children"][0]["brush_index"]
+        generated_scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="bootcamp_door_object_probe.ed",
+        )
+        source_scene = legacy_ed.load_legacy_ed_geometry_scene(source_ed)
+        generated_face = generated_scene.models[child_node["brush_index"]].faces[0]
+        source_face = source_scene.models[source_child_index].faces[0]
+        self.assertEqual(generated_face.extras["uv_p"], source_face.extras["uv_p"])
+        self.assertEqual(generated_face.extras["uv_q"], source_face.extras["uv_q"])
+        pair_node = next(
+            node for node in _walk(parsed)
+            if node["item"]["class_name"] == "RotatingDoor"
+            and node["item"]["properties"].get("Name") == "MonsterDoor2"
+        )
+        self.assertEqual(len(pair_node["children"]), 1)
+        self.assertEqual(pair_node["children"][0]["type"], legacy_ed_writer.NODE_BRUSH)
+
+    def test_full_world_skeleton_copies_door_child_brush_properties_from_node_hierarchy(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=anskramkeep,
+            model_names=["Innerdoor1"],
+            group_name="GeneratedAnskramkeepDoorProbe",
+            include_door_objects=True,
+            door_source_ed_path=source_ed,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(set(report.selected_model_names), {"Innerdoor0", "Innerdoor1"})
+        self.assertTrue(any("child Brush replacement applied to 2" in item for item in report.notes))
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="anskramkeep_innerdoor_object_probe.ed",
+        )
+        wrapper = legacy_ed._try_decompress_full_level_wrapper(generated)
+        self.assertIsNotNone(wrapper)
+        assert wrapper is not None
+        parsed, _end = _read_legacy_node_container(
+            wrapper["decompressed"],
+            layout.node_start,
+            include_entry=False,
+        )
+
+        def _walk(node):
+            yield node
+            for child in node["children"]:
+                yield from _walk(child)
+
+        door_node = next(
+            node for node in _walk(parsed)
+            if node["item"]["class_name"] == "Door"
+            and node["item"]["properties"].get("Name") == "Innerdoor1"
+        )
+        self.assertEqual(len(door_node["children"]), 1)
+        child_node = door_node["children"][0]
+        self.assertEqual(child_node["type"], legacy_ed_writer.NODE_BRUSH)
+        self.assertEqual(child_node["item"]["class_name"], "Brush")
+        child_properties = child_node["item"]["properties"]
+        self.assertTrue(str(child_properties["Name"]).startswith("Brush_Innerdoor1_"))
+        self.assertTrue(child_properties["Solid"])
+        self.assertTrue(child_properties["GouraudShade"])
+        self.assertTrue(child_properties["LightMap"])
+        self.assertTrue(child_properties["Subdivide"])
+        self.assertFalse(child_properties["Portal"])
 
     def test_terrain_support_prism_side_faces_are_outward(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")

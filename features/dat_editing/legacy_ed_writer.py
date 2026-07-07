@@ -154,6 +154,45 @@ MM9_LIGHT_OBJECT_PROPERTIES: Tuple[Tuple[str, int, int, object], ...] = (
     ("Time", 3, 0, 0.0),
 )
 
+MM9_AIRAIL_OBJECT_PROPERTIES: Tuple[Tuple[str, int, int, object], ...] = (
+    ("Name", 0, 0, "AIRail0"),
+    ("Pos", 1, 0, (0.0, 0.0, 0.0)),
+    ("Rotation", 7, 0, (0.0, 0.0, 0.0, 0.0)),
+    ("ScriptName", 0, 16384, ""),
+    ("ScriptParams", 0, 0, ""),
+    ("NeedsTick", 5, 0, False),
+    ("Visible", 5, 0, False),
+    ("OneWayOnly", 5, 0, False),
+    ("IsLadder", 5, 0, False),
+    ("UseRotation", 5, 0, False),
+    ("NoRunZone", 5, 0, False),
+    ("BoxPhysics", 5, 0, True),
+    ("StartOn", 5, 0, True),
+    ("RailLink0", 0, 0, ""),
+    ("RailLink1", 0, 0, ""),
+    ("RailLink2", 0, 0, ""),
+    ("RailLink3", 0, 0, ""),
+    ("ShowSurface", 5, 1, False),
+    ("SpriteSurfaceName", 0, 1, ""),
+    ("SurfaceColor1", 2, 1, (0.0, 0.0, 0.0)),
+    ("SurfaceColor2", 2, 1, (0.0, 0.0, 0.0)),
+    ("XScaleMin", 3, 1, 15.0),
+    ("XScaleMax", 3, 1, 25.0),
+    ("YScaleMin", 3, 1, 15.0),
+    ("YScaleMax", 3, 1, 25.0),
+    ("XScaleDuration", 3, 1, 10.0),
+    ("YScaleDuration", 3, 1, 10.0),
+    ("SurfaceHeight", 3, 1, 5.0),
+    ("SurfaceAlpha", 3, 1, 0.7),
+    ("NumSurfacePolies", 6, 1, 160.0),
+    ("Viscosity", 3, 1, 0.0),
+    ("Damage", 3, 1, 0.0),
+    ("DamageType", 6, 1, 0.0),
+    ("MoveToFloor", 5, 1, False),
+    ("TouchNotify", 5, 0, False),
+    ("UserData", 6, 0, 0.0),
+)
+
 
 @dataclass(frozen=True)
 class LegacyEdSurface:
@@ -475,6 +514,30 @@ def light_object_properties(
             "Pos": _finite_vec3(pos),
             "LightRadius": _finite_float(radius),
             "LightColor": _finite_vec3(color_rgb),
+        },
+    )
+
+
+def airail_object_properties(
+    *,
+    name: str = "AIRail0",
+    pos: Vec3 = (0.0, 0.0, 0.0),
+    rotation: Quat = (0.0, 0.0, 0.0, 0.0),
+    rail_links: Sequence[str] = (),
+) -> Tuple[LegacyEdObjectProperty, ...]:
+    links = [str(item or "") for item in tuple(rail_links)[:4]]
+    while len(links) < 4:
+        links.append("")
+    return _properties_from_template_values(
+        MM9_AIRAIL_OBJECT_PROPERTIES,
+        {
+            "Name": str(name or "AIRail0"),
+            "Pos": _finite_vec3(pos),
+            "Rotation": _finite_quat(rotation),
+            "RailLink0": links[0],
+            "RailLink1": links[1],
+            "RailLink2": links[2],
+            "RailLink3": links[3],
         },
     )
 

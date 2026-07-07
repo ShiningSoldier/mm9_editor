@@ -1104,7 +1104,11 @@ class EditorApp:
             f"triangles: {result.triangle_count}",
         )
 
-    def cmd_generate_dedit_ed_from_dat(self) -> None:
+    def cmd_generate_dedit_ed_from_dat(
+        self,
+        *,
+        behavior_prop_validation_profile: str = "none",
+    ) -> None:
         if not getattr(self, "active", None):
             messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
             return
@@ -1114,7 +1118,37 @@ class EditorApp:
             messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
             return
 
-        model_names = self._default_dat_to_ed_model_names(bsp_world)
+        behavior_prop_validation_profile_key = str(
+            behavior_prop_validation_profile or "none"
+        ).strip().lower().replace("-", "_").replace(" ", "_")
+        behavior_prop_validation_enabled = behavior_prop_validation_profile_key not in {
+            "",
+            "none",
+            "off",
+            "false",
+            "0",
+        }
+        destructable_brush_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+            "destructable_brush",
+            "destructablebrush",
+            "destructible_brush",
+            "destructiblebrush",
+            "destructible",
+            "dragonstadium_destructable_brush",
+            "dragonstadium_destructible_brush",
+        }
+        destructable_prop_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+            "destructable_prop",
+            "destructableprop",
+            "destructible_prop",
+            "destructibleprop",
+        }
+        default_model_names = self._default_dat_to_ed_model_names(bsp_world)
+        destructable_brush_model_names = self._dat_object_model_names_for_class(
+            L,
+            bsp_world,
+            "DestructableBrush",
+        )
         has_terrain0 = any(
             str(name or "").lower() == terrain_semantics.DEFAULT_TERRAIN_MODEL.lower()
             for name in terrain_semantics.terrain_model_names(bsp_world)
@@ -1123,6 +1157,47 @@ class EditorApp:
             terrain_semantics.is_physics_bsp_model(model)
             for model in getattr(bsp_world, "world_models", []) or []
         )
+        has_airail_helpers = any(
+            self._dat_model_is_pure_airail_helper(model)
+            for model in getattr(bsp_world, "world_models", []) or []
+        )
+        has_sky_helpers = any(
+            self._dat_model_has_sky_visibility_helper(model)
+            for model in getattr(bsp_world, "world_models", []) or []
+        )
+        has_sound_helpers = any(
+            self._dat_model_has_sound_helper(model)
+            for model in getattr(bsp_world, "world_models", []) or []
+        )
+        has_collision_helpers = any(
+            self._dat_model_is_pure_collision_helper(model)
+            for model in getattr(bsp_world, "world_models", []) or []
+        )
+        has_trigger_helpers = any(
+            self._dat_model_is_pure_trigger_helper(model)
+            for model in getattr(bsp_world, "world_models", []) or []
+        )
+        dat_native_destructable_brush_enabled = bool(
+            destructable_brush_model_names
+        ) and (
+            destructable_brush_behavior_prop_validation_enabled
+            or (not behavior_prop_validation_enabled and not has_terrain0)
+        )
+        model_names = (
+            destructable_brush_model_names
+            if dat_native_destructable_brush_enabled
+            else default_model_names
+        )
+        has_door_models = any(
+            "door" in str(name or "").lower()
+            for name in model_names or ()
+        )
+        if destructable_brush_behavior_prop_validation_enabled and not destructable_brush_model_names:
+            messagebox.showerror(
+                "DAT to ED generation failed",
+                "No same-name DestructableBrush DAT object/BSP model pairs were found.",
+            )
+            return
         if not model_names and not has_terrain0:
             messagebox.showerror(
                 "DAT to ED generation failed",
@@ -1131,6 +1206,14 @@ class EditorApp:
             return
         include_terrain_support_patch = bool(has_terrain0 and model_names)
         include_physics_shell_patch = bool((not has_terrain0) and model_names and has_physics_bsp)
+        include_validation_floor = False
+        if dat_native_destructable_brush_enabled:
+            include_terrain_support_patch = False
+            include_physics_shell_patch = False
+            include_validation_floor = True
+        elif destructable_prop_behavior_prop_validation_enabled and not has_terrain0:
+            include_physics_shell_patch = False
+            include_validation_floor = True
         terrain_support_brush_budget = max(
             1,
             DAT_TO_ED_PROCESSOR_BRUSH_BUDGET - len(model_names or ()),
@@ -1159,6 +1242,197 @@ class EditorApp:
         try:
             source_name = L.display_name or L.rez_vpath or L.path or "level"
             stem = self._dat_to_ed_output_stem(source_name)
+            source_ed_oracle_path = self._source_ed_oracle_path(
+                source_name,
+                level_path=getattr(L, "path", "") or "",
+            )
+            if (
+                behavior_prop_validation_enabled
+                and not source_ed_oracle_path
+                and not destructable_brush_behavior_prop_validation_enabled
+            ):
+                messagebox.showerror(
+                    "DAT to ED generation failed",
+                    "Behavior prop validation requires a same-stem source ED oracle.",
+                )
+                return
+            medium_risk_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+                "all",
+                "on",
+                "true",
+                "yes",
+                "1",
+                "included",
+                "medium",
+                "medium_risk",
+                "medium_light",
+                "medium_risk_light",
+                "light",
+                "lights",
+                "light_fire",
+                "light_fire_sound",
+                "light_fire_sound_model",
+            }
+            candle_prop_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+                "all",
+                "on",
+                "true",
+                "yes",
+                "1",
+                "included",
+                "medium",
+                "medium_risk",
+                "medium_light",
+                "medium_risk_light",
+                "light",
+                "lights",
+                "light_fire",
+                "light_fire_sound",
+                "light_fire_sound_model",
+                "candle",
+                "candle_prop",
+                "candleprop",
+            }
+            brazier_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+                "all",
+                "on",
+                "true",
+                "yes",
+                "1",
+                "included",
+                "medium",
+                "medium_risk",
+                "medium_light",
+                "medium_risk_light",
+                "light",
+                "lights",
+                "light_fire",
+                "light_fire_sound",
+                "light_fire_sound_model",
+                "brazier",
+            }
+            treasure_chest_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+                "all",
+                "on",
+                "true",
+                "yes",
+                "1",
+                "included",
+                "high",
+                "high_risk",
+                "treasure",
+                "treasure_chest",
+                "treasurechest",
+                "chest",
+            }
+            prop_damager_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+                "all",
+                "on",
+                "true",
+                "yes",
+                "1",
+                "included",
+                "high",
+                "high_risk",
+                "prop_damager",
+                "propdamager",
+                "damager",
+                "damage",
+            }
+            high_risk_behavior_prop_validation_enabled = behavior_prop_validation_profile_key in {
+                "all",
+                "on",
+                "true",
+                "yes",
+                "1",
+                "included",
+                "high",
+                "high_risk",
+            }
+            door_source_ed_path = source_ed_oracle_path
+            include_door_objects = bool(has_door_models and door_source_ed_path)
+            if not include_door_objects:
+                door_source_ed_path = ""
+            airail_source_ed_path = source_ed_oracle_path
+            include_airail_objects = bool(has_airail_helpers and airail_source_ed_path)
+            if not include_airail_objects:
+                airail_source_ed_path = ""
+            sky_source_ed_path = source_ed_oracle_path
+            include_sky_objects = bool(has_sky_helpers and sky_source_ed_path)
+            if not include_sky_objects:
+                sky_source_ed_path = ""
+            sound_source_ed_path = source_ed_oracle_path
+            include_sound_objects = bool(has_sound_helpers and sound_source_ed_path)
+            if not include_sound_objects:
+                sound_source_ed_path = ""
+            # Helper Brush emissions remain diagnostic-only until compiled-DAT
+            # leakage reports show they do not enter visible/visibility BSP.
+            collision_helper_source_ed_path = source_ed_oracle_path
+            include_collision_helper_objects = bool(has_collision_helpers and collision_helper_source_ed_path)
+            include_collision_helper_brushes = False
+            if not include_collision_helper_objects:
+                collision_helper_source_ed_path = ""
+            trigger_helper_source_ed_path = source_ed_oracle_path
+            include_trigger_helper_objects = bool(has_trigger_helpers and trigger_helper_source_ed_path)
+            include_trigger_helper_brushes = False
+            if not include_trigger_helper_objects:
+                trigger_helper_source_ed_path = ""
+            low_risk_behavior_prop_source_ed_path = source_ed_oracle_path
+            include_low_risk_behavior_prop_objects = bool(low_risk_behavior_prop_source_ed_path)
+            validated_light_fire_behavior_prop_source_ed_path = source_ed_oracle_path
+            candle_prop_behavior_prop_source_ed_path = (
+                ""
+                if brazier_behavior_prop_validation_enabled and not candle_prop_behavior_prop_validation_enabled
+                else source_ed_oracle_path
+            )
+            brazier_behavior_prop_source_ed_path = (
+                ""
+                if candle_prop_behavior_prop_validation_enabled and not brazier_behavior_prop_validation_enabled
+                else source_ed_oracle_path
+            )
+            treasure_chest_behavior_prop_source_ed_path = (
+                source_ed_oracle_path
+                if (
+                    not behavior_prop_validation_enabled
+                    or treasure_chest_behavior_prop_validation_enabled
+                    or prop_damager_behavior_prop_validation_enabled
+                    or destructable_prop_behavior_prop_validation_enabled
+                    or high_risk_behavior_prop_validation_enabled
+                )
+                else ""
+            )
+            prop_damager_behavior_prop_source_ed_path = (
+                source_ed_oracle_path
+                if (
+                    not behavior_prop_validation_enabled
+                    or prop_damager_behavior_prop_validation_enabled
+                    or destructable_prop_behavior_prop_validation_enabled
+                    or high_risk_behavior_prop_validation_enabled
+                )
+                else ""
+            )
+            destructable_prop_behavior_prop_source_ed_path = (
+                source_ed_oracle_path
+                if (
+                    not behavior_prop_validation_enabled
+                    or destructable_prop_behavior_prop_validation_enabled
+                    or high_risk_behavior_prop_validation_enabled
+                )
+                else ""
+            )
+            include_wall_torch_objects = bool(validated_light_fire_behavior_prop_source_ed_path)
+            include_fire_objects = bool(validated_light_fire_behavior_prop_source_ed_path)
+            include_candle_prop_objects = bool(candle_prop_behavior_prop_source_ed_path)
+            include_brazier_objects = bool(brazier_behavior_prop_source_ed_path)
+            include_treasure_chest_objects = bool(treasure_chest_behavior_prop_source_ed_path)
+            include_prop_damager_objects = bool(prop_damager_behavior_prop_source_ed_path)
+            include_destructable_prop_objects = bool(destructable_prop_behavior_prop_source_ed_path)
+            include_destructable_brush_objects = bool(dat_native_destructable_brush_enabled)
+            allow_unreconstructed_physics_shell = bool(dat_native_destructable_brush_enabled)
+            if include_destructable_prop_objects and not has_terrain0:
+                include_physics_shell_patch = False
+                include_validation_floor = True
+                allow_unreconstructed_physics_shell = True
             os.makedirs(output_dir, exist_ok=True)
             staged_dir = os.path.join(output_dir, "source_dat")
             os.makedirs(staged_dir, exist_ok=True)
@@ -1170,6 +1444,43 @@ class EditorApp:
             game_data_dir = getattr(self.cfg, "game_data_dir", None)
             if game_data_dir:
                 worlds_install_dir = os.path.join(game_data_dir, "WORLDS")
+            if not behavior_prop_validation_enabled:
+                output_suffix = "reconstructed"
+            elif destructable_brush_behavior_prop_validation_enabled:
+                output_suffix = "reconstructed_destructable_brush_validation"
+            elif (
+                candle_prop_behavior_prop_validation_enabled
+                and not brazier_behavior_prop_validation_enabled
+                and not high_risk_behavior_prop_validation_enabled
+            ):
+                output_suffix = "reconstructed_candle_prop_validation"
+            elif (
+                brazier_behavior_prop_validation_enabled
+                and not candle_prop_behavior_prop_validation_enabled
+                and not high_risk_behavior_prop_validation_enabled
+            ):
+                output_suffix = "reconstructed_brazier_validation"
+            elif (
+                treasure_chest_behavior_prop_validation_enabled
+                and not high_risk_behavior_prop_validation_enabled
+            ):
+                output_suffix = "reconstructed_treasure_chest_validation"
+            elif (
+                prop_damager_behavior_prop_validation_enabled
+                and not high_risk_behavior_prop_validation_enabled
+            ):
+                output_suffix = "reconstructed_prop_damager_validation"
+            elif (
+                destructable_prop_behavior_prop_validation_enabled
+                and not high_risk_behavior_prop_validation_enabled
+            ):
+                output_suffix = "reconstructed_destructable_prop_validation"
+            elif medium_risk_behavior_prop_validation_enabled and not high_risk_behavior_prop_validation_enabled:
+                output_suffix = "reconstructed_medium_light_prop_validation"
+            elif high_risk_behavior_prop_validation_enabled and not medium_risk_behavior_prop_validation_enabled:
+                output_suffix = "reconstructed_high_risk_prop_validation"
+            else:
+                output_suffix = "reconstructed_behavior_prop_validation"
 
             report = dat_compiler_strategy.build_full_world_skeleton_acceptance_report(
                 source_dat_path=staged_dat,
@@ -1177,8 +1488,10 @@ class EditorApp:
                 group_name=f"{stem}_ReconstructedDAT",
                 work_dir=output_dir,
                 worlds_install_dir=worlds_install_dir,
-                output_filename=f"{stem}_reconstructed.ed",
+                output_filename=f"{stem}_{output_suffix}.ed",
                 output_prefix=stem,
+                include_validation_floor=include_validation_floor,
+                validation_floor_name=f"{stem}_DestructableBrushValidationFloor",
                 include_terrain_support_patch=include_terrain_support_patch,
                 terrain_support_name_prefix=f"{stem}_TerrainSupport",
                 terrain_support_margin=0.0,
@@ -1191,12 +1504,45 @@ class EditorApp:
                 physics_shell_name_prefix=f"{stem}_PhysicsShell",
                 physics_shell_max_polygons=physics_shell_polygon_budget,
                 physics_shell_thickness=16.0,
+                include_door_objects=include_door_objects,
+                door_source_ed_path=door_source_ed_path,
+                include_airail_objects=include_airail_objects,
+                airail_source_ed_path=airail_source_ed_path,
+                include_sky_objects=include_sky_objects,
+                sky_source_ed_path=sky_source_ed_path,
+                include_sky_marker_brushes=False,
+                include_sound_objects=include_sound_objects,
+                sound_source_ed_path=sound_source_ed_path,
+                include_collision_helper_objects=include_collision_helper_objects,
+                include_collision_helper_brushes=include_collision_helper_brushes,
+                collision_helper_source_ed_path=collision_helper_source_ed_path,
+                include_trigger_helper_objects=include_trigger_helper_objects,
+                include_trigger_helper_brushes=include_trigger_helper_brushes,
+                trigger_helper_source_ed_path=trigger_helper_source_ed_path,
+                include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+                low_risk_behavior_prop_source_ed_path=low_risk_behavior_prop_source_ed_path,
+                include_wall_torch_objects=include_wall_torch_objects,
+                wall_torch_source_ed_path=validated_light_fire_behavior_prop_source_ed_path,
+                include_fire_objects=include_fire_objects,
+                fire_source_ed_path=validated_light_fire_behavior_prop_source_ed_path,
+                include_candle_prop_objects=include_candle_prop_objects,
+                candle_prop_source_ed_path=candle_prop_behavior_prop_source_ed_path,
+                include_brazier_objects=include_brazier_objects,
+                brazier_source_ed_path=brazier_behavior_prop_source_ed_path,
+                include_treasure_chest_objects=include_treasure_chest_objects,
+                treasure_chest_source_ed_path=treasure_chest_behavior_prop_source_ed_path,
+                include_prop_damager_objects=include_prop_damager_objects,
+                prop_damager_source_ed_path=prop_damager_behavior_prop_source_ed_path,
+                include_destructable_prop_objects=include_destructable_prop_objects,
+                destructable_prop_source_ed_path=destructable_prop_behavior_prop_source_ed_path,
+                include_destructable_brush_objects=include_destructable_brush_objects,
                 include_terrain_support_source_coverage=include_terrain_support_patch,
                 terrain_support_source_coverage_sample_grid=3,
                 terrain_support_source_coverage_max_gaps=128,
+                include_physics_shell_source_coverage=include_physics_shell_patch,
                 max_processor_brushes=DAT_TO_ED_PROCESSOR_BRUSH_BUDGET,
                 max_processor_polygons=DAT_TO_ED_PROCESSOR_POLYGON_BUDGET,
-                block_unreconstructed_physics_shell=True,
+                block_unreconstructed_physics_shell=not allow_unreconstructed_physics_shell,
                 max_models=512,
                 max_model_points=16384,
                 max_model_polygons=16384,
@@ -1206,6 +1552,20 @@ class EditorApp:
             report_text = dat_compiler_strategy.format_full_world_skeleton_acceptance_report(report)
             report_path = os.path.join(output_dir, f"{stem}_dat_to_ed_report.txt")
             self._write_text_file(report_path, report_text)
+            behavior_prop_report_path = ""
+            if behavior_prop_validation_enabled and source_ed_oracle_path:
+                behavior_prop_report = dat_compiler_strategy.build_behavior_prop_reconstruction_report(
+                    source_dat_path=staged_dat,
+                    source_ed_path=source_ed_oracle_path,
+                )
+                behavior_prop_report_text = dat_compiler_strategy.format_behavior_prop_reconstruction_report(
+                    behavior_prop_report
+                )
+                behavior_prop_report_path = os.path.join(
+                    output_dir,
+                    f"{stem}_dat_to_ed_behavior_prop_validation_report.txt",
+                )
+                self._write_text_file(behavior_prop_report_path, behavior_prop_report_text)
             selection_report_path = os.path.join(output_dir, f"{stem}_dat_to_ed_selection_report.json")
             selection_report = dat_compiler_strategy.build_dat_to_ed_selection_report(
                 source_dat_path=staged_dat,
@@ -1215,6 +1575,11 @@ class EditorApp:
                 include_terrain_support_patch=include_terrain_support_patch,
                 physics_shell_model_name=terrain_semantics.PHYSICS_BSP_MODEL,
                 include_physics_shell_patch=include_physics_shell_patch,
+                include_airail_semantics=True,
+                include_sky_semantics=True,
+                include_sound_semantics=True,
+                include_collision_semantics=True,
+                include_trigger_semantics=True,
                 include_skyboxes=False,
                 max_models=512,
                 max_model_points=16384,
@@ -1235,6 +1600,7 @@ class EditorApp:
                 staged_source_dat_path=staged_dat,
                 text_report_path=report_path,
                 selection_report_path=selection_report_path,
+                behavior_prop_report_path=behavior_prop_report_path,
             )
         except Exception as e:
             messagebox.showerror("DAT to ED generation failed", str(e))
@@ -1256,11 +1622,28 @@ class EditorApp:
             "Generated a DEDit ED candidate from the active DAT.\n\n"
             f"ED:\n{report.generated_ed_path}\n\n"
             f"Report:\n{report_path}\n\n"
+            f"Behavior prop validation report:\n{behavior_prop_report_path or 'not generated'}\n\n"
             f"Selection report:\n{selection_report_path}\n\n"
             f"Manifest:\n{manifest_path}\n\n"
             f"Selected models: {len(report.selected_model_names)}; "
             f"generated brushes/objects: {report.object_count}; "
-            f"polygons: {report.polygon_count}\n\n"
+            f"polygons: {report.polygon_count}\n"
+            f"Door/RotatingDoor objects: {'included' if getattr(report, 'include_door_objects', False) else 'not included'}\n\n"
+            f"AIRail objects: {'included' if getattr(report, 'include_airail_objects', False) else 'not included'}\n\n"
+            f"Sky objects: {'included' if getattr(report, 'include_sky_objects', False) else 'not included'}\n\n"
+            f"SkyMarker Brushes: {'included' if getattr(report, 'include_sky_marker_brushes', False) else 'not included'}\n\n"
+            f"AmbientSound objects: {'included' if getattr(report, 'include_sound_objects', False) else 'not included'}\n\n"
+            f"Collision helper objects: {'included' if getattr(report, 'include_collision_helper_objects', False) else 'not included'}; "
+            f"Brushes: {'included' if getattr(report, 'include_collision_helper_brushes', False) else 'not included'}\n\n"
+            f"Trigger helper objects: {'included' if getattr(report, 'include_trigger_helper_objects', False) else 'not included'}; "
+            f"Brushes: {'included' if getattr(report, 'include_trigger_helper_brushes', False) else 'not included'}\n\n"
+            f"Low-risk behavior prop objects: {'included' if getattr(report, 'include_low_risk_behavior_prop_objects', False) else 'not included'}\n\n"
+            f"Validated light/fire behavior prop objects: {'included' if getattr(report, 'include_wall_torch_objects', False) or getattr(report, 'include_fire_objects', False) else 'not included'}\n\n"
+            f"TreasureChest objects: {'included' if getattr(report, 'include_treasure_chest_objects', False) else 'not included'}\n\n"
+            f"PropDamager objects: {'included' if getattr(report, 'include_prop_damager_objects', False) else 'not included'}\n\n"
+            f"DestructableProp objects: {'included' if getattr(report, 'include_destructable_prop_objects', False) else 'not included'}\n\n"
+            f"DestructableBrush objects: {'included' if getattr(report, 'include_destructable_brush_objects', False) else 'not included'}\n\n"
+            f"Behavior prop validation profile: {behavior_prop_validation_profile_key if behavior_prop_validation_enabled else 'not included'}\n\n"
             "Next: open the ED in old DEDit, save it, process it with LithTech 2.1 "
             "Processor.exe, then fresh-load the DAT in game.",
         )
@@ -1270,6 +1653,68 @@ class EditorApp:
         base = os.path.splitext(os.path.basename(str(source_name or "level")))[0] or "level"
         safe = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_")
         return safe or "level"
+
+    def _airail_source_ed_oracle_path(self, source_name: str, *, level_path: str = "") -> str:
+        return self._source_ed_oracle_path(source_name, level_path=level_path)
+
+    def _source_ed_oracle_path(self, source_name: str, *, level_path: str = "") -> str:
+        stem = self._dat_to_ed_output_stem(source_name)
+        candidates = []
+        if level_path:
+            candidates.append(os.path.join(os.path.dirname(os.path.abspath(level_path)), f"{stem}.ED"))
+        game_data_dir = getattr(self.cfg, "game_data_dir", None)
+        if game_data_dir:
+            candidates.append(os.path.join(game_data_dir, "WORLDS", f"{stem}.ED"))
+        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
+        candidates.append(os.path.join(editor_dir, "mm9_data", "WORLDS", f"{stem}.ED"))
+        candidates.append(os.path.join(EDITOR_ROOT, "mm9_data", "WORLDS", f"{stem}.ED"))
+        seen = set()
+        for candidate in candidates:
+            path = os.path.abspath(candidate)
+            key = path.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if os.path.exists(path):
+                return path
+        return ""
+
+    @staticmethod
+    def _dat_model_is_pure_airail_helper(model: Any) -> bool:
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        return (
+            int(helper_roles.get("aiRail", 0)) > 0
+            and set(helper_roles.keys()) == {"aiRail"}
+            and terrain_semantics.model_has_only_helper_textures(model)
+        )
+
+    @staticmethod
+    def _dat_model_has_sky_visibility_helper(model: Any) -> bool:
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        return int(helper_roles.get("skyVisibility", 0)) > 0
+
+    @staticmethod
+    def _dat_model_has_sound_helper(model: Any) -> bool:
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        return int(helper_roles.get("sound", 0)) > 0
+
+    @staticmethod
+    def _dat_model_is_pure_collision_helper(model: Any) -> bool:
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        return (
+            int(helper_roles.get("collision", 0)) > 0
+            and set(helper_roles.keys()).issubset({"collision", "sprite"})
+            and terrain_semantics.model_has_only_helper_textures(model)
+        )
+
+    @staticmethod
+    def _dat_model_is_pure_trigger_helper(model: Any) -> bool:
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        return (
+            int(helper_roles.get("trigger", 0)) > 0
+            and set(helper_roles.keys()) == {"trigger"}
+            and terrain_semantics.model_has_only_helper_textures(model)
+        )
 
     @staticmethod
     def _write_text_file(path: str, text: str) -> None:
@@ -1282,6 +1727,36 @@ class EditorApp:
     @staticmethod
     def _default_dat_to_ed_model_names(bsp_world: Any) -> tuple:
         return terrain_semantics.default_dat_to_ed_model_names(bsp_world)
+
+    @staticmethod
+    def _dat_object_model_names_for_class(level: Any, bsp_world: Any, class_name: str) -> tuple:
+        world_models = getattr(bsp_world, "world_models", ()) or ()
+        model_names_by_key = {
+            str(getattr(model, "name", "") or "").lower(): str(getattr(model, "name", "") or "")
+            for model in world_models
+            if str(getattr(model, "name", "") or "")
+        }
+        objects = tuple(getattr(getattr(level, "world", None), "objects", ()) or ())
+        if not objects:
+            try:
+                data = level.source_bytes()
+                header = patcher.Header.parse(data)
+                objects, _object_end = patcher.parse_objects(data, header.obj_pos)
+            except Exception:
+                objects = ()
+
+        selected: List[str] = []
+        seen = set()
+        for obj in objects:
+            if str(getattr(obj, "type_str", "") or "") != str(class_name or ""):
+                continue
+            name = str(obj.get("Name", "") or "")
+            key = name.lower()
+            if not key or key in seen or key not in model_names_by_key:
+                continue
+            selected.append(model_names_by_key[key])
+            seen.add(key)
+        return tuple(selected)
 
 
     def cmd_import_static_prefab_bsp(self) -> None:

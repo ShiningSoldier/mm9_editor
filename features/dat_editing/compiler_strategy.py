@@ -17,8 +17,8 @@ import struct
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from features.dat_editing import terrain_reconstruction, terrain_semantics
 
@@ -56,6 +56,8 @@ DEFAULT_BLACK_BOX_ACCEPTED_REGENERATED_SYSTEMS: Tuple[str, ...] = (
     "render_data",
     "top_level_sections",
 )
+
+_PHYSICS_SHELL_COVERAGE_ROLES = terrain_reconstruction.PHYSICS_SHELL_COVERAGE_ROLES
 
 
 @dataclass(frozen=True)
@@ -512,6 +514,45 @@ class FullWorldSkeletonAcceptanceReport:
     include_validation_floor: bool = False
     include_terrain_support_patch: bool = False
     include_physics_shell_patch: bool = False
+    include_door_objects: bool = False
+    door_source_ed_path: str = ""
+    door_behavior_context: str = ""
+    include_airail_objects: bool = False
+    airail_source_ed_path: str = ""
+    include_sky_objects: bool = False
+    sky_source_ed_path: str = ""
+    include_sky_marker_brushes: bool = False
+    include_sky_marker_residue_brushes: bool = False
+    sky_marker_residue_reference_dat_path: str = ""
+    include_sound_objects: bool = False
+    sound_source_ed_path: str = ""
+    include_gameplay_trigger_objects: bool = False
+    gameplay_trigger_source_ed_path: str = ""
+    include_static_prop_objects: bool = False
+    static_prop_source_ed_path: str = ""
+    include_low_risk_behavior_prop_objects: bool = False
+    low_risk_behavior_prop_source_ed_path: str = ""
+    include_wall_torch_objects: bool = False
+    wall_torch_source_ed_path: str = ""
+    include_fire_objects: bool = False
+    fire_source_ed_path: str = ""
+    include_candle_prop_objects: bool = False
+    candle_prop_source_ed_path: str = ""
+    include_brazier_objects: bool = False
+    brazier_source_ed_path: str = ""
+    include_treasure_chest_objects: bool = False
+    treasure_chest_source_ed_path: str = ""
+    include_prop_damager_objects: bool = False
+    prop_damager_source_ed_path: str = ""
+    include_destructable_prop_objects: bool = False
+    destructable_prop_source_ed_path: str = ""
+    include_destructable_brush_objects: bool = False
+    include_collision_helper_objects: bool = False
+    include_collision_helper_brushes: bool = False
+    collision_helper_source_ed_path: str = ""
+    include_trigger_helper_objects: bool = False
+    include_trigger_helper_brushes: bool = False
+    trigger_helper_source_ed_path: str = ""
     selected_model_names: Tuple[str, ...] = ()
     model_count: int = 0
     point_count: int = 0
@@ -530,6 +571,8 @@ class FullWorldSkeletonAcceptanceReport:
     terrain_cutout_coverage: Optional["TerrainCutoutCoverageReport"] = None
     terrain_support_source_coverage_manifest_path: str = ""
     terrain_support_source_coverage: Optional["TerrainSupportSourceCoverageReport"] = None
+    physics_shell_source_coverage_manifest_path: str = ""
+    physics_shell_source_coverage: Optional["PhysicsShellSourceCoverageReport"] = None
     manual_steps: Tuple[str, ...] = ()
     blockers: Tuple[str, ...] = ()
     cautions: Tuple[str, ...] = ()
@@ -562,10 +605,16 @@ class DatToEdSelectionReport:
     include_terrain_support_patch: bool = False
     physics_shell_model_name: str = ""
     include_physics_shell_patch: bool = False
+    include_airail_semantics: bool = False
+    include_sky_semantics: bool = False
+    include_sound_semantics: bool = False
+    include_collision_semantics: bool = False
+    include_trigger_semantics: bool = False
     total_model_count: int = 0
     selected_model_count: int = 0
     terrain_support_source_count: int = 0
     physics_shell_source_count: int = 0
+    helper_semantic_source_count: int = 0
     excluded_model_count: int = 0
     total_point_count: int = 0
     total_polygon_count: int = 0
@@ -573,6 +622,7 @@ class DatToEdSelectionReport:
     selected_polygon_count: int = 0
     status_counts: Dict[str, int] = field(default_factory=dict)
     helper_only_exclusions_by_role: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    helper_semantic_sources_by_role: Dict[str, Dict[str, int]] = field(default_factory=dict)
     limits: Dict[str, object] = field(default_factory=dict)
     models: Tuple[DatToEdSelectionModelReport, ...] = ()
     blockers: Tuple[str, ...] = ()
@@ -585,6 +635,7 @@ class FullWorldSkeletonCompiledValidationReport:
     status: str
     generated_ed_path: str
     compiled_dat_path: str
+    helper_reference_dat_path: str = ""
     processor_log_paths: Tuple[str, ...] = ()
     start_point: Optional[Tuple[float, float, float]] = None
     move_player_to_floor: Optional[bool] = None
@@ -592,8 +643,578 @@ class FullWorldSkeletonCompiledValidationReport:
     physics_floor_drop: Optional[float] = None
     max_start_floor_drop: float = 256.0
     dat: Optional[DatOutputSemanticSummary] = None
+    helper_leakage: Optional["CompiledDatHelperLeakageReport"] = None
     processor_logs: Tuple[BlackBoxProcessorLogSummary, ...] = ()
     manual_validation: BlackBoxCompilerManualValidation = field(default_factory=BlackBoxCompilerManualValidation)
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CompiledDatHelperModelSummary:
+    model_name: str
+    model_kind: str
+    polygon_count: int = 0
+    helper_polygon_count: int = 0
+    helper_roles: Dict[str, int] = field(default_factory=dict)
+    helper_textures: Dict[str, int] = field(default_factory=dict)
+    status: str = "no_helper_textures"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CompiledDatHelperRoleComparison:
+    role: str
+    status: str
+    compiled_total: int = 0
+    reference_total: int = 0
+    compiled_by_model_kind: Dict[str, int] = field(default_factory=dict)
+    reference_by_model_kind: Dict[str, int] = field(default_factory=dict)
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CompiledDatHelperLeakageReport:
+    status: str
+    compiled_dat_path: str
+    reference_dat_path: str = ""
+    compiled_model_count: int = 0
+    reference_model_count: int = 0
+    compiled_total_helper_polygon_count: int = 0
+    reference_total_helper_polygon_count: int = 0
+    compiled_visibility_helper_polygon_count: int = 0
+    reference_visibility_helper_polygon_count: int = 0
+    compiled_terrain_helper_polygon_count: int = 0
+    reference_terrain_helper_polygon_count: int = 0
+    compiled_world_model_helper_polygon_count: int = 0
+    reference_world_model_helper_polygon_count: int = 0
+    model_summaries: Tuple[CompiledDatHelperModelSummary, ...] = ()
+    reference_model_summaries: Tuple[CompiledDatHelperModelSummary, ...] = ()
+    role_comparisons: Tuple[CompiledDatHelperRoleComparison, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AnskramkeepPhysicsShellRetestMetric:
+    metric: str
+    status: str
+    previous: str = ""
+    current: str = ""
+    delta: str = ""
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AnskramkeepPhysicsShellRetestReport:
+    status: str
+    source_dat_path: str
+    generated_ed_path: str = ""
+    work_dir: str = ""
+    reference_processor_log_path: str = ""
+    current_processor_log_path: str = ""
+    acceptance: Optional["FullWorldSkeletonAcceptanceReport"] = None
+    reference_processor_log: Optional[BlackBoxProcessorLogSummary] = None
+    current_processor_log: Optional[BlackBoxProcessorLogSummary] = None
+    manual_validation: BlackBoxCompilerManualValidation = field(default_factory=BlackBoxCompilerManualValidation)
+    comparisons: Tuple[AnskramkeepPhysicsShellRetestMetric, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AirailOracleObject:
+    name: str
+    class_name: str = "AIRail"
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class AirailRailBrushOracle:
+    name: str
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rail_face_count: int = 0
+
+
+@dataclass(frozen=True)
+class AirailReconstructionCandidate:
+    source_model_name: str
+    source_model_index: int
+    polygon_count: int = 0
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    nearest_airail_name: str = ""
+    nearest_airail_distance: Optional[float] = None
+    nearest_rail_brush_name: str = ""
+    nearest_rail_brush_distance: Optional[float] = None
+    status: str = "pending_source_oracle"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AirailReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_helper_model_count: int = 0
+    source_helper_polygon_count: int = 0
+    source_airail_object_count: int = 0
+    source_rail_brush_count: int = 0
+    generated_object_count: int = 0
+    skipped_candidate_count: int = 0
+    ambiguous_candidate_count: int = 0
+    candidates: Tuple[AirailReconstructionCandidate, ...] = ()
+    source_airail_objects: Tuple[AirailOracleObject, ...] = ()
+    source_rail_brushes: Tuple[AirailRailBrushOracle, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkyObjectOracle:
+    name: str
+    class_name: str
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    property_count: int = 0
+
+
+@dataclass(frozen=True)
+class SkyMarkerBrushOracle:
+    name: str
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    sky_face_count: int = 0
+
+
+@dataclass(frozen=True)
+class SkyMarkerCompiledResidueMatch:
+    compiled_model_name: str
+    compiled_model_kind: str
+    compiled_model_index: int
+    compiled_polygon_index: int
+    compiled_vertex_count: int = 0
+    compiled_center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    compiled_normal: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    source_brush_name: str = ""
+    source_model_index: int = -1
+    source_face_index: int = -1
+    source_vertex_count: int = 0
+    source_center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    source_normal: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    source_brush_flags: Tuple[str, ...] = ()
+    source_texture_flags: Optional[int] = None
+    source_surface_flags: Optional[int] = None
+    center_distance: Optional[float] = None
+    plane_distance: Optional[float] = None
+    normal_dot: Optional[float] = None
+    status: str = "unmatched"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkyMarkerSourceFaceCohortSummary:
+    cohort: str
+    source_face_count: int = 0
+    source_brush_count: int = 0
+    orientation_counts: Dict[str, int] = field(default_factory=dict)
+    brush_flag_counts: Dict[str, int] = field(default_factory=dict)
+    brush_flag_set_counts: Dict[str, int] = field(default_factory=dict)
+    texture_flag_counts: Dict[str, int] = field(default_factory=dict)
+    surface_flag_counts: Dict[str, int] = field(default_factory=dict)
+    vertex_count_counts: Dict[str, int] = field(default_factory=dict)
+    center_bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center_bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    nearest_world_geometry_distance_min: Optional[float] = None
+    nearest_world_geometry_distance_median: Optional[float] = None
+    nearest_world_geometry_distance_average: Optional[float] = None
+    nearest_world_geometry_distance_max: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class SkyMarkerResidueRuleCandidate:
+    rule_name: str
+    selected_source_face_count: int = 0
+    matched_source_face_count: int = 0
+    unmatched_source_face_count: int = 0
+    missed_matched_source_face_count: int = 0
+    precision: Optional[float] = None
+    recall: Optional[float] = None
+    status: str = "heuristic_only"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkyHelperReconstructionCandidate:
+    source_model_name: str
+    source_model_index: int
+    helper_roles: Dict[str, int] = field(default_factory=dict)
+    pure_helper_model: bool = False
+    polygon_count: int = 0
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    status: str = "source_visibility_evidence"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkyHelperReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_helper_model_count: int = 0
+    source_helper_polygon_count: int = 0
+    source_sky_object_count: int = 0
+    source_sky_marker_brush_count: int = 0
+    source_sky_marker_face_count: int = 0
+    generated_object_count: int = 0
+    pure_helper_model_count: int = 0
+    candidates: Tuple[SkyHelperReconstructionCandidate, ...] = ()
+    source_sky_objects: Tuple[SkyObjectOracle, ...] = ()
+    source_sky_marker_brushes: Tuple[SkyMarkerBrushOracle, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkyMarkerCompiledResidueReport:
+    status: str
+    source_ed_path: str
+    compiled_dat_path: str
+    generated_compiled_dat_path: str = ""
+    source_sky_marker_brush_count: int = 0
+    source_sky_marker_face_count: int = 0
+    source_brush_flag_counts: Dict[str, int] = field(default_factory=dict)
+    compiled_sky_visibility_polygon_count: int = 0
+    compiled_physics_sky_visibility_polygon_count: int = 0
+    compiled_visibility_sky_visibility_polygon_count: int = 0
+    compiled_terrain_sky_visibility_polygon_count: int = 0
+    compiled_world_model_sky_visibility_polygon_count: int = 0
+    generated_sky_visibility_polygon_count: int = 0
+    generated_physics_sky_visibility_polygon_count: int = 0
+    generated_visibility_sky_visibility_polygon_count: int = 0
+    generated_terrain_sky_visibility_polygon_count: int = 0
+    generated_world_model_sky_visibility_polygon_count: int = 0
+    source_to_compiled_ratio: Optional[float] = None
+    compiled_residue_match_count: int = 0
+    compiled_residue_unmatched_count: int = 0
+    matched_source_sky_marker_face_count: int = 0
+    matched_source_sky_marker_brush_count: int = 0
+    matched_source_brush_flag_counts: Dict[str, int] = field(default_factory=dict)
+    max_match_center_distance: Optional[float] = None
+    max_match_plane_distance: Optional[float] = None
+    min_match_normal_dot: Optional[float] = None
+    source_face_matched_summary: Optional[SkyMarkerSourceFaceCohortSummary] = None
+    source_face_unmatched_summary: Optional[SkyMarkerSourceFaceCohortSummary] = None
+    residue_rule_candidates: Tuple[SkyMarkerResidueRuleCandidate, ...] = ()
+    source_sky_marker_brushes: Tuple[SkyMarkerBrushOracle, ...] = ()
+    compiled_residue_matches: Tuple[SkyMarkerCompiledResidueMatch, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkyMarkerResidueCompileAuditReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str
+    reference_dat_path: str
+    work_dir: str = ""
+    generated_ed_path: str = ""
+    compiled_dat_path: str = ""
+    processor_log_paths: Tuple[str, ...] = ()
+    acceptance: Optional[FullWorldSkeletonAcceptanceReport] = None
+    residue_report: Optional[SkyMarkerCompiledResidueReport] = None
+    helper_leakage: Optional[CompiledDatHelperLeakageReport] = None
+    processor_logs: Tuple[BlackBoxProcessorLogSummary, ...] = ()
+    manual_steps: Tuple[str, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SoundObjectOracle:
+    name: str
+    class_name: str = "AmbientSound"
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    filename: str = ""
+    outer_radius: Optional[float] = None
+    inner_radius: Optional[float] = None
+    property_count: int = 0
+
+
+@dataclass(frozen=True)
+class SoundHelperReconstructionCandidate:
+    source_model_name: str
+    source_model_index: int
+    helper_roles: Dict[str, int] = field(default_factory=dict)
+    pure_helper_model: bool = False
+    polygon_count: int = 0
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    status: str = "source_sound_evidence"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SoundHelperReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_helper_model_count: int = 0
+    source_helper_polygon_count: int = 0
+    source_sound_object_count: int = 0
+    generated_object_count: int = 0
+    pure_helper_model_count: int = 0
+    candidates: Tuple[SoundHelperReconstructionCandidate, ...] = ()
+    source_sound_objects: Tuple[SoundObjectOracle, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GameplayTriggerObjectOracle:
+    name: str
+    class_name: str
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    dims: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    target_count: int = 0
+    destination_world: str = ""
+    portal_name: str = ""
+    property_count: int = 0
+
+
+@dataclass(frozen=True)
+class GameplayTriggerReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_trigger_object_count: int = 0
+    generated_object_count: int = 0
+    class_counts: Dict[str, int] = field(default_factory=dict)
+    target_reference_count: int = 0
+    destination_worlds: Tuple[str, ...] = ()
+    portal_names: Tuple[str, ...] = ()
+    source_trigger_objects: Tuple[GameplayTriggerObjectOracle, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StaticPropObjectOracle:
+    name: str
+    class_name: str = "Prop"
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    filename: str = ""
+    skin: str = ""
+    scale: Optional[float] = None
+    visible: Optional[bool] = None
+    solid: Optional[bool] = None
+    move_to_floor: Optional[bool] = None
+    property_count: int = 0
+
+
+@dataclass(frozen=True)
+class StaticPropReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_prop_object_count: int = 0
+    generated_object_count: int = 0
+    unique_model_count: int = 0
+    unique_skin_count: int = 0
+    solid_count: int = 0
+    move_to_floor_count: int = 0
+    top_filenames: Tuple[Tuple[str, int], ...] = ()
+    source_prop_objects: Tuple[StaticPropObjectOracle, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BehaviorPropObjectOracle:
+    name: str
+    class_name: str
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    filename: str = ""
+    skin: str = ""
+    scale: Optional[float] = None
+    visible: Optional[bool] = None
+    solid: Optional[bool] = None
+    move_to_floor: Optional[bool] = None
+    semantic_roles: Tuple[str, ...] = ()
+    risk_level: str = "unknown"
+    on: Optional[bool] = None
+    fire: Optional[bool] = None
+    sound_file: str = ""
+    sound_radius: Optional[float] = None
+    light_min_radius: Optional[float] = None
+    light_max_radius: Optional[float] = None
+    locked: Optional[bool] = None
+    trigger_target: str = ""
+    damage_trigger_target: str = ""
+    hit_points: Optional[float] = None
+    property_count: int = 0
+
+
+@dataclass(frozen=True)
+class BehaviorPropClassSummary:
+    class_name: str
+    object_count: int = 0
+    unique_model_count: int = 0
+    solid_count: int = 0
+    move_to_floor_count: int = 0
+    semantic_role_counts: Dict[str, int] = field(default_factory=dict)
+    risk_level_counts: Dict[str, int] = field(default_factory=dict)
+    copy_pass_key: str = ""
+    copy_pass_status: str = "not_implemented"
+    validation_status: str = "needs_class_specific_copy_pass"
+    sample_names: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BehaviorPropReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_behavior_prop_object_count: int = 0
+    copy_candidate_count: int = 0
+    class_counts: Dict[str, int] = field(default_factory=dict)
+    semantic_role_counts: Dict[str, int] = field(default_factory=dict)
+    risk_level_counts: Dict[str, int] = field(default_factory=dict)
+    unique_model_count: int = 0
+    unique_skin_count: int = 0
+    solid_count: int = 0
+    move_to_floor_count: int = 0
+    top_filenames: Tuple[Tuple[str, int], ...] = ()
+    class_summaries: Tuple[BehaviorPropClassSummary, ...] = ()
+    source_behavior_prop_objects: Tuple[BehaviorPropObjectOracle, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CollisionHelperOracleObject:
+    name: str
+    class_name: str
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    property_count: int = 0
+
+
+@dataclass(frozen=True)
+class CollisionHelperBrushOracle:
+    name: str
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    helper_roles: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CollisionHelperReconstructionCandidate:
+    source_model_name: str
+    source_model_index: int
+    target_class_name: str = ""
+    helper_roles: Dict[str, int] = field(default_factory=dict)
+    polygon_count: int = 0
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    matched_object_name: str = ""
+    matched_object_class_name: str = ""
+    matched_object_distance: Optional[float] = None
+    nearest_helper_brush_name: str = ""
+    nearest_helper_brush_distance: Optional[float] = None
+    status: str = "pending_source_oracle"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CollisionHelperReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_helper_model_count: int = 0
+    source_helper_polygon_count: int = 0
+    source_object_count: int = 0
+    source_helper_brush_count: int = 0
+    matched_object_count: int = 0
+    skipped_candidate_count: int = 0
+    candidates: Tuple[CollisionHelperReconstructionCandidate, ...] = ()
+    source_objects: Tuple[CollisionHelperOracleObject, ...] = ()
+    source_helper_brushes: Tuple[CollisionHelperBrushOracle, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TriggerHelperOracleObject:
+    name: str
+    class_name: str
+    pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    portal_name: str = ""
+    property_count: int = 0
+
+
+@dataclass(frozen=True)
+class TriggerHelperBrushOracle:
+    name: str
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    trigger_face_count: int = 0
+
+
+@dataclass(frozen=True)
+class TriggerHelperReconstructionCandidate:
+    source_model_name: str
+    source_model_index: int
+    helper_roles: Dict[str, int] = field(default_factory=dict)
+    polygon_count: int = 0
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    matched_object_name: str = ""
+    matched_object_class_name: str = ""
+    matched_object_portal_name: str = ""
+    matched_object_distance: Optional[float] = None
+    nearest_helper_brush_name: str = ""
+    nearest_helper_brush_distance: Optional[float] = None
+    status: str = "pending_source_oracle"
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TriggerHelperReconstructionReport:
+    status: str
+    source_dat_path: str
+    source_ed_path: str = ""
+    source_helper_model_count: int = 0
+    source_helper_polygon_count: int = 0
+    source_object_count: int = 0
+    source_helper_brush_count: int = 0
+    matched_object_count: int = 0
+    skipped_candidate_count: int = 0
+    candidates: Tuple[TriggerHelperReconstructionCandidate, ...] = ()
+    source_objects: Tuple[TriggerHelperOracleObject, ...] = ()
+    source_helper_brushes: Tuple[TriggerHelperBrushOracle, ...] = ()
     blockers: Tuple[str, ...] = ()
     cautions: Tuple[str, ...] = ()
     notes: Tuple[str, ...] = ()
@@ -667,6 +1288,33 @@ class TerrainSupportSourceCoverageReport:
     missing_texture_sample_counts: Tuple[Tuple[str, int], ...] = ()
     gaps: Tuple[TerrainSupportSourceCoverageGap, ...] = ()
     ignored_terrain_textures: Tuple[str, ...] = ()
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PhysicsShellSourceCoverageRoleSummary:
+    role: str
+    source_polygon_count: int = 0
+    generated_polygon_count: int = 0
+    uncovered_polygon_count: int = 0
+
+
+@dataclass(frozen=True)
+class PhysicsShellSourceCoverageReport:
+    status: str
+    source_dat_path: str
+    generated_ed_path: str
+    physics_model_name: str = "PhysicsBSP"
+    source_polygon_count: int = 0
+    classified_source_polygon_count: int = 0
+    generated_source_polygon_count: int = 0
+    uncovered_source_polygon_count: int = 0
+    generated_unknown_polygon_count: int = 0
+    role_summaries: Tuple[PhysicsShellSourceCoverageRoleSummary, ...] = ()
+    generated_source_polygon_indices: Tuple[int, ...] = ()
+    generated_unknown_polygon_indices: Tuple[int, ...] = ()
     blockers: Tuple[str, ...] = ()
     cautions: Tuple[str, ...] = ()
     notes: Tuple[str, ...] = ()
@@ -2257,6 +2905,44 @@ def build_full_world_skeleton_acceptance_report(
     physics_shell_max_polygons: int = 128,
     physics_shell_thickness: float = 16.0,
     physics_shell_side_texture: str = "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx",
+    include_door_objects: bool = False,
+    door_source_ed_path: str = "",
+    include_airail_objects: bool = False,
+    airail_source_ed_path: str = "",
+    include_sky_objects: bool = False,
+    sky_source_ed_path: str = "",
+    include_sky_marker_brushes: bool = False,
+    include_sky_marker_residue_brushes: bool = False,
+    sky_marker_residue_reference_dat_path: str = "",
+    include_sound_objects: bool = False,
+    sound_source_ed_path: str = "",
+    include_gameplay_trigger_objects: bool = False,
+    gameplay_trigger_source_ed_path: str = "",
+    include_static_prop_objects: bool = False,
+    static_prop_source_ed_path: str = "",
+    include_low_risk_behavior_prop_objects: bool = False,
+    low_risk_behavior_prop_source_ed_path: str = "",
+    include_wall_torch_objects: bool = False,
+    wall_torch_source_ed_path: str = "",
+    include_fire_objects: bool = False,
+    fire_source_ed_path: str = "",
+    include_candle_prop_objects: bool = False,
+    candle_prop_source_ed_path: str = "",
+    include_brazier_objects: bool = False,
+    brazier_source_ed_path: str = "",
+    include_treasure_chest_objects: bool = False,
+    treasure_chest_source_ed_path: str = "",
+    include_prop_damager_objects: bool = False,
+    prop_damager_source_ed_path: str = "",
+    include_destructable_prop_objects: bool = False,
+    destructable_prop_source_ed_path: str = "",
+    include_destructable_brush_objects: bool = False,
+    include_collision_helper_objects: bool = False,
+    include_collision_helper_brushes: bool = True,
+    collision_helper_source_ed_path: str = "",
+    include_trigger_helper_objects: bool = False,
+    include_trigger_helper_brushes: bool = True,
+    trigger_helper_source_ed_path: str = "",
     include_terrain_cutout_coverage: Optional[bool] = None,
     terrain_cutout_ignored_textures: Sequence[str] = ("TEXTURES\\LevelTextures\\Terrain\\sand.dtx",),
     terrain_cutout_sample_grid: int = 7,
@@ -2267,6 +2953,7 @@ def build_full_world_skeleton_acceptance_report(
     terrain_support_source_coverage_ignored_textures: Sequence[str] = ("TEXTURES\\LevelTextures\\Terrain\\sand.dtx",),
     terrain_support_source_coverage_sample_grid: int = 3,
     terrain_support_source_coverage_max_gaps: int = 64,
+    include_physics_shell_source_coverage: bool = False,
     max_processor_brushes: int = 0,
     max_processor_polygons: int = 0,
     block_unreconstructed_physics_shell: bool = False,
@@ -2292,6 +2979,23 @@ def build_full_world_skeleton_acceptance_report(
         )
 
     source_dat = os.path.abspath(source_dat_path)
+    source_door_ed = os.path.abspath(door_source_ed_path) if door_source_ed_path else ""
+    source_airail_ed = os.path.abspath(airail_source_ed_path) if airail_source_ed_path else ""
+    source_sky_ed = os.path.abspath(sky_source_ed_path) if sky_source_ed_path else ""
+    sky_marker_residue_reference_dat = os.path.abspath(sky_marker_residue_reference_dat_path) if sky_marker_residue_reference_dat_path else ""
+    source_sound_ed = os.path.abspath(sound_source_ed_path) if sound_source_ed_path else ""
+    source_gameplay_trigger_ed = os.path.abspath(gameplay_trigger_source_ed_path) if gameplay_trigger_source_ed_path else ""
+    source_static_prop_ed = os.path.abspath(static_prop_source_ed_path) if static_prop_source_ed_path else ""
+    source_low_risk_behavior_prop_ed = os.path.abspath(low_risk_behavior_prop_source_ed_path) if low_risk_behavior_prop_source_ed_path else ""
+    source_wall_torch_ed = os.path.abspath(wall_torch_source_ed_path) if wall_torch_source_ed_path else ""
+    source_fire_ed = os.path.abspath(fire_source_ed_path) if fire_source_ed_path else ""
+    source_candle_prop_ed = os.path.abspath(candle_prop_source_ed_path) if candle_prop_source_ed_path else ""
+    source_brazier_ed = os.path.abspath(brazier_source_ed_path) if brazier_source_ed_path else ""
+    source_treasure_chest_ed = os.path.abspath(treasure_chest_source_ed_path) if treasure_chest_source_ed_path else ""
+    source_prop_damager_ed = os.path.abspath(prop_damager_source_ed_path) if prop_damager_source_ed_path else ""
+    source_destructable_prop_ed = os.path.abspath(destructable_prop_source_ed_path) if destructable_prop_source_ed_path else ""
+    source_collision_ed = os.path.abspath(collision_helper_source_ed_path) if collision_helper_source_ed_path else ""
+    source_trigger_ed = os.path.abspath(trigger_helper_source_ed_path) if trigger_helper_source_ed_path else ""
     requested_names = tuple(str(name).strip() for name in model_names if str(name).strip())
     install_path = ""
     cutout_coverage_enabled = (
@@ -2303,6 +3007,9 @@ def build_full_world_skeleton_acceptance_report(
     terrain_cutout_manifest_path = ""
     terrain_support_source_report: Optional[TerrainSupportSourceCoverageReport] = None
     terrain_support_source_manifest_path = ""
+    physics_shell_source_report: Optional[PhysicsShellSourceCoverageReport] = None
+    physics_shell_source_manifest_path = ""
+    door_behavior_context = ""
     notes: List[str] = [
         "Full-world skeleton reports generate standalone ED worlds from explicitly selected DAT world models.",
         "The generated world uses a root Container, one generated model group, Brush children, and minimal load objects.",
@@ -2328,6 +3035,128 @@ def build_full_world_skeleton_acceptance_report(
         notes.append(
             f"PhysicsBSP shell polygon budget: {max(1, int(physics_shell_max_polygons))}; thickness={float(physics_shell_thickness):g}."
         )
+    if include_door_objects:
+        notes.append("Door/RotatingDoor object records will be copied from the source ED oracle when their Name matches a selected DAT world model.")
+        if source_door_ed:
+            notes.append(f"Door source ED oracle: {source_door_ed}.")
+        else:
+            notes.append("Door source ED oracle is not configured; Door/RotatingDoor object nodes will be skipped.")
+    if include_airail_objects:
+        notes.append("AIRail object records will be generated from DAT aiRail helper models.")
+        if source_airail_ed:
+            notes.append(f"AIRail source ED oracle: {source_airail_ed}.")
+        else:
+            notes.append("AIRail source ED oracle is not configured; RailLink fields will use DAT fallback values.")
+    if include_sky_objects:
+        notes.append("Sky object records will be copied from the source ED oracle.")
+        if source_sky_ed:
+            notes.append(f"Sky source ED oracle: {source_sky_ed}.")
+        else:
+            notes.append("Sky source ED oracle is not configured; sky object nodes will be skipped.")
+    if include_sky_marker_brushes:
+        notes.append("SkyMarker Brush records will be copied from the source ED oracle.")
+        if source_sky_ed:
+            notes.append(f"SkyMarker source ED oracle: {source_sky_ed}.")
+        else:
+            notes.append("SkyMarker source ED oracle is not configured; sky marker Brush records will be skipped.")
+    if include_sky_marker_residue_brushes:
+        notes.append("Diagnostic SkyMarker residue Brush records will be copied from source ED faces matched to a compiled DAT reference.")
+        if source_sky_ed:
+            notes.append(f"SkyMarker residue source ED oracle: {source_sky_ed}.")
+        else:
+            notes.append("SkyMarker residue source ED oracle is not configured; residue Brush records will be skipped.")
+        if sky_marker_residue_reference_dat:
+            notes.append(f"SkyMarker residue compiled DAT reference: {sky_marker_residue_reference_dat}.")
+        else:
+            notes.append("SkyMarker residue compiled DAT reference is not configured; residue Brush records will be skipped.")
+    if include_sound_objects:
+        notes.append("AmbientSound object records will be copied from the source ED oracle.")
+        if source_sound_ed:
+            notes.append(f"Sound source ED oracle: {source_sound_ed}.")
+        else:
+            notes.append("Sound source ED oracle is not configured; AmbientSound object nodes will be skipped.")
+    if include_gameplay_trigger_objects:
+        notes.append("Gameplay Trigger/ExitTrigger/PortalTrigger object records will be copied from the source ED oracle.")
+        if source_gameplay_trigger_ed:
+            notes.append(f"Gameplay trigger source ED oracle: {source_gameplay_trigger_ed}.")
+        else:
+            notes.append("Gameplay trigger source ED oracle is not configured; gameplay trigger object nodes will be skipped.")
+    if include_static_prop_objects:
+        notes.append("Static Prop object records will be copied from the source ED oracle.")
+        if source_static_prop_ed:
+            notes.append(f"Static prop source ED oracle: {source_static_prop_ed}.")
+        else:
+            notes.append("Static prop source ED oracle is not configured; Prop object nodes will be skipped.")
+    if include_low_risk_behavior_prop_objects:
+        notes.append("Low-risk behavior prop object records will be copied from the source ED oracle for physical-decor subclasses only.")
+        if source_low_risk_behavior_prop_ed:
+            notes.append(f"Low-risk behavior prop source ED oracle: {source_low_risk_behavior_prop_ed}.")
+        else:
+            notes.append("Low-risk behavior prop source ED oracle is not configured; Barrel/BonePile/Cauldron/Cookpot/StatStone object nodes will be skipped.")
+    if include_wall_torch_objects:
+        notes.append("WallTorch object records will be copied from the source ED oracle as an initially validated medium-risk light/fire/sound prop pass.")
+        if source_wall_torch_ed:
+            notes.append(f"WallTorch source ED oracle: {source_wall_torch_ed}.")
+        else:
+            notes.append("WallTorch source ED oracle is not configured; WallTorch object nodes will be skipped.")
+    if include_fire_objects:
+        notes.append("Fire object records will be copied from the source ED oracle as an initially validated standalone medium-risk light/fire/sound prop pass.")
+        if source_fire_ed:
+            notes.append(f"Fire source ED oracle: {source_fire_ed}.")
+        else:
+            notes.append("Fire source ED oracle is not configured; Fire object nodes will be skipped.")
+    if include_candle_prop_objects:
+        notes.append("CandleProp object records will be copied from the source ED oracle as an initially validated medium-risk light/model prop pass.")
+        if source_candle_prop_ed:
+            notes.append(f"CandleProp source ED oracle: {source_candle_prop_ed}.")
+        else:
+            notes.append("CandleProp source ED oracle is not configured; CandleProp object nodes will be skipped.")
+    if include_brazier_objects:
+        notes.append("Brazier object records will be copied from the source ED oracle as an initially validated medium-risk light/fire/sound/model prop pass.")
+        if source_brazier_ed:
+            notes.append(f"Brazier source ED oracle: {source_brazier_ed}.")
+        else:
+            notes.append("Brazier source ED oracle is not configured; Brazier object nodes will be skipped.")
+    if include_treasure_chest_objects:
+        notes.append("TreasureChest object records will be copied from the source ED oracle as an initially validated high-risk loot/trigger prop pass.")
+        if source_treasure_chest_ed:
+            notes.append(f"TreasureChest source ED oracle: {source_treasure_chest_ed}.")
+        else:
+            notes.append("TreasureChest source ED oracle is not configured; TreasureChest object nodes will be skipped.")
+    if include_prop_damager_objects:
+        notes.append("PropDamager object records will be copied from the source ED oracle as an initially validated high-risk damage prop pass.")
+        if source_prop_damager_ed:
+            notes.append(f"PropDamager source ED oracle: {source_prop_damager_ed}.")
+        else:
+            notes.append("PropDamager source ED oracle is not configured; PropDamager object nodes will be skipped.")
+    if include_destructable_prop_objects:
+        notes.append("DestructableProp object records will be copied from the source ED oracle as an explicit high-risk destructible prop pass.")
+        if source_destructable_prop_ed:
+            notes.append(f"DestructableProp source ED oracle: {source_destructable_prop_ed}.")
+        else:
+            notes.append("DestructableProp source ED oracle is not configured; DestructableProp object nodes will be skipped.")
+    if include_destructable_brush_objects:
+        notes.append(
+            "DestructableBrush object records will be reconstructed from DAT object records and matched same-name BSP world models."
+        )
+    if include_collision_helper_objects:
+        if include_collision_helper_brushes:
+            notes.append("Collision helper object/Brush records will be generated from DAT Invisible/Firethrough helper models.")
+        else:
+            notes.append("Collision helper object records will be copied from the source ED oracle; DAT Invisible/Firethrough helper Brush shells remain disabled.")
+        if source_collision_ed:
+            notes.append(f"Collision helper source ED oracle: {source_collision_ed}.")
+        else:
+            notes.append("Collision helper source ED oracle is not configured; helper object nodes will be skipped.")
+    if include_trigger_helper_objects:
+        if include_trigger_helper_brushes:
+            notes.append("Trigger helper object/Brush records will be generated from DAT GreenScreen helper models.")
+        else:
+            notes.append("Trigger helper PortalZone object records will be copied from the source ED oracle; DAT GreenScreen helper Brush shells remain disabled.")
+        if source_trigger_ed:
+            notes.append(f"Trigger helper source ED oracle: {source_trigger_ed}.")
+        else:
+            notes.append("Trigger helper source ED oracle is not configured; PortalZone object nodes will be skipped.")
     if cutout_coverage_enabled:
         notes.append(
             "Terrain cutout coverage will be sampled against original non-terrain model footprints."
@@ -2335,6 +3164,10 @@ def build_full_world_skeleton_acceptance_report(
     if include_terrain_support_source_coverage:
         notes.append(
             "Terrain support source coverage will compare generated ED terrain tops against original playable Terrain0 polygons."
+        )
+    if include_physics_shell_source_coverage:
+        notes.append(
+            "PhysicsBSP shell source coverage will compare generated shell slabs against original PhysicsBSP polygons."
         )
     processor_brush_budget = max(0, int(max_processor_brushes))
     processor_polygon_budget = max(0, int(max_processor_polygons))
@@ -2364,6 +3197,200 @@ def build_full_world_skeleton_acceptance_report(
         cautions.append(
             "PhysicsBSP shell patches are closed source-like test brushes derived from compiled collision polygons, not recovered original authoring CSG."
         )
+    if include_door_objects and not source_door_ed:
+        cautions.append(
+            "Door object emission requires a source ED oracle; no synthetic Door or RotatingDoor template is emitted."
+        )
+    if include_door_objects:
+        if include_terrain_support_patch:
+            door_behavior_context = "source_terrain_support_patch"
+            notes.append(
+                "Door behavior validation context: local Terrain* support patch is included; this is the stable path for BoxPhysics moving world-model probes."
+            )
+        elif include_physics_shell_patch:
+            door_behavior_context = "source_physics_shell_patch"
+            notes.append(
+                "Door behavior validation context: local PhysicsBSP shell patch is included; this is the stable path for indoor BoxPhysics moving world-model probes."
+            )
+        else:
+            door_behavior_context = "sparse_context_warning"
+            cautions.append(
+                "Door behavior validation is sparse: copied Door/RotatingDoor objects without local Terrain* or PhysicsBSP support context can move incorrectly in game; use a source-derived support patch before accepting BoxPhysics door movement."
+            )
+    if include_airail_objects and not source_airail_ed:
+        cautions.append(
+            "Generated AIRail objects without a source ED oracle have placeholder RailLink fields and need manual route validation."
+        )
+    if include_sky_objects and not source_sky_ed:
+        cautions.append(
+            "Sky object emission requires a source ED oracle; no synthetic sky object template is emitted."
+        )
+    if include_sky_marker_brushes and not source_sky_ed:
+        cautions.append(
+            "SkyMarker Brush copying requires a source ED oracle; no synthetic sky shell is emitted."
+        )
+    if include_sky_marker_brushes and source_sky_ed:
+        cautions.append(
+            "Source SkyMarker Brush shell copying is a DEDit diagnostic path; current Processor output can route those helper faces into visible BSP when the surrounding shipped world context is missing."
+        )
+    if include_sky_marker_residue_brushes:
+        cautions.append(
+            "SkyMarker residue Brush emission is diagnostic-only and depends on a shipped compiled DAT reference; run helper leakage validation before using the output in game."
+        )
+    if include_sky_marker_residue_brushes and not source_sky_ed:
+        cautions.append(
+            "SkyMarker residue Brush emission requires a source ED oracle; no synthetic residue shell is emitted."
+        )
+    if include_sky_marker_residue_brushes and not sky_marker_residue_reference_dat:
+        cautions.append(
+            "SkyMarker residue Brush emission requires a compiled DAT reference to choose the matched source faces."
+        )
+    if include_sound_objects and not source_sound_ed:
+        cautions.append(
+            "AmbientSound object emission requires a source ED oracle; SoundOnly helper Brush volumes are not emitted as fallback."
+        )
+    if include_gameplay_trigger_objects and not source_gameplay_trigger_ed:
+        cautions.append(
+            "Gameplay trigger object emission requires a source ED oracle; no synthetic Trigger, ExitTrigger, or PortalTrigger template is emitted."
+        )
+    if include_gameplay_trigger_objects:
+        cautions.append(
+            "Gameplay trigger objects can change runtime level flow immediately; verify target/message references and exit destinations in DEDit before accepting in-game behavior."
+        )
+    if include_static_prop_objects and not source_static_prop_ed:
+        cautions.append(
+            "Static Prop object emission requires a source ED oracle; no synthetic Prop template is emitted."
+        )
+    if include_static_prop_objects:
+        cautions.append(
+            "Static Prop copying preserves generic Prop object records only; behavior-rich prop subclasses remain separate explicit semantic passes."
+        )
+        cautions.append(
+            "Copied static Props depend on source Filename, Skin, Solid, and MoveToFloor properties; inspect placement and collision in DEDit before game testing."
+        )
+    gated_high_risk_behavior_props = []
+    if not include_treasure_chest_objects:
+        gated_high_risk_behavior_props.append("TreasureChest")
+    if not include_prop_damager_objects:
+        gated_high_risk_behavior_props.append("PropDamager")
+    if not include_destructable_prop_objects:
+        gated_high_risk_behavior_props.append("DestructableProp")
+    gated_high_risk_behavior_prop_text = (
+        ", ".join(gated_high_risk_behavior_props) + " remain controlled by explicit passes."
+        if gated_high_risk_behavior_props
+        else ""
+    )
+    if include_low_risk_behavior_prop_objects and not source_low_risk_behavior_prop_ed:
+        cautions.append(
+            "Low-risk behavior prop object emission requires a source ED oracle; no synthetic Barrel, BonePile, Cauldron, Cookpot, or StatStone template is emitted."
+        )
+    if include_low_risk_behavior_prop_objects:
+        cautions.append(
+            "Low-risk behavior prop copying is limited to physical-decor subclasses."
+        )
+        cautions.append(
+            "Copied low-risk behavior props can still affect collision through Solid and MoveToFloor properties; inspect placement before game testing."
+        )
+        if gated_high_risk_behavior_prop_text:
+            cautions.append(gated_high_risk_behavior_prop_text)
+    if include_wall_torch_objects and not source_wall_torch_ed:
+        cautions.append(
+            "WallTorch object emission requires a source ED oracle; no synthetic WallTorch template is emitted."
+        )
+    if include_wall_torch_objects:
+        cautions.append(
+            "WallTorch copying preserves medium-risk light/fire/sound behavior; initial ANSKRAMKEEP manual validation passed, but inspect placement and sound/light behavior in each new world."
+        )
+        if gated_high_risk_behavior_prop_text:
+            cautions.append(gated_high_risk_behavior_prop_text)
+    if include_fire_objects and not source_fire_ed:
+        cautions.append(
+            "Fire object emission requires a source ED oracle; no synthetic Fire template is emitted."
+        )
+    if include_fire_objects:
+        cautions.append(
+            "Fire copying preserves standalone medium-risk light/fire/sound behavior; initial ANSKRAMKEEP manual validation passed, but inspect placement and sound/light behavior in each new world."
+        )
+        if gated_high_risk_behavior_prop_text:
+            cautions.append(gated_high_risk_behavior_prop_text)
+    if include_candle_prop_objects and not source_candle_prop_ed:
+        cautions.append(
+            "CandleProp object emission requires a source ED oracle; no synthetic CandleProp template is emitted."
+        )
+    if include_candle_prop_objects:
+        cautions.append(
+            "CandleProp copying preserves medium-risk light/model prop behavior; initial manual validation passed, but inspect placement and light/model behavior in each new world."
+        )
+        if gated_high_risk_behavior_prop_text:
+            cautions.append(gated_high_risk_behavior_prop_text)
+    if include_brazier_objects and not source_brazier_ed:
+        cautions.append(
+            "Brazier object emission requires a source ED oracle; no synthetic Brazier template is emitted."
+        )
+    if include_brazier_objects:
+        cautions.append(
+            "Brazier copying preserves medium-risk light/fire/sound/model prop behavior; initial manual validation passed, but inspect placement and light/fire/sound behavior in each new world."
+        )
+        if gated_high_risk_behavior_prop_text:
+            cautions.append(gated_high_risk_behavior_prop_text)
+    if include_treasure_chest_objects and not source_treasure_chest_ed:
+        cautions.append(
+            "TreasureChest object emission requires a source ED oracle; no synthetic TreasureChest template is emitted."
+        )
+    if include_treasure_chest_objects:
+        cautions.append(
+            "TreasureChest copying preserves high-risk loot and trigger-target behavior; initial manual validation passed, but inspect TriggerTarget, sounds, lock, and treasure fields in each new world."
+        )
+        if not include_destructable_prop_objects:
+            cautions.append(
+                "DestructableProp remains controlled by its own explicit pass."
+            )
+    if include_prop_damager_objects and not source_prop_damager_ed:
+        cautions.append(
+            "PropDamager object emission requires a source ED oracle; no synthetic PropDamager template is emitted."
+        )
+    if include_prop_damager_objects:
+        cautions.append(
+            "PropDamager copying preserves high-risk damage behavior; initial manual validation passed, but inspect DamagerStuff, trigger fields, collision, and placement in each new world."
+        )
+        if not include_destructable_prop_objects:
+            cautions.append(
+                "Destructible props remain controlled by their own explicit pass."
+            )
+    if include_destructable_prop_objects and not source_destructable_prop_ed:
+        cautions.append(
+            "DestructableProp object emission requires a source ED oracle; no synthetic DestructableProp template is emitted."
+        )
+    if include_destructable_prop_objects:
+        cautions.append(
+            "DestructableProp copying preserves high-risk hit-point, damage/destroy-state, sound, collision, and explosion behavior; initial BATHHOUSE manual validation passed, but inspect those fields in each new world."
+        )
+        cautions.append(
+            "DamageTriggerTarget references can activate unrelated gameplay; verify copied target/message fields in DEDit."
+        )
+    if include_destructable_brush_objects:
+        cautions.append(
+            "DestructableBrush reconstruction is DAT-native and high-risk: it preserves hit points, solid/visible state, physics, debris, and DeathTriggerTarget chains from compiled DAT object records."
+        )
+        cautions.append(
+            "Each reconstructed DestructableBrush depends on a same-name BSP Brush child; inspect the child Brush and trigger chain in DEDit before accepting in-game destruction behavior."
+        )
+    if include_collision_helper_objects and not source_collision_ed and include_collision_helper_brushes:
+        cautions.append(
+            "Collision helper Brush geometry can be generated without a source ED oracle, but helper object nodes require same-name source ED records."
+        )
+    if include_collision_helper_objects and not source_collision_ed and not include_collision_helper_brushes:
+        cautions.append(
+            "Collision helper object-only emission requires a source ED oracle; no helper Brush fallback is enabled."
+        )
+    if include_trigger_helper_objects and not source_trigger_ed and include_trigger_helper_brushes:
+        cautions.append(
+            "Trigger helper Brush geometry can be generated without a source ED oracle, but PortalZone object nodes require same-name source ED records."
+        )
+    if include_trigger_helper_objects and not source_trigger_ed and not include_trigger_helper_brushes:
+        cautions.append(
+            "Trigger helper object-only emission requires a source ED oracle; no GreenScreen Brush fallback is enabled."
+        )
     if worlds_install_dir:
         install_path = os.path.join(
             os.path.abspath(worlds_install_dir),
@@ -2378,6 +3405,42 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_door_objects=include_door_objects,
+            door_source_ed_path=source_door_ed,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_destructable_brush_objects=include_destructable_brush_objects,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             blockers=("full-world skeleton acceptance generation requires explicit model names",),
             cautions=tuple(cautions),
             notes=tuple(notes),
@@ -2391,6 +3454,39 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=requested_names,
             blockers=(f"source DAT was not found: {source_dat}",),
             cautions=tuple(cautions),
@@ -2409,6 +3505,39 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=requested_names,
             blockers=(f"DAT parse failed: {exc}",),
             cautions=tuple(cautions),
@@ -2433,6 +3562,21 @@ def build_full_world_skeleton_acceptance_report(
         notes.append(
             "A large PhysicsBSP static shell is present but is not reconstructed into source brushes yet."
         )
+
+    door_pair_notes: Tuple[str, ...] = ()
+    if include_door_objects and source_door_ed:
+        requested_names, door_pair_notes = surrogate_ed._expand_model_names_with_source_door_pairs(
+            requested_names,
+            source_ed_path=source_door_ed,
+        )
+        notes.extend(door_pair_notes)
+
+    effective_max_models = max(0, int(max_models))
+    if door_pair_notes and len(requested_names) > effective_max_models:
+        notes.append(
+            f"max_models limit raised to {len(requested_names)} so source DoubleDoorName pairs stay together."
+        )
+        effective_max_models = len(requested_names)
 
     requested_lookup = {name.lower(): order for order, name in enumerate(requested_names)}
     unmatched = set(requested_lookup)
@@ -2466,13 +3610,13 @@ def build_full_world_skeleton_acceptance_report(
             continue
         selected.append(model)
 
-    if len(selected) > max(0, int(max_models)):
+    if len(selected) > effective_max_models:
         skipped = [
             str(getattr(model, "name", "") or "WorldModel")
-            for model in selected[max(0, int(max_models)):]
+            for model in selected[effective_max_models:]
         ]
-        skipped_notes.append(f"max_models limit {int(max_models)} trimmed selected set: {', '.join(skipped)}")
-        selected = selected[:max(0, int(max_models))]
+        skipped_notes.append(f"max_models limit {effective_max_models} trimmed selected set: {', '.join(skipped)}")
+        selected = selected[:effective_max_models]
     if unmatched:
         skipped_notes.extend(
             f"requested model was not found or was filtered out: {name}"
@@ -2481,16 +3625,65 @@ def build_full_world_skeleton_acceptance_report(
 
     model_summaries = tuple(_composite_model_summary(model) for model in selected)
     selected_names = tuple(item.name for item in model_summaries)
+    selected_name_lookup = {name.lower() for name in selected_names}
+    collision_helper_models: Tuple[object, ...] = ()
+    collision_helper_summaries: Tuple[PrefabSurrogateCompositeModelSummary, ...] = ()
+    if include_collision_helper_objects and include_collision_helper_brushes:
+        collision_helper_models = tuple(
+            model for model in getattr(parsed, "world_models", ()) or ()
+            if str(getattr(model, "name", "") or "").lower() not in selected_name_lookup
+            and _is_pure_collision_helper_semantic_model(model)
+        )
+        collision_helper_summaries = tuple(
+            _composite_model_summary(model)
+            for model in collision_helper_models
+        )
+        notes.append(
+            "Collision helper candidate models: "
+            f"{len(collision_helper_summaries)} model(s), "
+            f"{sum(item.polygon_count for item in collision_helper_summaries)} polygon(s)."
+        )
+    trigger_helper_models: Tuple[object, ...] = ()
+    trigger_helper_summaries: Tuple[PrefabSurrogateCompositeModelSummary, ...] = ()
+    if include_trigger_helper_objects and include_trigger_helper_brushes:
+        trigger_helper_models = tuple(
+            model for model in getattr(parsed, "world_models", ()) or ()
+            if str(getattr(model, "name", "") or "").lower() not in selected_name_lookup
+            and _is_pure_trigger_helper_semantic_model(model)
+        )
+        trigger_helper_summaries = tuple(
+            _composite_model_summary(model)
+            for model in trigger_helper_models
+        )
+        notes.append(
+            "Trigger helper candidate models: "
+            f"{len(trigger_helper_summaries)} model(s), "
+            f"{sum(item.polygon_count for item in trigger_helper_summaries)} polygon(s)."
+        )
     total_points = sum(item.point_count for item in model_summaries)
     total_polygons = sum(item.polygon_count for item in model_summaries)
-    expected_points = total_points + (8 if include_validation_floor else 0)
-    expected_polygons = total_polygons + (6 if include_validation_floor else 0)
+    expected_points = (
+        total_points
+        + sum(item.point_count for item in collision_helper_summaries)
+        + sum(item.point_count for item in trigger_helper_summaries)
+        + (8 if include_validation_floor else 0)
+    )
+    expected_polygons = (
+        total_polygons
+        + sum(item.polygon_count for item in collision_helper_summaries)
+        + sum(item.polygon_count for item in trigger_helper_summaries)
+        + (6 if include_validation_floor else 0)
+    )
     effective_physics_shell_max_polygons = max(0, int(physics_shell_max_polygons))
     if include_physics_shell_patch:
         if processor_brush_budget:
             remaining_brushes = max(
                 0,
-                processor_brush_budget - len(model_summaries) - (1 if include_validation_floor else 0),
+                processor_brush_budget
+                - len(model_summaries)
+                - len(collision_helper_summaries)
+                - len(trigger_helper_summaries)
+                - (1 if include_validation_floor else 0),
             )
             if remaining_brushes < effective_physics_shell_max_polygons:
                 notes.append(
@@ -2525,6 +3718,39 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=selected_names,
             blockers=("no requested DAT world models remained after filtering",),
             cautions=tuple(cautions),
@@ -2539,6 +3765,39 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=selected_names,
             model_count=len(model_summaries),
             point_count=expected_points,
@@ -2557,6 +3816,39 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=selected_names,
             model_count=len(model_summaries),
             point_count=expected_points,
@@ -2640,6 +3932,44 @@ def build_full_world_skeleton_acceptance_report(
         physics_shell_max_polygons=effective_physics_shell_max_polygons,
         physics_shell_thickness=physics_shell_thickness,
         physics_shell_side_texture=physics_shell_side_texture,
+        include_door_objects=include_door_objects,
+        door_source_ed_path=source_door_ed,
+        include_airail_objects=include_airail_objects,
+        airail_source_ed_path=source_airail_ed,
+        include_sky_objects=include_sky_objects,
+        sky_source_ed_path=source_sky_ed,
+        include_sky_marker_brushes=include_sky_marker_brushes,
+        include_sky_marker_residue_brushes=include_sky_marker_residue_brushes,
+        sky_marker_residue_reference_dat_path=sky_marker_residue_reference_dat,
+        include_sound_objects=include_sound_objects,
+        sound_source_ed_path=source_sound_ed,
+        include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+        gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+        include_static_prop_objects=include_static_prop_objects,
+        static_prop_source_ed_path=source_static_prop_ed,
+        include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+        low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+        include_wall_torch_objects=include_wall_torch_objects,
+        wall_torch_source_ed_path=source_wall_torch_ed,
+        include_fire_objects=include_fire_objects,
+        fire_source_ed_path=source_fire_ed,
+        include_candle_prop_objects=include_candle_prop_objects,
+        candle_prop_source_ed_path=source_candle_prop_ed,
+        include_brazier_objects=include_brazier_objects,
+        brazier_source_ed_path=source_brazier_ed,
+        include_treasure_chest_objects=include_treasure_chest_objects,
+        treasure_chest_source_ed_path=source_treasure_chest_ed,
+        include_prop_damager_objects=include_prop_damager_objects,
+        prop_damager_source_ed_path=source_prop_damager_ed,
+        include_destructable_prop_objects=include_destructable_prop_objects,
+        destructable_prop_source_ed_path=source_destructable_prop_ed,
+        include_destructable_brush_objects=include_destructable_brush_objects,
+        include_collision_helper_objects=include_collision_helper_objects,
+        include_collision_helper_brushes=include_collision_helper_brushes,
+        collision_helper_source_ed_path=source_collision_ed,
+        include_trigger_helper_objects=include_trigger_helper_objects,
+        include_trigger_helper_brushes=include_trigger_helper_brushes,
+        trigger_helper_source_ed_path=source_trigger_ed,
     )
     if surrogate_report.status != "full_world_skeleton_surrogate_ed_built":
         return FullWorldSkeletonAcceptanceReport(
@@ -2652,6 +3982,40 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_destructable_brush_objects=include_destructable_brush_objects,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=selected_names,
             model_count=surrogate_report.model_count,
             point_count=surrogate_report.point_count,
@@ -2708,6 +4072,42 @@ def build_full_world_skeleton_acceptance_report(
         else:
             notes.append("Terrain support source coverage report found no uncovered source Terrain0 samples.")
 
+    if include_physics_shell_source_coverage:
+        physics_shell_source_report = build_physics_shell_source_coverage_report(
+            source_dat_path=source_dat,
+            generated_ed_path=generated_ed,
+            physics_model_name=physics_shell_model_name or "PhysicsBSP",
+            generated_shell_name_prefix=physics_shell_name_prefix or "PhysicsShell",
+        )
+        physics_shell_source_manifest_path = os.path.join(
+            source_dir,
+            os.path.splitext(filename)[0] + "_physics_shell_source_coverage.json",
+        )
+        try:
+            with open(physics_shell_source_manifest_path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(
+                    _physics_shell_source_coverage_manifest(physics_shell_source_report),
+                    f,
+                    indent=2,
+                    sort_keys=True,
+                )
+                f.write("\n")
+        except OSError as exc:
+            cautions.append(f"PhysicsBSP shell source coverage manifest write failed: {exc}")
+            physics_shell_source_manifest_path = ""
+        if physics_shell_source_report.blockers:
+            cautions.append(
+                f"PhysicsBSP shell source coverage report did not complete cleanly: {physics_shell_source_report.status}"
+            )
+        elif physics_shell_source_report.uncovered_source_polygon_count:
+            cautions.append(
+                "PhysicsBSP shell source coverage found uncovered source polygon(s): "
+                f"{physics_shell_source_report.uncovered_source_polygon_count}/"
+                f"{physics_shell_source_report.source_polygon_count}."
+            )
+        else:
+            notes.append("PhysicsBSP shell source coverage report found no uncovered source PhysicsBSP polygons.")
+
     generated_object_count = 0
     generated_property_count = 0
     generated_class_counts: Dict[str, int] = {}
@@ -2738,6 +4138,19 @@ def build_full_world_skeleton_acceptance_report(
                 include_validation_floor=include_validation_floor,
                 include_terrain_support_patch=include_terrain_support_patch,
                 include_physics_shell_patch=include_physics_shell_patch,
+                include_airail_objects=include_airail_objects,
+                airail_source_ed_path=source_airail_ed,
+                include_sky_objects=include_sky_objects,
+                sky_source_ed_path=source_sky_ed,
+                include_sky_marker_brushes=include_sky_marker_brushes,
+                include_sound_objects=include_sound_objects,
+                sound_source_ed_path=source_sound_ed,
+                include_collision_helper_objects=include_collision_helper_objects,
+                include_collision_helper_brushes=include_collision_helper_brushes,
+                collision_helper_source_ed_path=source_collision_ed,
+                include_trigger_helper_objects=include_trigger_helper_objects,
+                include_trigger_helper_brushes=include_trigger_helper_brushes,
+                trigger_helper_source_ed_path=source_trigger_ed,
                 selected_model_names=selected_names,
                 model_count=generated_brush_count,
                 point_count=surrogate_report.point_count,
@@ -2756,6 +4169,8 @@ def build_full_world_skeleton_acceptance_report(
                 terrain_cutout_coverage=terrain_cutout_report,
                 terrain_support_source_coverage_manifest_path=terrain_support_source_manifest_path,
                 terrain_support_source_coverage=terrain_support_source_report,
+                physics_shell_source_coverage_manifest_path=physics_shell_source_manifest_path,
+                physics_shell_source_coverage=physics_shell_source_report,
                 blockers=("generated full-world skeleton did not round-trip with expected brush/polygon/layout counts",),
                 cautions=tuple(_unique_text(cautions + list(surrogate_report.cautions))),
                 notes=tuple(_unique_text(notes + skipped_notes + list(surrogate_report.notes))),
@@ -2771,6 +4186,40 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_destructable_brush_objects=include_destructable_brush_objects,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=selected_names,
             model_count=surrogate_report.model_count,
             point_count=surrogate_report.point_count,
@@ -2786,6 +4235,8 @@ def build_full_world_skeleton_acceptance_report(
             terrain_cutout_coverage=terrain_cutout_report,
             terrain_support_source_coverage_manifest_path=terrain_support_source_manifest_path,
             terrain_support_source_coverage=terrain_support_source_report,
+            physics_shell_source_coverage_manifest_path=physics_shell_source_manifest_path,
+            physics_shell_source_coverage=physics_shell_source_report,
             blockers=(f"generated full-world skeleton could not be parsed: {exc}",),
             cautions=tuple(_unique_text(cautions + list(surrogate_report.cautions))),
             notes=tuple(_unique_text(notes + skipped_notes + list(surrogate_report.notes))),
@@ -2814,6 +4265,40 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_destructable_brush_objects=include_destructable_brush_objects,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=selected_names,
             model_count=generated_brush_count,
             point_count=surrogate_report.point_count,
@@ -2832,6 +4317,8 @@ def build_full_world_skeleton_acceptance_report(
             terrain_cutout_coverage=terrain_cutout_report,
             terrain_support_source_coverage_manifest_path=terrain_support_source_manifest_path,
             terrain_support_source_coverage=terrain_support_source_report,
+            physics_shell_source_coverage_manifest_path=physics_shell_source_manifest_path,
+            physics_shell_source_coverage=physics_shell_source_report,
             blockers=tuple(_unique_text(tuple(processor_budget_blockers))),
             cautions=tuple(_unique_text(cautions + list(surrogate_report.cautions))),
             notes=tuple(_unique_text(notes + skipped_notes + list(surrogate_report.notes))),
@@ -2856,6 +4343,39 @@ def build_full_world_skeleton_acceptance_report(
             include_validation_floor=include_validation_floor,
             include_terrain_support_patch=include_terrain_support_patch,
             include_physics_shell_patch=include_physics_shell_patch,
+            include_airail_objects=include_airail_objects,
+            airail_source_ed_path=source_airail_ed,
+            include_sky_objects=include_sky_objects,
+            sky_source_ed_path=source_sky_ed,
+            include_sky_marker_brushes=include_sky_marker_brushes,
+            include_sound_objects=include_sound_objects,
+            sound_source_ed_path=source_sound_ed,
+            include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+            gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+            include_static_prop_objects=include_static_prop_objects,
+            static_prop_source_ed_path=source_static_prop_ed,
+            include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+            low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+            include_wall_torch_objects=include_wall_torch_objects,
+            wall_torch_source_ed_path=source_wall_torch_ed,
+            include_fire_objects=include_fire_objects,
+            fire_source_ed_path=source_fire_ed,
+            include_candle_prop_objects=include_candle_prop_objects,
+            candle_prop_source_ed_path=source_candle_prop_ed,
+            include_brazier_objects=include_brazier_objects,
+            brazier_source_ed_path=source_brazier_ed,
+            include_treasure_chest_objects=include_treasure_chest_objects,
+            treasure_chest_source_ed_path=source_treasure_chest_ed,
+            include_prop_damager_objects=include_prop_damager_objects,
+            prop_damager_source_ed_path=source_prop_damager_ed,
+            include_destructable_prop_objects=include_destructable_prop_objects,
+            destructable_prop_source_ed_path=source_destructable_prop_ed,
+            include_collision_helper_objects=include_collision_helper_objects,
+            include_collision_helper_brushes=include_collision_helper_brushes,
+            collision_helper_source_ed_path=source_collision_ed,
+            include_trigger_helper_objects=include_trigger_helper_objects,
+            include_trigger_helper_brushes=include_trigger_helper_brushes,
+            trigger_helper_source_ed_path=source_trigger_ed,
             selected_model_names=selected_names,
             model_count=generated_brush_count,
             point_count=surrogate_report.point_count,
@@ -2874,6 +4394,8 @@ def build_full_world_skeleton_acceptance_report(
             terrain_cutout_coverage=terrain_cutout_report,
             terrain_support_source_coverage_manifest_path=terrain_support_source_manifest_path,
             terrain_support_source_coverage=terrain_support_source_report,
+            physics_shell_source_coverage_manifest_path=physics_shell_source_manifest_path,
+            physics_shell_source_coverage=physics_shell_source_report,
             blockers=blockers,
             cautions=tuple(_unique_text(cautions + list(surrogate_report.cautions))),
             notes=tuple(_unique_text(
@@ -2904,6 +4426,112 @@ def build_full_world_skeleton_acceptance_report(
         manual_steps = manual_steps[:2] + (
             f"Confirm the generated {physics_shell_model_name} shell slab brushes are present around the reconstructed static room/wall shell.",
         ) + manual_steps[2:]
+    if include_door_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm copied Door/RotatingDoor object nodes are present for matching selected DAT door models, keep their source Name, AttachTo, movement, lock, and sound properties, and contain the matching Brush child. When a source child Brush is available, its original projection and Brush flags should be preserved.",
+        ) + manual_steps[2:]
+        if door_behavior_context in {"source_terrain_support_patch", "source_physics_shell_patch"}:
+            manual_steps = manual_steps + (
+                "Activate each copied Door/RotatingDoor in game; door behavior can be accepted only if it works with the included local support context.",
+            )
+        elif door_behavior_context == "sparse_context_warning":
+            manual_steps = manual_steps + (
+                "Treat this as an object hierarchy/texture diagnostic only; do not accept Door/RotatingDoor movement behavior until a local Terrain* or PhysicsBSP support patch is included.",
+            )
+    if include_airail_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated AIRail objects are present, keep the expected AITrk names, and have plausible RailLink properties.",
+        ) + manual_steps[2:]
+    if include_sky_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated sky objects are present, including SkyPointer, DemoSkyWorldModel, and TOD_Sky records when present in the source ED oracle.",
+        ) + manual_steps[2:]
+    if include_sound_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated AmbientSound objects are present and keep their source Filename and radius properties; no SoundOnly helper Brush volumes should be emitted.",
+        ) + manual_steps[2:]
+    if include_gameplay_trigger_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated Trigger, ExitTrigger, and PortalTrigger objects are present and keep their source Dims, target/message, portal, and destination properties.",
+        ) + manual_steps[2:]
+        manual_steps = manual_steps + (
+            "In DEDit, inspect copied gameplay trigger target names before game testing; missing target objects can make trigger behavior incomplete even when the trigger object itself is preserved.",
+        )
+    if include_static_prop_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated static Prop objects are present and keep their source Filename, Skin, Scale, Visible, Solid, and MoveToFloor properties.",
+        ) + manual_steps[2:]
+    if include_low_risk_behavior_prop_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated low-risk behavior prop objects are present for Barrel, BonePile, Cauldron, Cookpot, and StatStone records, and keep their source Filename, Skin, Solid, and MoveToFloor properties.",
+        ) + manual_steps[2:]
+    if include_wall_torch_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated WallTorch objects are present and keep their source On, SoundRadius, SoundFile, Fire, LightMinRadius, LightMaxRadius, Filename, Skin, Solid, and MoveToFloor properties.",
+        ) + manual_steps[2:]
+    if include_fire_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated Fire objects are present and keep their source On, SoundRadius, SoundFile, Fire, LightMinRadius, LightMaxRadius, and MoveToFloor properties.",
+        ) + manual_steps[2:]
+    if include_candle_prop_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated CandleProp objects are present and keep their source Filename, Skin, Visible, Solid, MoveToFloor, and light-related properties.",
+        ) + manual_steps[2:]
+    if include_brazier_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated Brazier objects are present and keep their source Filename, Skin, On, SoundRadius, SoundFile, Fire, LightMinRadius, LightMaxRadius, Solid, and MoveToFloor properties.",
+        ) + manual_steps[2:]
+    if include_treasure_chest_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated TreasureChest objects are present and keep their source Filename, Skin, OpenSoundName, CloseSoundName, Locked, TriggerTarget, TreasureLevel, Solid, and MoveToFloor properties.",
+        ) + manual_steps[2:]
+    if include_prop_damager_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated PropDamager objects are present and keep their source Filename, Skin, DamagerStuff, Solid, MoveToFloor, and placement properties.",
+        ) + manual_steps[2:]
+    if include_destructable_prop_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the generated DestructableProp objects are present and keep their source Filename, Skin, HitPoints, damage/destroy fields, sounds, Solid, MoveToFloor, and placement properties.",
+        ) + manual_steps[2:]
+    if include_destructable_brush_objects:
+        manual_steps = manual_steps[:2] + (
+            "Confirm each generated DestructableBrush object is present, keeps its DAT HitPoints, Solid, Visible, debris, physics, and DeathTriggerTarget fields, and contains a same-name Brush child from the DAT BSP model.",
+        ) + manual_steps[2:]
+        manual_steps = manual_steps + (
+            "In game, destroy the DragonStadium destructible brush stack pieces and check that chained DeathTriggerTarget destruction advances through the expected levels without helper textures or missing collision.",
+        )
+    if include_sky_marker_brushes:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the copied SkyMarker Brush shell is present around the generated world and uses the expected repeated sky helper texture.",
+        ) + manual_steps[2:]
+        manual_steps = manual_steps + (
+            "After Processor compilation, confirm the SkyMarker helper shell remains editor-only and the repeated sky helper texture is not visible in game.",
+        )
+    if include_sky_marker_residue_brushes:
+        manual_steps = manual_steps[:2] + (
+            "Confirm the diagnostic SkyMarker residue Brush records are present and contain only the compiled-reference matched source faces.",
+        ) + manual_steps[2:]
+        manual_steps = manual_steps + (
+            "After Processor compilation, run the compiled-DAT helper leakage report; reject the diagnostic if SkyMarker textures appear in VisBSP or Terrain* output.",
+        )
+    if include_collision_helper_objects:
+        if include_collision_helper_brushes:
+            manual_steps = manual_steps[:2] + (
+                "Confirm the generated collision helper Brush geometry and helper objects are present for InvisibleBrush, PerceptionBrush, Ladder, and ladder blocker records.",
+            ) + manual_steps[2:]
+        else:
+            manual_steps = manual_steps[:2] + (
+                "Confirm the generated collision helper object nodes are present for InvisibleBrush, PerceptionBrush, Ladder, and ladder blocker records, and no helper-textured Brush shells were emitted.",
+            ) + manual_steps[2:]
+    if include_trigger_helper_objects:
+        if include_trigger_helper_brushes:
+            manual_steps = manual_steps[:2] + (
+                "Confirm the generated trigger helper GreenScreen Brush geometry and PortalZone objects are present and keep their expected PortalName properties.",
+            ) + manual_steps[2:]
+        else:
+            manual_steps = manual_steps[:2] + (
+                "Confirm the generated PortalZone objects are present, keep their expected PortalName properties, and no GreenScreen helper Brush shells were emitted.",
+            ) + manual_steps[2:]
     if terrain_cutout_report is not None:
         manual_steps = manual_steps[:2] + (
             "Review the terrain cutout coverage manifest; rectangular covered_cutout gaps should align with original model/building footprints before being treated as terrain loss.",
@@ -2911,6 +4539,10 @@ def build_full_world_skeleton_acceptance_report(
     if terrain_support_source_report is not None:
         manual_steps = manual_steps[:2] + (
             "Review the terrain support source coverage manifest; non-covered source Terrain0 gaps are the actionable generator-loss candidates.",
+        ) + manual_steps[2:]
+    if physics_shell_source_report is not None:
+        manual_steps = manual_steps[:2] + (
+            "Review the PhysicsBSP shell source coverage manifest; uncovered side-wall and ceiling counts are the actionable shell selector gaps.",
         ) + manual_steps[2:]
     return FullWorldSkeletonAcceptanceReport(
         status="ready_for_manual_full_world_skeleton_test",
@@ -2922,6 +4554,45 @@ def build_full_world_skeleton_acceptance_report(
         include_validation_floor=include_validation_floor,
         include_terrain_support_patch=include_terrain_support_patch,
         include_physics_shell_patch=include_physics_shell_patch,
+        include_door_objects=include_door_objects,
+        door_source_ed_path=source_door_ed,
+        door_behavior_context=door_behavior_context,
+        include_airail_objects=include_airail_objects,
+        airail_source_ed_path=source_airail_ed,
+        include_sky_objects=include_sky_objects,
+        sky_source_ed_path=source_sky_ed,
+        include_sky_marker_brushes=include_sky_marker_brushes,
+        include_sky_marker_residue_brushes=include_sky_marker_residue_brushes,
+        sky_marker_residue_reference_dat_path=sky_marker_residue_reference_dat,
+        include_sound_objects=include_sound_objects,
+        sound_source_ed_path=source_sound_ed,
+        include_gameplay_trigger_objects=include_gameplay_trigger_objects,
+        gameplay_trigger_source_ed_path=source_gameplay_trigger_ed,
+        include_static_prop_objects=include_static_prop_objects,
+        static_prop_source_ed_path=source_static_prop_ed,
+        include_low_risk_behavior_prop_objects=include_low_risk_behavior_prop_objects,
+        low_risk_behavior_prop_source_ed_path=source_low_risk_behavior_prop_ed,
+        include_wall_torch_objects=include_wall_torch_objects,
+        wall_torch_source_ed_path=source_wall_torch_ed,
+        include_fire_objects=include_fire_objects,
+        fire_source_ed_path=source_fire_ed,
+        include_candle_prop_objects=include_candle_prop_objects,
+        candle_prop_source_ed_path=source_candle_prop_ed,
+        include_brazier_objects=include_brazier_objects,
+        brazier_source_ed_path=source_brazier_ed,
+        include_treasure_chest_objects=include_treasure_chest_objects,
+        treasure_chest_source_ed_path=source_treasure_chest_ed,
+        include_prop_damager_objects=include_prop_damager_objects,
+        prop_damager_source_ed_path=source_prop_damager_ed,
+        include_destructable_prop_objects=include_destructable_prop_objects,
+        destructable_prop_source_ed_path=source_destructable_prop_ed,
+        include_destructable_brush_objects=include_destructable_brush_objects,
+        include_collision_helper_objects=include_collision_helper_objects,
+        include_collision_helper_brushes=include_collision_helper_brushes,
+        collision_helper_source_ed_path=source_collision_ed,
+        include_trigger_helper_objects=include_trigger_helper_objects,
+        include_trigger_helper_brushes=include_trigger_helper_brushes,
+        trigger_helper_source_ed_path=source_trigger_ed,
         selected_model_names=selected_names,
         model_count=surrogate_report.model_count,
         point_count=surrogate_report.point_count,
@@ -2940,6 +4611,8 @@ def build_full_world_skeleton_acceptance_report(
         terrain_cutout_coverage=terrain_cutout_report,
         terrain_support_source_coverage_manifest_path=terrain_support_source_manifest_path,
         terrain_support_source_coverage=terrain_support_source_report,
+        physics_shell_source_coverage_manifest_path=physics_shell_source_manifest_path,
+        physics_shell_source_coverage=physics_shell_source_report,
         manual_steps=manual_steps,
         cautions=tuple(_unique_text(cautions + list(surrogate_report.cautions))),
         notes=tuple(_unique_text(notes + skipped_notes + list(surrogate_report.notes))),
@@ -2950,6 +4623,7 @@ def build_full_world_skeleton_compiled_validation_report(
     *,
     generated_ed_path: str,
     compiled_dat_path: str,
+    helper_reference_dat_path: str = "",
     processor_log_paths: Sequence[str] = (),
     manual_validation: Optional[BlackBoxCompilerManualValidation] = None,
     max_start_floor_drop: float = 256.0,
@@ -2964,6 +4638,7 @@ def build_full_world_skeleton_compiled_validation_report(
     """
     ed_path = os.path.abspath(generated_ed_path)
     dat_path = os.path.abspath(compiled_dat_path)
+    helper_reference_path = os.path.abspath(helper_reference_dat_path) if helper_reference_dat_path else ""
     logs = tuple(os.path.abspath(path) for path in processor_log_paths if path)
     manual = manual_validation or BlackBoxCompilerManualValidation()
     max_drop = max(0.0, float(max_start_floor_drop))
@@ -2974,6 +4649,7 @@ def build_full_world_skeleton_compiled_validation_report(
     move_player_to_floor: Optional[bool] = None
     physics_floor_y: Optional[float] = None
     physics_floor_drop: Optional[float] = None
+    helper_leakage: Optional[CompiledDatHelperLeakageReport] = None
 
     if not os.path.exists(ed_path):
         blockers.append(f"generated ED was not found: {ed_path}")
@@ -3062,6 +4738,26 @@ def build_full_world_skeleton_compiled_validation_report(
             except Exception as exc:
                 blockers.append(f"PhysicsBSP floor probe failed: {exc}")
 
+    if helper_reference_path and os.path.exists(dat_path):
+        helper_leakage = build_compiled_dat_helper_leakage_report(
+            dat_path,
+            reference_dat_path=helper_reference_path,
+        )
+        if helper_leakage.status == "helper_leakage_detected":
+            blockers.append("compiled DAT helper texture leakage detected")
+            blockers.extend(helper_leakage.blockers)
+        elif helper_leakage.status == "helper_leakage_cautions":
+            cautions.append("compiled DAT helper texture placement differs from reference")
+            cautions.extend(helper_leakage.cautions)
+        elif helper_leakage.status == "helper_leakage_clear":
+            notes.append("compiled DAT helper leakage check passed")
+        elif helper_leakage.blockers:
+            blockers.append(f"compiled DAT helper leakage check failed: {helper_leakage.status}")
+            blockers.extend(helper_leakage.blockers)
+        elif helper_leakage.cautions:
+            cautions.append(f"compiled DAT helper leakage check warning: {helper_leakage.status}")
+            cautions.extend(helper_leakage.cautions)
+
     parsed_logs = tuple(_parse_processor_log(path) for path in logs)
     missing_logs = [log for log in parsed_logs if log.status == "missing"]
     if missing_logs:
@@ -3093,6 +4789,7 @@ def build_full_world_skeleton_compiled_validation_report(
         status=status,
         generated_ed_path=ed_path,
         compiled_dat_path=dat_path,
+        helper_reference_dat_path=helper_reference_path,
         processor_log_paths=logs,
         start_point=start_point,
         move_player_to_floor=move_player_to_floor,
@@ -3100,8 +4797,1715 @@ def build_full_world_skeleton_compiled_validation_report(
         physics_floor_drop=physics_floor_drop,
         max_start_floor_drop=max_drop,
         dat=dat_summary,
+        helper_leakage=helper_leakage,
         processor_logs=parsed_logs,
         manual_validation=manual,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_compiled_dat_helper_leakage_report(
+    compiled_dat_path: str,
+    *,
+    reference_dat_path: str = "",
+) -> CompiledDatHelperLeakageReport:
+    """Report helper-textured polygon placement in a compiled DAT.
+
+    This is a post-Processor guardrail.  It does not decide whether helper
+    geometry is semantically correct on its own; it makes suspicious placement
+    obvious, especially helper textures in ``VisBSP`` or Terrain*/render
+    output, and compares those counts to a shipped reference DAT when supplied.
+    """
+    compiled_path = os.path.abspath(compiled_dat_path)
+    reference_path = os.path.abspath(reference_dat_path) if reference_dat_path else ""
+    try:
+        from core import bsp
+    except Exception as exc:
+        return CompiledDatHelperLeakageReport(
+            status="dat_parser_unavailable",
+            compiled_dat_path=compiled_path,
+            reference_dat_path=reference_path,
+            blockers=(f"DAT parser is unavailable: {exc}",),
+        )
+
+    if not os.path.exists(compiled_path):
+        return CompiledDatHelperLeakageReport(
+            status="compiled_dat_missing",
+            compiled_dat_path=compiled_path,
+            reference_dat_path=reference_path,
+            blockers=(f"compiled DAT was not found: {compiled_path}",),
+        )
+    try:
+        with open(compiled_path, "rb") as f:
+            compiled_world = bsp.parse(f.read())
+    except Exception as exc:
+        return CompiledDatHelperLeakageReport(
+            status="compiled_dat_parse_failed",
+            compiled_dat_path=compiled_path,
+            reference_dat_path=reference_path,
+            blockers=(f"compiled DAT parse failed: {exc}",),
+        )
+
+    reference_world = None
+    reference_blockers: List[str] = []
+    reference_cautions: List[str] = []
+    if reference_path:
+        if not os.path.exists(reference_path):
+            reference_cautions.append(f"reference DAT was not found: {reference_path}")
+        else:
+            try:
+                with open(reference_path, "rb") as f:
+                    reference_world = bsp.parse(f.read())
+            except Exception as exc:
+                reference_cautions.append(f"reference DAT parse failed: {exc}")
+
+    report = build_compiled_dat_helper_leakage_report_from_worlds(
+        compiled_world,
+        reference_world=reference_world,
+        compiled_dat_path=compiled_path,
+        reference_dat_path=reference_path,
+    )
+    if reference_blockers:
+        return replace(
+            report,
+            status="helper_leakage_detected",
+            blockers=tuple(_unique_text(tuple(report.blockers) + tuple(reference_blockers))),
+            cautions=tuple(_unique_text(tuple(report.cautions) + tuple(reference_cautions))),
+        )
+    if reference_cautions:
+        status = report.status
+        if status == "helper_leakage_clear":
+            status = "helper_leakage_cautions"
+        return replace(
+            report,
+            status=status,
+            cautions=tuple(_unique_text(tuple(report.cautions) + tuple(reference_cautions))),
+        )
+    return report
+
+
+def build_compiled_dat_helper_leakage_report_from_worlds(
+    compiled_world: object,
+    *,
+    reference_world: Optional[object] = None,
+    compiled_dat_path: str = "",
+    reference_dat_path: str = "",
+) -> CompiledDatHelperLeakageReport:
+    compiled_models = _compiled_dat_helper_model_summaries(compiled_world)
+    reference_models = (
+        _compiled_dat_helper_model_summaries(reference_world)
+        if reference_world is not None
+        else ()
+    )
+    compiled_by_role_kind = _helper_counts_by_role_and_kind(compiled_models)
+    reference_by_role_kind = _helper_counts_by_role_and_kind(reference_models)
+    compiled_by_model_role = _helper_counts_by_model_and_role(compiled_models)
+    reference_by_model_role = _helper_counts_by_model_and_role(reference_models)
+    compiled_role_totals = _helper_role_totals(compiled_models)
+    reference_role_totals = _helper_role_totals(reference_models)
+    roles = sorted(set(compiled_role_totals) | set(reference_role_totals))
+
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = []
+    role_comparisons: List[CompiledDatHelperRoleComparison] = []
+    has_reference = reference_world is not None
+
+    for role in roles:
+        compiled_kind_counts = dict(compiled_by_role_kind.get(role, {}))
+        reference_kind_counts = dict(reference_by_role_kind.get(role, {}))
+        role_notes: List[str] = []
+        role_blocked = False
+        role_cautioned = False
+        for kind in sorted(set(compiled_kind_counts) | set(reference_kind_counts)):
+            compiled_count = int(compiled_kind_counts.get(kind, 0))
+            reference_count = int(reference_kind_counts.get(kind, 0))
+            excess = compiled_count - reference_count
+            if compiled_count <= 0:
+                continue
+            if kind == "visibility_bsp" and excess > 0:
+                role_blocked = True
+                if has_reference:
+                    msg = (
+                        f"{role}: {compiled_count} helper polygon(s) in VisBSP, "
+                        f"reference has {reference_count}"
+                    )
+                else:
+                    msg = f"{role}: {compiled_count} helper polygon(s) in VisBSP"
+                blockers.append(msg)
+                role_notes.append(msg)
+            elif kind == "terrain" and excess > 0:
+                role_blocked = True
+                if has_reference:
+                    msg = (
+                        f"{role}: {compiled_count} helper polygon(s) in Terrain* output, "
+                        f"reference has {reference_count}"
+                    )
+                else:
+                    msg = f"{role}: {compiled_count} helper polygon(s) in Terrain* output"
+                blockers.append(msg)
+                role_notes.append(msg)
+            elif has_reference and excess > 0:
+                role_cautioned = True
+                msg = (
+                    f"{role}: {compiled_count} helper polygon(s) in {kind}, "
+                    f"reference has {reference_count}"
+                )
+                cautions.append(msg)
+                role_notes.append(msg)
+            elif not has_reference and kind == "world_model":
+                role_cautioned = True
+                msg = f"{role}: {compiled_count} helper polygon(s) in object/world-model output"
+                cautions.append(msg)
+                role_notes.append(msg)
+        if role_blocked:
+            status = "leakage_detected"
+        elif role_cautioned:
+            status = "differs_from_reference" if has_reference else "needs_reference"
+        elif int(compiled_role_totals.get(role, 0)) > 0:
+            status = "matches_reference" if has_reference else "helper_present"
+        else:
+            status = "reference_only"
+        role_comparisons.append(CompiledDatHelperRoleComparison(
+            role=role,
+            status=status,
+            compiled_total=int(compiled_role_totals.get(role, 0)),
+            reference_total=int(reference_role_totals.get(role, 0)),
+            compiled_by_model_kind=compiled_kind_counts,
+            reference_by_model_kind=reference_kind_counts,
+            notes=tuple(_unique_text(role_notes)),
+        ))
+
+    if has_reference:
+        for (model_name, role), compiled_count in sorted(compiled_by_model_role.items()):
+            reference_count = int(reference_by_model_role.get((model_name, role), 0))
+            if compiled_count > reference_count and reference_count == 0:
+                cautions.append(
+                    f"{role}: helper texture appears in compiled model {model_name}, absent from reference"
+                )
+    else:
+        notes.append("No reference DAT supplied; visibility/terrain helper placement is still checked.")
+
+    compiled_visibility = _helper_count_for_kind(compiled_models, "visibility_bsp")
+    reference_visibility = _helper_count_for_kind(reference_models, "visibility_bsp")
+    compiled_terrain = _helper_count_for_kind(compiled_models, "terrain")
+    reference_terrain = _helper_count_for_kind(reference_models, "terrain")
+    compiled_world_model = _helper_count_for_kind(compiled_models, "world_model")
+    reference_world_model = _helper_count_for_kind(reference_models, "world_model")
+    compiled_total = sum(item.helper_polygon_count for item in compiled_models)
+    reference_total = sum(item.helper_polygon_count for item in reference_models)
+
+    if blockers:
+        status = "helper_leakage_detected"
+    elif cautions:
+        status = "helper_leakage_cautions"
+    else:
+        status = "helper_leakage_clear"
+    if compiled_total == 0:
+        notes.append("Compiled DAT contains no known helper-textured polygons.")
+    elif not blockers:
+        notes.append("No helper-textured polygons exceeded reference visibility/Terrain placement.")
+
+    return CompiledDatHelperLeakageReport(
+        status=status,
+        compiled_dat_path=os.path.abspath(compiled_dat_path) if compiled_dat_path else "",
+        reference_dat_path=os.path.abspath(reference_dat_path) if reference_dat_path else "",
+        compiled_model_count=len(tuple(getattr(compiled_world, "world_models", ()) or ())),
+        reference_model_count=(
+            len(tuple(getattr(reference_world, "world_models", ()) or ()))
+            if reference_world is not None
+            else 0
+        ),
+        compiled_total_helper_polygon_count=compiled_total,
+        reference_total_helper_polygon_count=reference_total,
+        compiled_visibility_helper_polygon_count=compiled_visibility,
+        reference_visibility_helper_polygon_count=reference_visibility,
+        compiled_terrain_helper_polygon_count=compiled_terrain,
+        reference_terrain_helper_polygon_count=reference_terrain,
+        compiled_world_model_helper_polygon_count=compiled_world_model,
+        reference_world_model_helper_polygon_count=reference_world_model,
+        model_summaries=compiled_models,
+        reference_model_summaries=reference_models,
+        role_comparisons=tuple(role_comparisons),
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_anskramkeep_physics_shell_retest_report(
+    *,
+    source_dat_path: str,
+    work_dir: Optional[str] = None,
+    output_filename: str = "ANSKRAMKEEP_reconstructed_physics_shell_retest.ed",
+    reference_processor_log_path: str = "",
+    current_processor_log_path: str = "",
+    manual_validation: Optional[BlackBoxCompilerManualValidation] = None,
+    physics_shell_max_polygons: int = 864,
+    physics_shell_thickness: float = 16.0,
+) -> AnskramkeepPhysicsShellRetestReport:
+    """Build the current ANSKRAMKEEP shell candidate and compare validation signals.
+
+    This report does not run old DEDit, Processor.exe, or the game. It prepares
+    the generated ED candidate, compares available Processor logs, and records
+    whether visual/collision validation has been supplied.
+    """
+    source_dat = os.path.abspath(source_dat_path)
+    manual = manual_validation or BlackBoxCompilerManualValidation()
+    reference_log_path = os.path.abspath(reference_processor_log_path) if reference_processor_log_path else ""
+    current_log_path = os.path.abspath(current_processor_log_path) if current_processor_log_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "ANSKRAMKEEP PhysicsBSP shell retest report rebuilds the current no-helper candidate for comparison.",
+        "Processor and in-game validation are external manual steps; pass the current Processor log and manual validation results after running them.",
+    ]
+
+    try:
+        from core import bsp
+
+        with open(source_dat, "rb") as f:
+            parsed = bsp.parse(f.read())
+    except Exception as exc:
+        return AnskramkeepPhysicsShellRetestReport(
+            status="anskramkeep_retest_blocked",
+            source_dat_path=source_dat,
+            reference_processor_log_path=reference_log_path,
+            current_processor_log_path=current_log_path,
+            manual_validation=manual,
+            blockers=(f"ANSKRAMKEEP DAT parse failed: {exc}",),
+            notes=tuple(notes),
+        )
+
+    selected_names = terrain_semantics.default_dat_to_ed_model_names(parsed)
+    acceptance = build_full_world_skeleton_acceptance_report(
+        source_dat_path=source_dat,
+        model_names=selected_names,
+        group_name="ANSKRAMKEEP_ReconstructedDAT",
+        work_dir=work_dir,
+        output_filename=output_filename,
+        include_physics_shell_patch=True,
+        physics_shell_name_prefix="ANSKRAMKEEP_PhysicsShell",
+        physics_shell_max_polygons=physics_shell_max_polygons,
+        physics_shell_thickness=physics_shell_thickness,
+        include_physics_shell_source_coverage=True,
+        block_unreconstructed_physics_shell=True,
+        max_processor_brushes=1500,
+        max_processor_polygons=12000,
+        max_models=1500,
+        max_total_points=50000,
+        max_total_polygons=50000,
+    )
+    if acceptance.blockers:
+        blockers.extend(acceptance.blockers)
+    if acceptance.cautions:
+        cautions.extend(acceptance.cautions)
+
+    reference_log = _parse_processor_log(reference_log_path) if reference_log_path else None
+    current_log = _parse_processor_log(current_log_path) if current_log_path else None
+    if reference_log is None:
+        cautions.append("reference Processor log was not supplied; generated candidate counts have no old-log baseline")
+    elif reference_log.status != "loaded":
+        cautions.append(f"reference Processor log did not load: {reference_log.status}")
+    if current_log is None:
+        cautions.append("current Processor log was not supplied; Processor warning/output/runtime comparison is pending")
+    elif current_log.status != "loaded":
+        cautions.append(f"current Processor log did not load: {current_log.status}")
+
+    manual_failed = _manual_validation_failed(manual)
+    manual_passed = _manual_validation_passed(manual)
+    if manual_failed:
+        blockers.append("manual ANSKRAMKEEP in-game validation failed")
+    elif not manual_passed:
+        cautions.append("manual ANSKRAMKEEP fresh-load visual/collision validation is pending")
+    else:
+        notes.append("manual ANSKRAMKEEP fresh-load visual/collision validation passed")
+
+    comparisons = _anskramkeep_physics_shell_retest_metrics(
+        acceptance=acceptance,
+        reference_log=reference_log,
+        current_log=current_log,
+        manual_validation=manual,
+    )
+
+    if blockers:
+        status = "anskramkeep_retest_blocked"
+    elif current_log is not None and current_log.status == "loaded" and manual_passed:
+        status = "anskramkeep_retest_validated"
+    elif current_log is not None and current_log.status == "loaded":
+        status = "anskramkeep_retest_needs_game_validation"
+    else:
+        status = "anskramkeep_retest_needs_processor_run"
+
+    return AnskramkeepPhysicsShellRetestReport(
+        status=status,
+        source_dat_path=source_dat,
+        generated_ed_path=acceptance.generated_ed_path,
+        work_dir=acceptance.work_dir,
+        reference_processor_log_path=reference_log_path,
+        current_processor_log_path=current_log_path,
+        acceptance=acceptance,
+        reference_processor_log=reference_log,
+        current_processor_log=current_log,
+        manual_validation=manual,
+        comparisons=tuple(comparisons),
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def _anskramkeep_physics_shell_retest_metrics(
+    *,
+    acceptance: FullWorldSkeletonAcceptanceReport,
+    reference_log: Optional[BlackBoxProcessorLogSummary],
+    current_log: Optional[BlackBoxProcessorLogSummary],
+    manual_validation: BlackBoxCompilerManualValidation,
+) -> Tuple[AnskramkeepPhysicsShellRetestMetric, ...]:
+    metrics: List[AnskramkeepPhysicsShellRetestMetric] = []
+    reference_loaded = reference_log is not None and reference_log.status == "loaded"
+    current_loaded = current_log is not None and current_log.status == "loaded"
+
+    metrics.append(_retest_numeric_metric(
+        "generated_input_polygons",
+        reference_log.input_polygon_count if reference_loaded else None,
+        current_log.input_polygon_count if current_loaded and current_log.input_polygon_count is not None else acceptance.polygon_count,
+        current_note="current value is generated ED polygon count" if not current_loaded else "",
+    ))
+    metrics.append(_retest_numeric_metric(
+        "unable_to_generate_plane_warnings",
+        _processor_warning_count(reference_log, "** Unable to generate a plane (0)") if reference_loaded else None,
+        _processor_warning_count(current_log, "** Unable to generate a plane (0)") if current_loaded else None,
+    ))
+    metrics.append(_retest_numeric_metric(
+        "processor_output_polygons",
+        reference_log.output_polygon_count if reference_loaded else None,
+        current_log.output_polygon_count if current_loaded else None,
+    ))
+    metrics.append(_retest_numeric_metric(
+        "processor_tree_depth",
+        reference_log.tree_depth if reference_loaded else None,
+        current_log.tree_depth if current_loaded else None,
+    ))
+    metrics.append(_retest_numeric_metric(
+        "processor_unseen_removed_polygons",
+        reference_log.unseen_removed_polygon_count if reference_loaded else None,
+        current_log.unseen_removed_polygon_count if current_loaded else None,
+    ))
+    metrics.append(_retest_numeric_metric(
+        "processor_runtime_minutes",
+        reference_log.runtime_minutes if reference_loaded else None,
+        current_log.runtime_minutes if current_loaded else None,
+    ))
+    metrics.append(_retest_manual_metric("manual_visible_walls", manual_validation.visuals_ok))
+    metrics.append(_retest_manual_metric("manual_collision", manual_validation.collision_ok))
+    return tuple(metrics)
+
+
+def _retest_numeric_metric(
+    metric: str,
+    previous: Optional[float],
+    current: Optional[float],
+    *,
+    current_note: str = "",
+) -> AnskramkeepPhysicsShellRetestMetric:
+    notes = (current_note,) if current_note else ()
+    if previous is None or current is None:
+        return AnskramkeepPhysicsShellRetestMetric(
+            metric=metric,
+            status="pending",
+            previous=_metric_value_text(previous),
+            current=_metric_value_text(current),
+            notes=notes,
+        )
+    delta = float(current) - float(previous)
+    return AnskramkeepPhysicsShellRetestMetric(
+        metric=metric,
+        status="same" if abs(delta) <= 1.0e-9 else "changed",
+        previous=_metric_value_text(previous),
+        current=_metric_value_text(current),
+        delta=_metric_value_text(delta, force_sign=True),
+        notes=notes,
+    )
+
+
+def _retest_manual_metric(metric: str, value: Optional[bool]) -> AnskramkeepPhysicsShellRetestMetric:
+    if value is True:
+        status = "passed"
+        current = "true"
+    elif value is False:
+        status = "failed"
+        current = "false"
+    else:
+        status = "pending"
+        current = "unknown"
+    return AnskramkeepPhysicsShellRetestMetric(metric=metric, status=status, current=current)
+
+
+def _processor_warning_count(log: Optional[BlackBoxProcessorLogSummary], warning: str) -> Optional[int]:
+    if log is None or log.status != "loaded":
+        return None
+    return int(log.warning_counts.get(warning, 0))
+
+
+def _metric_value_text(value: Optional[float], *, force_sign: bool = False) -> str:
+    if value is None:
+        return "unknown"
+    if isinstance(value, int) or float(value).is_integer():
+        number = int(value)
+        return f"{number:+d}" if force_sign else str(number)
+    return f"{float(value):+.3f}" if force_sign else f"{float(value):.3f}"
+
+
+def build_airail_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+    max_object_match_distance: float = 512.0,
+    ambiguous_distance_epsilon: float = 16.0,
+) -> AirailReconstructionReport:
+    """Correlate DAT aiRail helper models with optional source ED AIRail evidence."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "AIRail reconstruction reports are semantic diagnostics; full-world generation can emit AIRail objects when enabled.",
+        "DAT aiRail helper models are identified by helper texture role, then matched to shipped ED AIRail objects when a source ED oracle is supplied.",
+    ]
+
+    try:
+        from core import bsp
+
+        with open(source_dat, "rb") as f:
+            parsed = bsp.parse(f.read())
+    except Exception as exc:
+        return AirailReconstructionReport(
+            status="airail_reconstruction_blocked",
+            source_dat_path=source_dat,
+            source_ed_path=source_ed,
+            blockers=(f"DAT parse failed: {exc}",),
+            notes=tuple(notes),
+        )
+
+    ai_models: List[Tuple[int, object, PrefabSurrogateCompositeModelSummary]] = []
+    for model_index, model in enumerate(getattr(parsed, "world_models", ()) or ()):
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        if helper_roles.get("aiRail", 0) <= 0:
+            continue
+        if not terrain_semantics.model_has_only_helper_textures(model):
+            continue
+        ai_models.append((int(model_index), model, _composite_model_summary(model)))
+
+    source_airail_objects: Tuple[AirailOracleObject, ...] = ()
+    source_rail_brushes: Tuple[AirailRailBrushOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_airail_objects = _airail_oracle_objects(source_ed)
+                source_rail_brushes = _airail_rail_brush_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; nearest original AIRail pattern is pending")
+
+    candidates: List[AirailReconstructionCandidate] = []
+    for model_index, model, summary in ai_models:
+        candidate = _airail_reconstruction_candidate(
+            model_index,
+            summary,
+            source_airail_objects=source_airail_objects,
+            source_rail_brushes=source_rail_brushes,
+            max_object_match_distance=max_object_match_distance,
+            ambiguous_distance_epsilon=ambiguous_distance_epsilon,
+        )
+        candidates.append(candidate)
+
+    generated_count = sum(1 for candidate in candidates if candidate.status == "matched_source_airail")
+    ambiguous_count = sum(1 for candidate in candidates if candidate.status == "ambiguous_source_airail")
+    skipped_count = sum(1 for candidate in candidates if candidate.status not in {"matched_source_airail"})
+
+    if blockers:
+        status = "airail_reconstruction_blocked"
+    elif not candidates:
+        status = "airail_reconstruction_no_airail_helpers"
+    elif not source_airail_objects:
+        status = "airail_reconstruction_needs_source_oracle"
+    elif generated_count:
+        status = "airail_reconstruction_report_built"
+    else:
+        status = "airail_reconstruction_no_matches"
+
+    return AirailReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_helper_model_count=len(ai_models),
+        source_helper_polygon_count=sum(summary.polygon_count for _index, _model, summary in ai_models),
+        source_airail_object_count=len(source_airail_objects),
+        source_rail_brush_count=len(source_rail_brushes),
+        generated_object_count=generated_count,
+        skipped_candidate_count=skipped_count,
+        ambiguous_candidate_count=ambiguous_count,
+        candidates=tuple(candidates),
+        source_airail_objects=source_airail_objects,
+        source_rail_brushes=source_rail_brushes,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+_SKY_OBJECT_CLASSES = {"TOD_Sky", "SkyPointer", "DemoSkyWorldModel"}
+
+
+def build_sky_helper_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+) -> SkyHelperReconstructionReport:
+    """Report DAT sky visibility evidence and source ED sky object oracle records."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "Sky helper reconstruction reports are semantic diagnostics; full-world generation can copy source ED sky objects when enabled.",
+        "DAT sky visibility helpers are often embedded in PhysicsBSP/VisBSP rather than isolated same-name helper models.",
+        "SkyMarker Brush reconstruction remains evidence-only in this pass.",
+    ]
+
+    try:
+        from core import bsp
+
+        with open(source_dat, "rb") as f:
+            parsed = bsp.parse(f.read())
+    except Exception as exc:
+        return SkyHelperReconstructionReport(
+            status="sky_helper_reconstruction_blocked",
+            source_dat_path=source_dat,
+            source_ed_path=source_ed,
+            blockers=(f"DAT parse failed: {exc}",),
+            notes=tuple(notes),
+        )
+
+    helper_models: List[Tuple[int, object, PrefabSurrogateCompositeModelSummary, Dict[str, int], bool]] = []
+    for model_index, model in enumerate(getattr(parsed, "world_models", ()) or ()):
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        if int(helper_roles.get("skyVisibility", 0)) <= 0:
+            continue
+        helper_models.append((
+            int(model_index),
+            model,
+            _composite_model_summary(model),
+            dict(helper_roles),
+            bool(terrain_semantics.model_has_only_helper_textures(model)),
+        ))
+
+    source_sky_objects: Tuple[SkyObjectOracle, ...] = ()
+    source_sky_marker_brushes: Tuple[SkyMarkerBrushOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_sky_objects = _sky_object_oracles(source_ed)
+                source_sky_marker_brushes = _sky_marker_brush_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; sky object copying is pending")
+
+    candidates: List[SkyHelperReconstructionCandidate] = []
+    for model_index, _model, summary, helper_roles, pure_helper in helper_models:
+        notes_for_candidate: List[str] = []
+        status = "source_visibility_evidence"
+        if pure_helper:
+            status = "pure_sky_helper_source"
+            notes_for_candidate.append("model uses only helper textures and can be reserved for sky semantics")
+        else:
+            notes_for_candidate.append("sky visibility faces are embedded in mixed system geometry")
+        candidates.append(SkyHelperReconstructionCandidate(
+            source_model_name=summary.name,
+            source_model_index=model_index,
+            helper_roles=dict(helper_roles),
+            pure_helper_model=bool(pure_helper),
+            polygon_count=summary.polygon_count,
+            bounds_min=summary.bounds_min,
+            bounds_max=summary.bounds_max,
+            center=summary.center,
+            status=status,
+            notes=tuple(notes_for_candidate),
+        ))
+
+    pure_count = sum(1 for _index, _model, _summary, _roles, pure in helper_models if pure)
+    sky_marker_face_count = sum(item.sky_face_count for item in source_sky_marker_brushes)
+    if blockers:
+        status = "sky_helper_reconstruction_blocked"
+    elif not helper_models and not source_sky_objects:
+        status = "sky_helper_reconstruction_no_sky_evidence"
+    elif not source_sky_objects:
+        status = "sky_helper_reconstruction_needs_source_oracle"
+    else:
+        status = "sky_helper_reconstruction_report_built"
+
+    return SkyHelperReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_helper_model_count=len(helper_models),
+        source_helper_polygon_count=sum(int(roles.get("skyVisibility", 0)) for _index, _model, _summary, roles, _pure in helper_models),
+        source_sky_object_count=len(source_sky_objects),
+        source_sky_marker_brush_count=len(source_sky_marker_brushes),
+        source_sky_marker_face_count=sky_marker_face_count,
+        generated_object_count=len(source_sky_objects),
+        pure_helper_model_count=pure_count,
+        candidates=tuple(candidates),
+        source_sky_objects=source_sky_objects,
+        source_sky_marker_brushes=source_sky_marker_brushes,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_sky_marker_compiled_residue_report(
+    *,
+    source_ed_path: str,
+    compiled_dat_path: str,
+    generated_compiled_dat_path: str = "",
+) -> SkyMarkerCompiledResidueReport:
+    """Compare source ED SkyMarker shell evidence with compiled DAT residues."""
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    compiled_dat = os.path.abspath(compiled_dat_path) if compiled_dat_path else ""
+    generated_dat = os.path.abspath(generated_compiled_dat_path) if generated_compiled_dat_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "SkyMarker compiled residue reports measure the shipped compiler target for sky helper shell behavior.",
+        "The game-bound generator should preserve sky objects but avoid copying the source SkyMarker Brush shell until this residue pattern can be reproduced safely.",
+    ]
+
+    source_brushes: Tuple[SkyMarkerBrushOracle, ...] = ()
+    source_faces: Tuple[_SkyMarkerSourceFaceEvidence, ...] = ()
+    source_flag_counts: Dict[str, int] = {}
+    if not source_ed:
+        blockers.append("source ED oracle was not supplied")
+    elif not os.path.exists(source_ed):
+        blockers.append(f"source ED oracle was not found: {source_ed}")
+    else:
+        try:
+            source_brushes = _sky_marker_brush_oracles(source_ed)
+            source_faces = _sky_marker_source_face_evidence(source_ed)
+            source_flag_counts = _sky_marker_brush_flag_counts(source_ed)
+        except Exception as exc:
+            blockers.append(f"source ED SkyMarker scan failed: {exc}")
+
+    compiled_summaries: Tuple[CompiledDatHelperModelSummary, ...] = ()
+    compiled_residue_polygons: Tuple[_SkyMarkerCompiledResiduePolygon, ...] = ()
+    compiled_structural_centers: Tuple[Tuple[float, float, float], ...] = ()
+    if not compiled_dat:
+        blockers.append("compiled DAT was not supplied")
+    elif not os.path.exists(compiled_dat):
+        blockers.append(f"compiled DAT was not found: {compiled_dat}")
+    else:
+        try:
+            from core import bsp
+
+            with open(compiled_dat, "rb") as f:
+                compiled_world = bsp.parse(f.read())
+            compiled_summaries = _compiled_dat_helper_model_summaries(compiled_world)
+            compiled_residue_polygons = _compiled_sky_marker_residue_polygons(compiled_world)
+            compiled_structural_centers = _compiled_structural_polygon_centers(compiled_world)
+        except Exception as exc:
+            blockers.append(f"compiled DAT parse failed: {exc}")
+
+    generated_summaries: Tuple[CompiledDatHelperModelSummary, ...] = ()
+    if generated_dat:
+        if not os.path.exists(generated_dat):
+            cautions.append(f"generated compiled DAT was not found: {generated_dat}")
+        else:
+            try:
+                from core import bsp
+
+                with open(generated_dat, "rb") as f:
+                    generated_world = bsp.parse(f.read())
+                generated_summaries = _compiled_dat_helper_model_summaries(generated_world)
+            except Exception as exc:
+                cautions.append(f"generated compiled DAT parse failed: {exc}")
+
+    source_face_count = sum(item.sky_face_count for item in source_brushes)
+    compiled_total = _compiled_helper_role_total(compiled_summaries, "skyVisibility")
+    compiled_physics = _compiled_helper_role_count_for_kind(compiled_summaries, "skyVisibility", "physics_bsp")
+    compiled_visibility = _compiled_helper_role_count_for_kind(compiled_summaries, "skyVisibility", "visibility_bsp")
+    compiled_terrain = _compiled_helper_role_count_for_kind(compiled_summaries, "skyVisibility", "terrain")
+    compiled_world_models = _compiled_helper_role_count_for_kind(compiled_summaries, "skyVisibility", "world_model")
+    generated_total = _compiled_helper_role_total(generated_summaries, "skyVisibility")
+    generated_physics = _compiled_helper_role_count_for_kind(generated_summaries, "skyVisibility", "physics_bsp")
+    generated_visibility = _compiled_helper_role_count_for_kind(generated_summaries, "skyVisibility", "visibility_bsp")
+    generated_terrain = _compiled_helper_role_count_for_kind(generated_summaries, "skyVisibility", "terrain")
+    generated_world_models = _compiled_helper_role_count_for_kind(generated_summaries, "skyVisibility", "world_model")
+
+    residue_matches = _sky_marker_compiled_residue_matches(source_faces, compiled_residue_polygons)
+    matched_residue_matches = tuple(
+        item
+        for item in residue_matches
+        if item.source_model_index >= 0 and not item.status.startswith("unmatched")
+    )
+    unmatched_residue_count = len(residue_matches) - len(matched_residue_matches)
+    matched_source_faces = {
+        (item.source_model_index, item.source_face_index)
+        for item in matched_residue_matches
+    }
+    matched_source_brushes = {
+        (item.source_model_index, item.source_brush_name)
+        for item in matched_residue_matches
+    }
+    matched_flag_counts: Dict[str, int] = {}
+    for item in matched_residue_matches:
+        for flag_name in item.source_brush_flags:
+            matched_flag_counts[flag_name] = int(matched_flag_counts.get(flag_name, 0)) + 1
+    matched_plane_distances = [
+        float(item.plane_distance)
+        for item in matched_residue_matches
+        if item.plane_distance is not None
+    ]
+    matched_center_distances = [
+        float(item.center_distance)
+        for item in matched_residue_matches
+        if item.center_distance is not None
+    ]
+    matched_normal_dots = [
+        float(item.normal_dot)
+        for item in matched_residue_matches
+        if item.normal_dot is not None
+    ]
+    max_match_plane_distance = max(matched_plane_distances) if matched_plane_distances else None
+    max_match_center_distance = max(matched_center_distances) if matched_center_distances else None
+    min_match_normal_dot = min(matched_normal_dots) if matched_normal_dots else None
+    nearest_world_geometry_distances = _nearest_source_face_world_geometry_distances(
+        source_faces,
+        compiled_structural_centers,
+    )
+    matched_source_face_evidence = tuple(
+        item
+        for item in source_faces
+        if _sky_marker_face_key(item) in matched_source_faces
+    )
+    unmatched_source_face_evidence = tuple(
+        item
+        for item in source_faces
+        if _sky_marker_face_key(item) not in matched_source_faces
+    )
+    matched_source_face_summary = _sky_marker_source_face_cohort_summary(
+        "matched_source_faces",
+        matched_source_face_evidence,
+        nearest_world_geometry_distances,
+    )
+    unmatched_source_face_summary = _sky_marker_source_face_cohort_summary(
+        "unmatched_source_faces",
+        unmatched_source_face_evidence,
+        nearest_world_geometry_distances,
+    )
+    residue_rule_candidates = _sky_marker_residue_rule_candidates(
+        source_faces,
+        matched_source_faces,
+        nearest_world_geometry_distances,
+    )
+    non_oracle_rule_candidates = tuple(
+        item for item in residue_rule_candidates if item.status != "oracle_target"
+    )
+    exact_non_oracle_rule_candidates = tuple(
+        item
+        for item in non_oracle_rule_candidates
+        if item.unmatched_source_face_count == 0 and item.missed_matched_source_face_count == 0
+    )
+    best_non_oracle_rule = max(
+        non_oracle_rule_candidates,
+        key=lambda item: (
+            float(item.recall or 0.0),
+            float(item.precision or 0.0),
+            -int(item.selected_source_face_count),
+        ),
+        default=None,
+    )
+
+    if compiled_visibility:
+        blockers.append(
+            f"compiled reference has {compiled_visibility} SkyMarker polygon(s) in VisBSP; expected hidden PhysicsBSP-only residue"
+        )
+    if compiled_terrain:
+        blockers.append(
+            f"compiled reference has {compiled_terrain} SkyMarker polygon(s) in Terrain* output"
+        )
+    if compiled_world_models:
+        cautions.append(
+            f"compiled reference has {compiled_world_models} SkyMarker polygon(s) in ordinary world-model output"
+        )
+    if compiled_total and not compiled_physics:
+        cautions.append("compiled reference has SkyMarker residue but none in PhysicsBSP")
+    if source_face_count and not compiled_total and not blockers:
+        cautions.append("source ED has SkyMarker shell faces but compiled DAT has no SkyMarker residue")
+    if generated_visibility:
+        blockers.append(
+            f"generated compiled DAT has {generated_visibility} SkyMarker polygon(s) in VisBSP; helper shell is visible-risk"
+        )
+    if compiled_total != len(compiled_residue_polygons):
+        cautions.append(
+            f"compiled helper summary counted {compiled_total} SkyMarker polygon(s), but geometry correlation extracted {len(compiled_residue_polygons)}"
+        )
+    if residue_matches and unmatched_residue_count:
+        cautions.append(
+            f"{unmatched_residue_count}/{len(residue_matches)} compiled SkyMarker residue polygon(s) could not be correlated to source faces"
+        )
+
+    ratio: Optional[float] = None
+    if source_face_count:
+        ratio = float(compiled_physics) / float(source_face_count)
+        notes.append(
+            f"Compiled PhysicsBSP keeps {compiled_physics}/{source_face_count} source SkyMarker face-equivalent residue(s)."
+        )
+    if compiled_physics and not compiled_visibility and not compiled_terrain:
+        notes.append("Compiled SkyMarker residue is PhysicsBSP-only, matching the desired hidden-helper target.")
+    if source_flag_counts:
+        notes.append(
+            "Source SkyMarker Brush flags: "
+            + ", ".join(f"{name}={count}" for name, count in sorted(source_flag_counts.items()))
+            + "."
+        )
+    if residue_matches:
+        notes.append(
+            f"Correlated {len(matched_residue_matches)}/{len(residue_matches)} compiled SkyMarker residue polygon(s) to source ED SkyMarker faces."
+        )
+    if matched_flag_counts:
+        notes.append(
+            "Matched residue source Brush flags: "
+            + ", ".join(f"{name}={count}" for name, count in sorted(matched_flag_counts.items()))
+            + "."
+        )
+    if matched_residue_matches and max_match_plane_distance is not None and min_match_normal_dot is not None:
+        if max_match_plane_distance <= 1.0 and min_match_normal_dot >= 0.999:
+            notes.append(
+                "Matched residues share source SkyMarker face planes/normals; center deltas are expected from Processor clipping or polygon merging."
+            )
+    if matched_source_face_evidence and unmatched_source_face_evidence:
+        notes.append(
+            f"Source SkyMarker face cohorts: matched={len(matched_source_face_evidence)}, unmatched={len(unmatched_source_face_evidence)}."
+        )
+    if residue_rule_candidates and not exact_non_oracle_rule_candidates:
+        if best_non_oracle_rule is not None:
+            notes.append(
+                "No non-oracle SkyMarker source-face rule is exact yet; "
+                f"best current heuristic is {best_non_oracle_rule.rule_name} "
+                f"(precision={_optional_float_text(best_non_oracle_rule.precision)}, "
+                f"recall={_optional_float_text(best_non_oracle_rule.recall)})."
+            )
+        else:
+            notes.append("No non-oracle SkyMarker source-face rule candidates were available.")
+
+    if blockers:
+        status = "sky_marker_compiled_residue_blocked"
+    elif cautions:
+        status = "sky_marker_compiled_residue_with_cautions"
+    else:
+        status = "sky_marker_compiled_residue_report_built"
+
+    return SkyMarkerCompiledResidueReport(
+        status=status,
+        source_ed_path=source_ed,
+        compiled_dat_path=compiled_dat,
+        generated_compiled_dat_path=generated_dat,
+        source_sky_marker_brush_count=len(source_brushes),
+        source_sky_marker_face_count=source_face_count,
+        source_brush_flag_counts=dict(source_flag_counts),
+        compiled_sky_visibility_polygon_count=compiled_total,
+        compiled_physics_sky_visibility_polygon_count=compiled_physics,
+        compiled_visibility_sky_visibility_polygon_count=compiled_visibility,
+        compiled_terrain_sky_visibility_polygon_count=compiled_terrain,
+        compiled_world_model_sky_visibility_polygon_count=compiled_world_models,
+        generated_sky_visibility_polygon_count=generated_total,
+        generated_physics_sky_visibility_polygon_count=generated_physics,
+        generated_visibility_sky_visibility_polygon_count=generated_visibility,
+        generated_terrain_sky_visibility_polygon_count=generated_terrain,
+        generated_world_model_sky_visibility_polygon_count=generated_world_models,
+        source_to_compiled_ratio=ratio,
+        compiled_residue_match_count=len(matched_residue_matches),
+        compiled_residue_unmatched_count=unmatched_residue_count,
+        matched_source_sky_marker_face_count=len(matched_source_faces),
+        matched_source_sky_marker_brush_count=len(matched_source_brushes),
+        matched_source_brush_flag_counts=dict(sorted(matched_flag_counts.items())),
+        max_match_center_distance=max_match_center_distance,
+        max_match_plane_distance=max_match_plane_distance,
+        min_match_normal_dot=min_match_normal_dot,
+        source_face_matched_summary=matched_source_face_summary,
+        source_face_unmatched_summary=unmatched_source_face_summary,
+        residue_rule_candidates=residue_rule_candidates,
+        source_sky_marker_brushes=source_brushes,
+        compiled_residue_matches=residue_matches,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_sky_marker_residue_compile_audit_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str,
+    reference_dat_path: str = "",
+    work_dir: Optional[str] = None,
+    model_names: Sequence[str] = ("MonsterDoor1",),
+    group_name: str = "GeneratedSkyMarkerResidueDiagnostic",
+    output_filename: str = "",
+    compiled_dat_path: str = "",
+    processor_log_paths: Sequence[str] = (),
+) -> SkyMarkerResidueCompileAuditReport:
+    """Generate and optionally post-audit the SkyMarker matched-face diagnostic.
+
+    The generated ED is a Processor experiment, not a game-bound default.  When
+    *compiled_dat_path* is supplied, this report runs the helper-leakage guard
+    against *reference_dat_path* (or the source DAT by default).
+    """
+    source_dat = os.path.abspath(source_dat_path) if source_dat_path else ""
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    reference_dat = os.path.abspath(reference_dat_path) if reference_dat_path else source_dat
+    compiled_dat = os.path.abspath(compiled_dat_path) if compiled_dat_path else ""
+    logs = tuple(os.path.abspath(path) for path in processor_log_paths if path)
+    work_root = os.path.abspath(work_dir) if work_dir else tempfile.mkdtemp(prefix="mm9_skyresidue_")
+    source_stem = _safe_filename_component(os.path.splitext(os.path.basename(source_dat or "world"))[0])
+    generated_filename = (
+        os.path.basename(output_filename)
+        if output_filename
+        else f"{source_stem}_sky_marker_residue_diagnostic.ed"
+    )
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "SkyMarker residue compile audits prepare a matched-face ED diagnostic and validate the compiled DAT helper placement after Processor.",
+        "The residue face set is an oracle diagnostic derived from a shipped compiled DAT reference, not a standalone reconstruction rule.",
+    ]
+    manual_steps: List[str] = [
+        "Open the generated ED in old DEDit and confirm the SkyMarker residue Brush records are present with only the matched source faces.",
+        "Save/compile the world through LithTech 2.1 Processor using the normal MM9 project data directory.",
+        "Pass the resulting DAT path back into this audit report as compiled_dat_path.",
+        "Accept the diagnostic only if helper leakage is clear: no SkyMarker textures in VisBSP or Terrain* output, and no excess helper placement versus the shipped reference.",
+    ]
+
+    residue_report: Optional[SkyMarkerCompiledResidueReport] = None
+    if source_ed and reference_dat:
+        residue_report = build_sky_marker_compiled_residue_report(
+            source_ed_path=source_ed,
+            compiled_dat_path=reference_dat,
+        )
+        if residue_report.blockers:
+            blockers.append("SkyMarker residue reference correlation failed")
+            blockers.extend(residue_report.blockers)
+        elif residue_report.compiled_residue_match_count <= 0:
+            blockers.append("SkyMarker residue reference correlation produced no matched faces")
+        else:
+            notes.append(
+                f"Reference correlation matched {residue_report.compiled_residue_match_count} compiled residue polygon(s) to {residue_report.matched_source_sky_marker_face_count} source face(s)."
+            )
+    else:
+        if not source_ed:
+            blockers.append("source ED oracle was not supplied")
+        if not reference_dat:
+            blockers.append("compiled DAT reference was not supplied")
+
+    acceptance: Optional[FullWorldSkeletonAcceptanceReport] = None
+    if not blockers:
+        acceptance = build_full_world_skeleton_acceptance_report(
+            source_dat_path=source_dat,
+            model_names=model_names,
+            group_name=group_name,
+            work_dir=work_root,
+            output_filename=generated_filename,
+            include_sky_objects=True,
+            sky_source_ed_path=source_ed,
+            include_sky_marker_residue_brushes=True,
+            sky_marker_residue_reference_dat_path=reference_dat,
+            max_models=512,
+            max_model_points=16384,
+            max_model_polygons=16384,
+            max_total_points=65536,
+            max_total_polygons=65536,
+        )
+        if acceptance.status != "ready_for_manual_full_world_skeleton_test":
+            blockers.append(f"SkyMarker residue diagnostic ED generation failed: {acceptance.status}")
+            blockers.extend(acceptance.blockers)
+        else:
+            notes.append(
+                f"Generated SkyMarker residue diagnostic ED: {acceptance.generated_ed_path}."
+            )
+            notes.append(
+                f"Generated diagnostic contains {acceptance.model_count} Brush record(s) and {acceptance.polygon_count} polygon(s)."
+            )
+            cautions.extend(acceptance.cautions)
+
+    helper_leakage: Optional[CompiledDatHelperLeakageReport] = None
+    if compiled_dat:
+        helper_leakage = build_compiled_dat_helper_leakage_report(
+            compiled_dat,
+            reference_dat_path=reference_dat,
+        )
+        if helper_leakage.status == "helper_leakage_detected":
+            blockers.append("compiled SkyMarker residue diagnostic has helper texture leakage")
+            blockers.extend(helper_leakage.blockers)
+        elif helper_leakage.status == "helper_leakage_cautions":
+            cautions.append("compiled SkyMarker residue diagnostic differs from helper reference")
+            cautions.extend(helper_leakage.cautions)
+        elif helper_leakage.status == "helper_leakage_clear":
+            notes.append("compiled SkyMarker residue diagnostic helper leakage check passed")
+        elif helper_leakage.blockers:
+            blockers.append(f"compiled helper leakage check failed: {helper_leakage.status}")
+            blockers.extend(helper_leakage.blockers)
+        elif helper_leakage.cautions:
+            cautions.append(f"compiled helper leakage check warning: {helper_leakage.status}")
+            cautions.extend(helper_leakage.cautions)
+    else:
+        cautions.append("compiled DAT was not supplied; Processor/leakage audit is pending")
+
+    processor_logs = tuple(_parse_processor_log(path) for path in logs)
+    for log in processor_logs:
+        if log.status == "missing":
+            cautions.append(f"Processor log was not found: {log.path}")
+        elif log.problem_brush_count:
+            cautions.append(f"Processor reported {log.problem_brush_count} problem brush(es)")
+        if log.warnings:
+            cautions.append("Processor emitted warning(s)")
+
+    if blockers:
+        status = "sky_marker_residue_compile_audit_failed"
+    elif helper_leakage is None:
+        status = "sky_marker_residue_candidate_ready_for_processor"
+    elif helper_leakage.status == "helper_leakage_clear":
+        status = "sky_marker_residue_helper_leakage_clear"
+    else:
+        status = "sky_marker_residue_compile_audit_with_cautions"
+
+    return SkyMarkerResidueCompileAuditReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        reference_dat_path=reference_dat,
+        work_dir=work_root,
+        generated_ed_path=acceptance.generated_ed_path if acceptance is not None else "",
+        compiled_dat_path=compiled_dat,
+        processor_log_paths=logs,
+        acceptance=acceptance,
+        residue_report=residue_report,
+        helper_leakage=helper_leakage,
+        processor_logs=processor_logs,
+        manual_steps=tuple(manual_steps),
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_sound_helper_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+) -> SoundHelperReconstructionReport:
+    """Report DAT SoundOnly evidence and source ED AmbientSound object records."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "Sound helper reconstruction reports are semantic diagnostics; full-world generation can copy source ED AmbientSound objects when enabled.",
+        "DAT SoundOnly helpers are often embedded in PhysicsBSP/VisBSP rather than isolated same-name helper models.",
+        "SoundOnly Brush volume reconstruction remains diagnostic-only until compiled-DAT leakage is understood.",
+    ]
+
+    try:
+        from core import bsp
+
+        with open(source_dat, "rb") as f:
+            parsed = bsp.parse(f.read())
+    except Exception as exc:
+        return SoundHelperReconstructionReport(
+            status="sound_helper_reconstruction_blocked",
+            source_dat_path=source_dat,
+            source_ed_path=source_ed,
+            blockers=(f"DAT parse failed: {exc}",),
+            notes=tuple(notes),
+        )
+
+    helper_models: List[Tuple[int, object, PrefabSurrogateCompositeModelSummary, Dict[str, int], bool]] = []
+    for model_index, model in enumerate(getattr(parsed, "world_models", ()) or ()):
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        if int(helper_roles.get("sound", 0)) <= 0:
+            continue
+        helper_models.append((
+            int(model_index),
+            model,
+            _composite_model_summary(model),
+            dict(helper_roles),
+            bool(terrain_semantics.model_has_only_helper_textures(model)),
+        ))
+
+    source_sound_objects: Tuple[SoundObjectOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_sound_objects = _sound_object_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; AmbientSound object copying is pending")
+
+    candidates: List[SoundHelperReconstructionCandidate] = []
+    for model_index, _model, summary, helper_roles, pure_helper in helper_models:
+        candidate_notes: List[str] = []
+        status = "source_sound_evidence"
+        if pure_helper:
+            status = "pure_sound_helper_source"
+            candidate_notes.append("model uses only SoundOnly helper textures and can be reserved for sound semantics")
+        else:
+            candidate_notes.append("SoundOnly faces are embedded in mixed system geometry")
+        candidates.append(SoundHelperReconstructionCandidate(
+            source_model_name=summary.name,
+            source_model_index=model_index,
+            helper_roles=dict(helper_roles),
+            pure_helper_model=bool(pure_helper),
+            polygon_count=summary.polygon_count,
+            bounds_min=summary.bounds_min,
+            bounds_max=summary.bounds_max,
+            center=summary.center,
+            status=status,
+            notes=tuple(candidate_notes),
+        ))
+
+    pure_count = sum(1 for _index, _model, _summary, _roles, pure in helper_models if pure)
+    if blockers:
+        status = "sound_helper_reconstruction_blocked"
+    elif not helper_models and not source_sound_objects:
+        status = "sound_helper_reconstruction_no_sound_evidence"
+    elif not source_sound_objects:
+        status = "sound_helper_reconstruction_needs_source_oracle"
+    else:
+        status = "sound_helper_reconstruction_report_built"
+
+    return SoundHelperReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_helper_model_count=len(helper_models),
+        source_helper_polygon_count=sum(int(roles.get("sound", 0)) for _index, _model, _summary, roles, _pure in helper_models),
+        source_sound_object_count=len(source_sound_objects),
+        generated_object_count=len(source_sound_objects),
+        pure_helper_model_count=pure_count,
+        candidates=tuple(candidates),
+        source_sound_objects=source_sound_objects,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_gameplay_trigger_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+) -> GameplayTriggerReconstructionReport:
+    """Report source ED gameplay Trigger/ExitTrigger/PortalTrigger records."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "Gameplay trigger reconstruction reports are source-oracle diagnostics; full-world generation can copy Trigger, ExitTrigger, and PortalTrigger object records when enabled.",
+        "Trigger helper PortalZone records are handled by the trigger-helper semantic path; this report covers runtime gameplay trigger objects only.",
+    ]
+
+    if not os.path.exists(source_dat):
+        blockers.append(f"source DAT was not found: {source_dat}")
+    else:
+        try:
+            from core import bsp
+
+            with open(source_dat, "rb") as f:
+                bsp.parse(f.read())
+        except Exception as exc:
+            blockers.append(f"DAT parse failed: {exc}")
+
+    source_trigger_objects: Tuple[GameplayTriggerObjectOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_trigger_objects = _gameplay_trigger_object_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; gameplay trigger object copying is pending")
+
+    class_counts: Dict[str, int] = {}
+    destination_worlds: List[str] = []
+    portal_names: List[str] = []
+    target_reference_count = 0
+    for item in source_trigger_objects:
+        class_counts[item.class_name] = class_counts.get(item.class_name, 0) + 1
+        target_reference_count += int(item.target_count)
+        if item.destination_world:
+            destination_worlds.append(item.destination_world)
+        if item.portal_name:
+            portal_names.append(item.portal_name)
+
+    if blockers:
+        status = "gameplay_trigger_reconstruction_blocked"
+    elif not source_trigger_objects:
+        status = "gameplay_trigger_reconstruction_needs_source_oracle"
+    else:
+        status = "gameplay_trigger_reconstruction_report_built"
+
+    return GameplayTriggerReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_trigger_object_count=len(source_trigger_objects),
+        generated_object_count=len(source_trigger_objects),
+        class_counts=dict(sorted(class_counts.items())),
+        target_reference_count=target_reference_count,
+        destination_worlds=tuple(dict.fromkeys(destination_worlds)),
+        portal_names=tuple(dict.fromkeys(portal_names)),
+        source_trigger_objects=source_trigger_objects,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_static_prop_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+) -> StaticPropReconstructionReport:
+    """Report source ED generic Prop object records for object-only copying."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "Static Prop reconstruction reports are source-oracle diagnostics; full-world generation can copy generic Prop object records when enabled.",
+        "Behavior-rich prop subclasses are intentionally excluded from this first static-prop pass.",
+    ]
+
+    if not os.path.exists(source_dat):
+        blockers.append(f"source DAT was not found: {source_dat}")
+    else:
+        try:
+            from core import bsp
+
+            with open(source_dat, "rb") as f:
+                bsp.parse(f.read())
+        except Exception as exc:
+            blockers.append(f"DAT parse failed: {exc}")
+
+    source_prop_objects: Tuple[StaticPropObjectOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_prop_objects = _static_prop_object_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; static Prop object copying is pending")
+
+    filename_counts: Dict[str, int] = {}
+    skins = set()
+    solid_count = 0
+    move_to_floor_count = 0
+    for item in source_prop_objects:
+        if item.filename:
+            filename_counts[item.filename] = filename_counts.get(item.filename, 0) + 1
+        if item.skin:
+            skins.add(item.skin)
+        if item.solid is True:
+            solid_count += 1
+        if item.move_to_floor is True:
+            move_to_floor_count += 1
+
+    top_filenames = tuple(
+        sorted(filename_counts.items(), key=lambda item: (-item[1], item[0].lower()))[:8]
+    )
+    if blockers:
+        status = "static_prop_reconstruction_blocked"
+    elif not source_prop_objects:
+        status = "static_prop_reconstruction_needs_source_oracle"
+    else:
+        status = "static_prop_reconstruction_report_built"
+
+    return StaticPropReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_prop_object_count=len(source_prop_objects),
+        generated_object_count=len(source_prop_objects),
+        unique_model_count=len(filename_counts),
+        unique_skin_count=len(skins),
+        solid_count=solid_count,
+        move_to_floor_count=move_to_floor_count,
+        top_filenames=top_filenames,
+        source_prop_objects=source_prop_objects,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_behavior_prop_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+) -> BehaviorPropReconstructionReport:
+    """Report source ED behavior-rich prop subclasses before object copying."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "Behavior prop reconstruction reports are source-oracle diagnostics and manual-validation planning aids.",
+        "Low-risk physical-decor and medium-light prop classes are default candidates after initial manual validation; high-risk classes remain explicit until class-specific manual validation succeeds.",
+        "This report inventories prop subclasses that can carry fire, sound, light, loot, trigger, destructible, damage, or physical-decor semantics.",
+    ]
+
+    if not os.path.exists(source_dat):
+        blockers.append(f"source DAT was not found: {source_dat}")
+    else:
+        try:
+            from core import bsp
+
+            with open(source_dat, "rb") as f:
+                bsp.parse(f.read())
+        except Exception as exc:
+            blockers.append(f"DAT parse failed: {exc}")
+
+    source_behavior_prop_objects: Tuple[BehaviorPropObjectOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_behavior_prop_objects = _behavior_prop_object_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; behavior prop subclass inventory is pending")
+
+    class_counts: Dict[str, int] = {}
+    semantic_role_counts: Dict[str, int] = {}
+    risk_level_counts: Dict[str, int] = {}
+    filename_counts: Dict[str, int] = {}
+    skins = set()
+    solid_count = 0
+    move_to_floor_count = 0
+    for item in source_behavior_prop_objects:
+        class_counts[item.class_name] = class_counts.get(item.class_name, 0) + 1
+        risk_level_counts[item.risk_level] = risk_level_counts.get(item.risk_level, 0) + 1
+        for role in item.semantic_roles:
+            semantic_role_counts[role] = semantic_role_counts.get(role, 0) + 1
+        if item.filename:
+            filename_counts[item.filename] = filename_counts.get(item.filename, 0) + 1
+        if item.skin:
+            skins.add(item.skin)
+        if item.solid is True:
+            solid_count += 1
+        if item.move_to_floor is True:
+            move_to_floor_count += 1
+
+    class_summaries: List[BehaviorPropClassSummary] = []
+    for class_name in sorted(class_counts):
+        items = tuple(item for item in source_behavior_prop_objects if item.class_name == class_name)
+        item_models = {item.filename for item in items if item.filename}
+        item_role_counts: Dict[str, int] = {}
+        item_risk_counts: Dict[str, int] = {}
+        for item in items:
+            item_risk_counts[item.risk_level] = item_risk_counts.get(item.risk_level, 0) + 1
+            for role in item.semantic_roles:
+                item_role_counts[role] = item_role_counts.get(role, 0) + 1
+        copy_pass_key = _behavior_prop_copy_pass_key(class_name)
+        copy_pass_status = "explicit_copy_pass_available" if copy_pass_key else "not_implemented"
+        class_summaries.append(BehaviorPropClassSummary(
+            class_name=class_name,
+            object_count=len(items),
+            unique_model_count=len(item_models),
+            solid_count=sum(1 for item in items if item.solid is True),
+            move_to_floor_count=sum(1 for item in items if item.move_to_floor is True),
+            semantic_role_counts=dict(sorted(item_role_counts.items())),
+            risk_level_counts=dict(sorted(item_risk_counts.items())),
+            copy_pass_key=copy_pass_key,
+            copy_pass_status=copy_pass_status,
+            validation_status=_behavior_prop_validation_status(
+                item_risk_counts,
+                class_name=class_name,
+                copy_pass_status=copy_pass_status,
+            ),
+            sample_names=tuple(item.name for item in items[:5]),
+        ))
+
+    top_filenames = tuple(
+        sorted(filename_counts.items(), key=lambda item: (-item[1], item[0].lower()))[:8]
+    )
+    if blockers:
+        status = "behavior_prop_reconstruction_blocked"
+    elif not source_behavior_prop_objects:
+        status = "behavior_prop_reconstruction_needs_source_oracle"
+    else:
+        status = "behavior_prop_reconstruction_report_built"
+
+    if source_behavior_prop_objects:
+        cautions.append(
+            "Behavior prop subclasses have class-scoped copy passes; use this report to choose medium/high-risk manual validation candidates before changing broader UI defaults."
+        )
+    if int(risk_level_counts.get("high", 0)) > 0:
+        cautions.append(
+            "High-risk behavior props include loot, trigger, destructible, or damage semantics and should not be auto-enabled before class-specific manual validation."
+        )
+
+    return BehaviorPropReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_behavior_prop_object_count=len(source_behavior_prop_objects),
+        copy_candidate_count=len(source_behavior_prop_objects),
+        class_counts=dict(sorted(class_counts.items())),
+        semantic_role_counts=dict(sorted(semantic_role_counts.items())),
+        risk_level_counts=dict(sorted(risk_level_counts.items())),
+        unique_model_count=len(filename_counts),
+        unique_skin_count=len(skins),
+        solid_count=solid_count,
+        move_to_floor_count=move_to_floor_count,
+        top_filenames=top_filenames,
+        class_summaries=tuple(class_summaries),
+        source_behavior_prop_objects=source_behavior_prop_objects,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_collision_helper_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+) -> CollisionHelperReconstructionReport:
+    """Correlate DAT collision helper models with optional source ED object evidence."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "Collision helper reconstruction reports are semantic diagnostics; full-world generation can emit helper objects separately from diagnostic helper Brush shells.",
+        "DAT collision helper models are identified by Invisible/Firethrough helper textures, then matched to same-name source ED helper objects when an oracle is supplied.",
+    ]
+
+    try:
+        from core import bsp
+
+        with open(source_dat, "rb") as f:
+            parsed = bsp.parse(f.read())
+    except Exception as exc:
+        return CollisionHelperReconstructionReport(
+            status="collision_helper_reconstruction_blocked",
+            source_dat_path=source_dat,
+            source_ed_path=source_ed,
+            blockers=(f"DAT parse failed: {exc}",),
+            notes=tuple(notes),
+        )
+
+    helper_models: List[Tuple[int, object, PrefabSurrogateCompositeModelSummary, Dict[str, int]]] = []
+    for model_index, model in enumerate(getattr(parsed, "world_models", ()) or ()):
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        if int(helper_roles.get("collision", 0)) <= 0:
+            continue
+        if not terrain_semantics.model_has_only_helper_textures(model):
+            continue
+        if not set(helper_roles.keys()).issubset({"collision", "sprite"}):
+            continue
+        helper_models.append((
+            int(model_index),
+            model,
+            _composite_model_summary(model),
+            dict(helper_roles),
+        ))
+
+    candidate_names = tuple(summary.name for _index, _model, summary, _roles in helper_models)
+    source_objects: Tuple[CollisionHelperOracleObject, ...] = ()
+    source_helper_brushes: Tuple[CollisionHelperBrushOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_objects = _collision_helper_oracle_objects(
+                    source_ed,
+                    candidate_names=candidate_names,
+                )
+                source_helper_brushes = _collision_helper_brush_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; same-name helper object mapping is pending")
+
+    objects_by_name = {item.name.lower(): item for item in source_objects}
+    candidates: List[CollisionHelperReconstructionCandidate] = []
+    for model_index, _model, summary, helper_roles in helper_models:
+        candidate = _collision_helper_reconstruction_candidate(
+            model_index,
+            summary,
+            helper_roles=helper_roles,
+            source_objects_by_name=objects_by_name,
+            source_helper_brushes=source_helper_brushes,
+        )
+        candidates.append(candidate)
+
+    matched_count = sum(1 for candidate in candidates if candidate.status == "matched_source_collision_helper")
+    skipped_count = sum(1 for candidate in candidates if candidate.status != "matched_source_collision_helper")
+
+    if blockers:
+        status = "collision_helper_reconstruction_blocked"
+    elif not candidates:
+        status = "collision_helper_reconstruction_no_collision_helpers"
+    elif not source_objects:
+        status = "collision_helper_reconstruction_needs_source_oracle"
+    elif matched_count:
+        status = "collision_helper_reconstruction_report_built"
+    else:
+        status = "collision_helper_reconstruction_no_matches"
+
+    return CollisionHelperReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_helper_model_count=len(helper_models),
+        source_helper_polygon_count=sum(summary.polygon_count for _index, _model, summary, _roles in helper_models),
+        source_object_count=len(source_objects),
+        source_helper_brush_count=len(source_helper_brushes),
+        matched_object_count=matched_count,
+        skipped_candidate_count=skipped_count,
+        candidates=tuple(candidates),
+        source_objects=source_objects,
+        source_helper_brushes=source_helper_brushes,
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_trigger_helper_reconstruction_report(
+    *,
+    source_dat_path: str,
+    source_ed_path: str = "",
+) -> TriggerHelperReconstructionReport:
+    """Correlate DAT trigger helper models with optional source ED PortalZone evidence."""
+    source_dat = os.path.abspath(source_dat_path)
+    source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
+    blockers: List[str] = []
+    cautions: List[str] = []
+    notes: List[str] = [
+        "Trigger helper reconstruction reports are semantic diagnostics; full-world generation can emit PortalZone objects separately from diagnostic GreenScreen helper Brush shells.",
+        "DAT trigger helper models are identified by GreenScreen helper textures, then matched to same-name source ED PortalZone objects when an oracle is supplied.",
+    ]
+
+    try:
+        from core import bsp
+
+        with open(source_dat, "rb") as f:
+            parsed = bsp.parse(f.read())
+    except Exception as exc:
+        return TriggerHelperReconstructionReport(
+            status="trigger_helper_reconstruction_blocked",
+            source_dat_path=source_dat,
+            source_ed_path=source_ed,
+            blockers=(f"DAT parse failed: {exc}",),
+            notes=tuple(notes),
+        )
+
+    helper_models: List[Tuple[int, object, PrefabSurrogateCompositeModelSummary, Dict[str, int]]] = []
+    for model_index, model in enumerate(getattr(parsed, "world_models", ()) or ()):
+        helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        if int(helper_roles.get("trigger", 0)) <= 0:
+            continue
+        if not terrain_semantics.model_has_only_helper_textures(model):
+            continue
+        if set(helper_roles.keys()) != {"trigger"}:
+            continue
+        helper_models.append((
+            int(model_index),
+            model,
+            _composite_model_summary(model),
+            dict(helper_roles),
+        ))
+
+    candidate_names = tuple(summary.name for _index, _model, summary, _roles in helper_models)
+    source_objects: Tuple[TriggerHelperOracleObject, ...] = ()
+    source_helper_brushes: Tuple[TriggerHelperBrushOracle, ...] = ()
+    if source_ed:
+        if not os.path.exists(source_ed):
+            cautions.append(f"source ED oracle was not found: {source_ed}")
+        else:
+            try:
+                source_objects = _trigger_helper_oracle_objects(
+                    source_ed,
+                    candidate_names=candidate_names,
+                )
+                source_helper_brushes = _trigger_helper_brush_oracles(source_ed)
+            except Exception as exc:
+                cautions.append(f"source ED oracle scan failed: {exc}")
+    else:
+        cautions.append("source ED oracle was not supplied; same-name PortalZone mapping is pending")
+
+    objects_by_name = {item.name.lower(): item for item in source_objects}
+    candidates: List[TriggerHelperReconstructionCandidate] = []
+    for model_index, _model, summary, helper_roles in helper_models:
+        candidate = _trigger_helper_reconstruction_candidate(
+            model_index,
+            summary,
+            helper_roles=helper_roles,
+            source_objects_by_name=objects_by_name,
+            source_helper_brushes=source_helper_brushes,
+        )
+        candidates.append(candidate)
+
+    matched_count = sum(1 for candidate in candidates if candidate.status == "matched_source_trigger_helper")
+    skipped_count = sum(1 for candidate in candidates if candidate.status != "matched_source_trigger_helper")
+
+    if blockers:
+        status = "trigger_helper_reconstruction_blocked"
+    elif not candidates:
+        status = "trigger_helper_reconstruction_no_trigger_helpers"
+    elif not source_objects:
+        status = "trigger_helper_reconstruction_needs_source_oracle"
+    elif matched_count:
+        status = "trigger_helper_reconstruction_report_built"
+    else:
+        status = "trigger_helper_reconstruction_no_matches"
+
+    return TriggerHelperReconstructionReport(
+        status=status,
+        source_dat_path=source_dat,
+        source_ed_path=source_ed,
+        source_helper_model_count=len(helper_models),
+        source_helper_polygon_count=sum(summary.polygon_count for _index, _model, summary, _roles in helper_models),
+        source_object_count=len(source_objects),
+        source_helper_brush_count=len(source_helper_brushes),
+        matched_object_count=matched_count,
+        skipped_candidate_count=skipped_count,
+        candidates=tuple(candidates),
+        source_objects=source_objects,
+        source_helper_brushes=source_helper_brushes,
         blockers=tuple(_unique_text(blockers)),
         cautions=tuple(_unique_text(cautions)),
         notes=tuple(_unique_text(notes)),
@@ -3480,6 +6884,157 @@ def build_terrain_support_source_coverage_report(
         )),
         gaps=tuple(gaps),
         ignored_terrain_textures=tuple(ignored_terrain_textures),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_physics_shell_source_coverage_report(
+    *,
+    source_dat_path: str,
+    generated_ed_path: str,
+    physics_model_name: str = "PhysicsBSP",
+    generated_shell_name_prefix: str = "PhysicsShell",
+) -> PhysicsShellSourceCoverageReport:
+    """Compare generated PhysicsBSP shell slabs against source PhysicsBSP polygons."""
+    source_dat = os.path.abspath(source_dat_path)
+    generated_ed = os.path.abspath(generated_ed_path)
+    physics_name = str(physics_model_name or terrain_semantics.PHYSICS_BSP_MODEL)
+    shell_prefix = _legacy_name_component(generated_shell_name_prefix or "PhysicsShell")
+    cautions: List[str] = [
+        "PhysicsBSP shell source coverage is polygon-index based; it does not prove Processor kept every generated slab.",
+        "Generated shell slabs are diagnostic source-like brushes, not recovered original authoring CSG.",
+    ]
+    notes: List[str] = [
+        "Classifies every source PhysicsBSP polygon as floor, ceiling, side wall, helper/special, or degenerate.",
+    ]
+    if not os.path.exists(source_dat):
+        return PhysicsShellSourceCoverageReport(
+            status="source_dat_missing",
+            source_dat_path=source_dat,
+            generated_ed_path=generated_ed,
+            physics_model_name=physics_name,
+            blockers=(f"source DAT was not found: {source_dat}",),
+            cautions=tuple(cautions),
+            notes=tuple(notes),
+        )
+    if not os.path.exists(generated_ed):
+        return PhysicsShellSourceCoverageReport(
+            status="generated_ed_missing",
+            source_dat_path=source_dat,
+            generated_ed_path=generated_ed,
+            physics_model_name=physics_name,
+            blockers=(f"generated ED was not found: {generated_ed}",),
+            cautions=tuple(cautions),
+            notes=tuple(notes),
+        )
+
+    try:
+        from core import bsp
+
+        with open(source_dat, "rb") as f:
+            parsed = bsp.parse(f.read())
+    except Exception as exc:
+        return PhysicsShellSourceCoverageReport(
+            status="dat_parse_failed",
+            source_dat_path=source_dat,
+            generated_ed_path=generated_ed,
+            physics_model_name=physics_name,
+            blockers=(f"DAT parse failed: {exc}",),
+            cautions=tuple(cautions),
+            notes=tuple(notes),
+        )
+    model = terrain_semantics.model_by_name(
+        tuple(getattr(parsed, "world_models", ()) or ()),
+        physics_name,
+    )
+    if model is None:
+        return PhysicsShellSourceCoverageReport(
+            status="physics_model_missing",
+            source_dat_path=source_dat,
+            generated_ed_path=generated_ed,
+            physics_model_name=physics_name,
+            blockers=(f"PhysicsBSP shell source model was not found: {physics_name}",),
+            cautions=tuple(cautions),
+            notes=tuple(notes),
+        )
+
+    try:
+        from features.dat_editing import legacy_ed
+
+        layout = legacy_ed.load_legacy_ed_node_layout_report(generated_ed)
+    except Exception as exc:
+        return PhysicsShellSourceCoverageReport(
+            status="generated_ed_parse_failed",
+            source_dat_path=source_dat,
+            generated_ed_path=generated_ed,
+            physics_model_name=physics_name,
+            source_polygon_count=len(getattr(model, "polygons", ()) or ()),
+            blockers=(f"generated ED node layout parse failed: {exc}",),
+            cautions=tuple(cautions),
+            notes=tuple(notes),
+        )
+    if layout.status != "layout_parsed":
+        return PhysicsShellSourceCoverageReport(
+            status="generated_ed_layout_failed",
+            source_dat_path=source_dat,
+            generated_ed_path=generated_ed,
+            physics_model_name=physics_name,
+            source_polygon_count=len(getattr(model, "polygons", ()) or ()),
+            blockers=tuple(layout.blockers or ("generated ED node layout did not parse",)),
+            cautions=tuple(cautions),
+            notes=tuple(_unique_text(notes + list(layout.notes))),
+        )
+
+    source_roles = _physics_shell_source_polygon_roles(model)
+    generated_indices = _generated_physics_shell_source_polygon_indices(
+        layout.brush_names,
+        shell_prefix,
+    )
+    source_index_set = set(source_roles)
+    generated_source_indices = tuple(index for index in generated_indices if index in source_index_set)
+    generated_source_set = set(generated_source_indices)
+    generated_unknown_indices = tuple(index for index in generated_indices if index not in source_index_set)
+    role_summaries: List[PhysicsShellSourceCoverageRoleSummary] = []
+    for role in _PHYSICS_SHELL_COVERAGE_ROLES:
+        source_count = sum(1 for value in source_roles.values() if value == role)
+        generated_count = sum(1 for index in generated_source_set if source_roles.get(index) == role)
+        role_summaries.append(PhysicsShellSourceCoverageRoleSummary(
+            role=role,
+            source_polygon_count=source_count,
+            generated_polygon_count=generated_count,
+            uncovered_polygon_count=max(0, source_count - generated_count),
+        ))
+    uncovered_count = sum(item.uncovered_polygon_count for item in role_summaries)
+    if generated_unknown_indices:
+        cautions.append(
+            f"{len(generated_unknown_indices)} generated shell brush name(s) referenced source polygon indices outside {physics_name}."
+        )
+    if not generated_source_indices:
+        status = "no_generated_physics_shell_coverage"
+        notes.append("No generated shell slab brush names matched source PhysicsBSP polygon indices.")
+    elif uncovered_count:
+        status = "physics_shell_source_coverage_has_gaps"
+        notes.append(
+            f"{uncovered_count} source {physics_name} polygon(s) are not represented by generated shell slab brushes."
+        )
+    else:
+        status = "physics_shell_source_coverage_complete"
+        notes.append("Every classified source PhysicsBSP polygon has a generated shell slab brush.")
+
+    return PhysicsShellSourceCoverageReport(
+        status=status,
+        source_dat_path=source_dat,
+        generated_ed_path=generated_ed,
+        physics_model_name=physics_name,
+        source_polygon_count=len(getattr(model, "polygons", ()) or ()),
+        classified_source_polygon_count=len(source_roles),
+        generated_source_polygon_count=len(generated_source_set),
+        uncovered_source_polygon_count=uncovered_count,
+        generated_unknown_polygon_count=len(generated_unknown_indices),
+        role_summaries=tuple(role_summaries),
+        generated_source_polygon_indices=generated_source_indices,
+        generated_unknown_polygon_indices=generated_unknown_indices,
         cautions=tuple(_unique_text(cautions)),
         notes=tuple(_unique_text(notes)),
     )
@@ -5216,6 +8771,108 @@ def format_full_world_skeleton_acceptance_report(
         lines.append("terrain support patch: included")
     if report.include_physics_shell_patch:
         lines.append("PhysicsBSP shell patch: included")
+    if report.include_door_objects:
+        detail = "Door/RotatingDoor objects: included"
+        if report.door_source_ed_path:
+            detail += f", source={report.door_source_ed_path}"
+        lines.append(detail)
+    if report.door_behavior_context:
+        lines.append(f"door behavior context: {report.door_behavior_context}")
+    if report.include_airail_objects:
+        detail = "AIRail objects: included"
+        if report.airail_source_ed_path:
+            detail += f", source={report.airail_source_ed_path}"
+        lines.append(detail)
+    if report.include_sky_objects:
+        detail = "sky objects: included"
+        if report.sky_source_ed_path:
+            detail += f", source={report.sky_source_ed_path}"
+        lines.append(detail)
+    if report.include_sky_marker_brushes:
+        detail = "SkyMarker Brushes: included"
+        if report.sky_source_ed_path:
+            detail += f", source={report.sky_source_ed_path}"
+        lines.append(detail)
+    if report.include_sky_marker_residue_brushes:
+        detail = "SkyMarker residue Brushes: included"
+        if report.sky_source_ed_path:
+            detail += f", source={report.sky_source_ed_path}"
+        if report.sky_marker_residue_reference_dat_path:
+            detail += f", reference={report.sky_marker_residue_reference_dat_path}"
+        lines.append(detail)
+    if report.include_sound_objects:
+        detail = "AmbientSound objects: included"
+        if report.sound_source_ed_path:
+            detail += f", source={report.sound_source_ed_path}"
+        lines.append(detail)
+    if report.include_gameplay_trigger_objects:
+        detail = "gameplay trigger objects: included"
+        if report.gameplay_trigger_source_ed_path:
+            detail += f", source={report.gameplay_trigger_source_ed_path}"
+        lines.append(detail)
+    if report.include_static_prop_objects:
+        detail = "static Prop objects: included"
+        if report.static_prop_source_ed_path:
+            detail += f", source={report.static_prop_source_ed_path}"
+        lines.append(detail)
+    if report.include_low_risk_behavior_prop_objects:
+        detail = "low-risk behavior prop objects: included"
+        if report.low_risk_behavior_prop_source_ed_path:
+            detail += f", source={report.low_risk_behavior_prop_source_ed_path}"
+        lines.append(detail)
+    if report.include_wall_torch_objects:
+        detail = "WallTorch objects: included"
+        if report.wall_torch_source_ed_path:
+            detail += f", source={report.wall_torch_source_ed_path}"
+        lines.append(detail)
+    if report.include_fire_objects:
+        detail = "Fire objects: included"
+        if report.fire_source_ed_path:
+            detail += f", source={report.fire_source_ed_path}"
+        lines.append(detail)
+    if report.include_candle_prop_objects:
+        detail = "CandleProp objects: included"
+        if report.candle_prop_source_ed_path:
+            detail += f", source={report.candle_prop_source_ed_path}"
+        lines.append(detail)
+    if report.include_brazier_objects:
+        detail = "Brazier objects: included"
+        if report.brazier_source_ed_path:
+            detail += f", source={report.brazier_source_ed_path}"
+        lines.append(detail)
+    if report.include_treasure_chest_objects:
+        detail = "TreasureChest objects: included"
+        if report.treasure_chest_source_ed_path:
+            detail += f", source={report.treasure_chest_source_ed_path}"
+        lines.append(detail)
+    if report.include_prop_damager_objects:
+        detail = "PropDamager objects: included"
+        if report.prop_damager_source_ed_path:
+            detail += f", source={report.prop_damager_source_ed_path}"
+        lines.append(detail)
+    if report.include_destructable_prop_objects:
+        detail = "DestructableProp objects: included"
+        if report.destructable_prop_source_ed_path:
+            detail += f", source={report.destructable_prop_source_ed_path}"
+        lines.append(detail)
+    if report.include_destructable_brush_objects:
+        lines.append("DestructableBrush objects: included, source=DAT object section")
+    if report.include_collision_helper_objects:
+        if report.include_collision_helper_brushes:
+            detail = "collision helper objects/Brushes: included"
+        else:
+            detail = "collision helper objects: included; Brushes: not included"
+        if report.collision_helper_source_ed_path:
+            detail += f", source={report.collision_helper_source_ed_path}"
+        lines.append(detail)
+    if report.include_trigger_helper_objects:
+        if report.include_trigger_helper_brushes:
+            detail = "trigger helper objects/Brushes: included"
+        else:
+            detail = "trigger helper objects: included; Brushes: not included"
+        if report.trigger_helper_source_ed_path:
+            detail += f", source={report.trigger_helper_source_ed_path}"
+        lines.append(detail)
     if report.max_processor_brushes or report.max_processor_polygons:
         limits = []
         if report.max_processor_brushes:
@@ -5259,6 +8916,16 @@ def format_full_world_skeleton_acceptance_report(
         )
         if report.terrain_support_source_coverage_manifest_path:
             detail += f", manifest={report.terrain_support_source_coverage_manifest_path}"
+        lines.append(detail)
+    if report.physics_shell_source_coverage is not None:
+        coverage = report.physics_shell_source_coverage
+        detail = (
+            "PhysicsBSP shell source coverage: "
+            f"status={coverage.status}, generated={coverage.generated_source_polygon_count}, "
+            f"uncovered={coverage.uncovered_source_polygon_count}"
+        )
+        if report.physics_shell_source_coverage_manifest_path:
+            detail += f", manifest={report.physics_shell_source_coverage_manifest_path}"
         lines.append(detail)
     for item in report.models:
         lines.append(
@@ -5313,6 +8980,22 @@ def format_full_world_skeleton_compiled_validation_report(
             f"{report.dat.world_tree_leaf_count}, portals={report.dat.portal_reference_count}, "
             f"render_data={report.dat.render_data_size}"
         )
+    if report.helper_leakage is not None:
+        lines.append(
+            "helper leakage: "
+            f"status={report.helper_leakage.status}, "
+            f"compiled_helpers={report.helper_leakage.compiled_total_helper_polygon_count}, "
+            f"reference_helpers={report.helper_leakage.reference_total_helper_polygon_count}, "
+            f"VisBSP={report.helper_leakage.compiled_visibility_helper_polygon_count}/"
+            f"{report.helper_leakage.reference_visibility_helper_polygon_count}, "
+            f"Terrain*={report.helper_leakage.compiled_terrain_helper_polygon_count}/"
+            f"{report.helper_leakage.reference_terrain_helper_polygon_count}"
+        )
+        for comparison in report.helper_leakage.role_comparisons:
+            lines.append(
+                f"  helper role {comparison.role}: {comparison.status}, "
+                f"compiled={comparison.compiled_total}, reference={comparison.reference_total}"
+            )
     for path in report.processor_log_paths:
         lines.append(f"log: {path}")
     for log in report.processor_logs:
@@ -5348,6 +9031,645 @@ def format_full_world_skeleton_compiled_validation_report(
     return "\n".join(lines)
 
 
+def format_anskramkeep_physics_shell_retest_report(
+    report: AnskramkeepPhysicsShellRetestReport,
+) -> str:
+    lines = [
+        "ANSKRAMKEEP PhysicsBSP shell retest",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+        f"generated ED: {report.generated_ed_path or 'none'}",
+    ]
+    if report.reference_processor_log_path:
+        lines.append(f"reference Processor log: {report.reference_processor_log_path}")
+    if report.current_processor_log_path:
+        lines.append(f"current Processor log: {report.current_processor_log_path}")
+    if report.acceptance is not None:
+        lines.append(
+            "generated candidate: "
+            f"status={report.acceptance.status}, models={report.acceptance.model_count}, "
+            f"points={report.acceptance.point_count}, polygons={report.acceptance.polygon_count}, "
+            f"objects={report.acceptance.object_count}"
+        )
+    for metric in report.comparisons:
+        detail = (
+            f"comparison: {metric.metric} status={metric.status}, "
+            f"previous={metric.previous or 'unknown'}, current={metric.current or 'unknown'}"
+        )
+        if metric.delta:
+            detail += f", delta={metric.delta}"
+        lines.append(detail)
+        for note in metric.notes:
+            lines.append(f"  note: {note}")
+    lines.append(
+        "manual validation: "
+        f"status={report.manual_validation.status}, "
+        f"fresh_load={report.manual_validation.fresh_load}, "
+        f"visuals_ok={report.manual_validation.visuals_ok}, "
+        f"collision_ok={report.manual_validation.collision_ok}, "
+        f"tested_at={report.manual_validation.tested_at or 'unknown'}"
+    )
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_airail_reconstruction_report(report: AirailReconstructionReport) -> str:
+    lines = [
+        "DAT AIRail reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    lines.append(
+        "summary: "
+        f"aiRail_helpers={report.source_helper_model_count}, "
+        f"helper_polygons={report.source_helper_polygon_count}, "
+        f"source_AIRail={report.source_airail_object_count}, "
+        f"rail_brushes={report.source_rail_brush_count}, "
+        f"matched_generated_objects={report.generated_object_count}, "
+        f"skipped={report.skipped_candidate_count}, ambiguous={report.ambiguous_candidate_count}"
+    )
+    for candidate in report.candidates[:16]:
+        detail = (
+            f"candidate: {candidate.source_model_name} status={candidate.status}, "
+            f"polygons={candidate.polygon_count}, center={_vec3_text(candidate.center)}"
+        )
+        if candidate.nearest_airail_name:
+            detail += (
+                f", nearest_AIRail={candidate.nearest_airail_name}"
+                f"@{candidate.nearest_airail_distance:.2f}"
+            )
+        if candidate.nearest_rail_brush_name:
+            detail += (
+                f", nearest_rail_brush={candidate.nearest_rail_brush_name}"
+                f"@{candidate.nearest_rail_brush_distance:.2f}"
+            )
+        lines.append(detail)
+    if len(report.candidates) > 16:
+        lines.append(f"candidate: ... {len(report.candidates) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_sky_helper_reconstruction_report(report: SkyHelperReconstructionReport) -> str:
+    lines = [
+        "DAT sky helper reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    class_counts: Dict[str, int] = {}
+    for item in report.source_sky_objects:
+        class_counts[item.class_name] = class_counts.get(item.class_name, 0) + 1
+    lines.append(
+        "summary: "
+        f"sky_helper_models={report.source_helper_model_count}, "
+        f"sky_helper_polygons={report.source_helper_polygon_count}, "
+        f"pure_helper_models={report.pure_helper_model_count}, "
+        f"source_sky_objects={report.source_sky_object_count}, "
+        f"generated_sky_objects={report.generated_object_count}, "
+        f"sky_marker_brushes={report.source_sky_marker_brush_count}, "
+        f"sky_marker_faces={report.source_sky_marker_face_count}, "
+        f"classes={_class_counts_text(class_counts)}"
+    )
+    for item in report.source_sky_objects:
+        lines.append(
+            f"sky object: {item.name}/{item.class_name}, "
+            f"pos={_vec3_text(item.pos)}, properties={item.property_count}"
+        )
+    for candidate in report.candidates[:16]:
+        lines.append(
+            f"candidate: {candidate.source_model_name} status={candidate.status}, "
+            f"pure={candidate.pure_helper_model}, "
+            f"roles={','.join(f'{role}:{count}' for role, count in sorted(candidate.helper_roles.items()))}, "
+            f"center={_vec3_text(candidate.center)}"
+        )
+        for note in candidate.notes:
+            lines.append(f"  note: {note}")
+    if len(report.candidates) > 16:
+        lines.append(f"candidate: ... {len(report.candidates) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_sky_marker_compiled_residue_report(report: SkyMarkerCompiledResidueReport) -> str:
+    lines = [
+        "DAT SkyMarker compiled residue report",
+        f"status: {report.status}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    if report.compiled_dat_path:
+        lines.append(f"compiled DAT reference: {report.compiled_dat_path}")
+    if report.generated_compiled_dat_path:
+        lines.append(f"generated compiled DAT: {report.generated_compiled_dat_path}")
+    ratio_text = (
+        "n/a"
+        if report.source_to_compiled_ratio is None
+        else f"{report.source_to_compiled_ratio:.4f}"
+    )
+    lines.append(
+        "summary: "
+        f"source_brushes={report.source_sky_marker_brush_count}, "
+        f"source_faces={report.source_sky_marker_face_count}, "
+        f"compiled_sky={report.compiled_sky_visibility_polygon_count}, "
+        f"PhysicsBSP={report.compiled_physics_sky_visibility_polygon_count}, "
+        f"VisBSP={report.compiled_visibility_sky_visibility_polygon_count}, "
+        f"Terrain*={report.compiled_terrain_sky_visibility_polygon_count}, "
+        f"world_models={report.compiled_world_model_sky_visibility_polygon_count}, "
+        f"physics/source_ratio={ratio_text}"
+    )
+    if report.compiled_residue_matches:
+        lines.append(
+            "correlation: "
+            f"matched_residues={report.compiled_residue_match_count}, "
+            f"unmatched_residues={report.compiled_residue_unmatched_count}, "
+            f"matched_source_faces={report.matched_source_sky_marker_face_count}, "
+            f"matched_source_brushes={report.matched_source_sky_marker_brush_count}, "
+            f"max_plane_delta={_optional_float_text(report.max_match_plane_distance)}, "
+            f"min_normal_dot={_optional_float_text(report.min_match_normal_dot)}, "
+            f"max_center_delta={_optional_float_text(report.max_match_center_distance, digits=2)}"
+        )
+    for summary in (
+        report.source_face_matched_summary,
+        report.source_face_unmatched_summary,
+    ):
+        if summary is None or summary.source_face_count <= 0:
+            continue
+        lines.append(
+            f"source face cohort: {summary.cohort}, "
+            f"faces={summary.source_face_count}, "
+            f"brushes={summary.source_brush_count}, "
+            f"orientations={_class_counts_text(summary.orientation_counts)}, "
+            f"texture_flags={_class_counts_text(summary.texture_flag_counts)}, "
+            f"surface_flags={_class_counts_text(summary.surface_flag_counts)}, "
+            f"nearest_world=min:{_optional_float_text(summary.nearest_world_geometry_distance_min, digits=2)} "
+            f"median:{_optional_float_text(summary.nearest_world_geometry_distance_median, digits=2)} "
+            f"avg:{_optional_float_text(summary.nearest_world_geometry_distance_average, digits=2)} "
+            f"max:{_optional_float_text(summary.nearest_world_geometry_distance_max, digits=2)}"
+        )
+        lines.append(
+            f"source face cohort flags: {summary.cohort}, "
+            f"flag_sets={_class_counts_text(summary.brush_flag_set_counts)}"
+        )
+    for item in report.residue_rule_candidates[:12]:
+        lines.append(
+            f"rule: {item.rule_name}, "
+            f"selected={item.selected_source_face_count}, "
+            f"matched={item.matched_source_face_count}, "
+            f"extra={item.unmatched_source_face_count}, "
+            f"missed={item.missed_matched_source_face_count}, "
+            f"precision={_optional_float_text(item.precision)}, "
+            f"recall={_optional_float_text(item.recall)}, "
+            f"status={item.status}"
+        )
+    if len(report.residue_rule_candidates) > 12:
+        lines.append(f"rule: ... {len(report.residue_rule_candidates) - 12} more")
+    if report.generated_compiled_dat_path:
+        lines.append(
+            "generated summary: "
+            f"compiled_sky={report.generated_sky_visibility_polygon_count}, "
+            f"PhysicsBSP={report.generated_physics_sky_visibility_polygon_count}, "
+            f"VisBSP={report.generated_visibility_sky_visibility_polygon_count}, "
+            f"Terrain*={report.generated_terrain_sky_visibility_polygon_count}, "
+            f"world_models={report.generated_world_model_sky_visibility_polygon_count}"
+        )
+    if report.source_brush_flag_counts:
+        lines.append(
+            "source brush flags: "
+            + ", ".join(
+                f"{name}={count}"
+                for name, count in sorted(report.source_brush_flag_counts.items())
+            )
+        )
+    if report.matched_source_brush_flag_counts:
+        lines.append(
+            "matched source brush flags: "
+            + ", ".join(
+                f"{name}={count}"
+                for name, count in sorted(report.matched_source_brush_flag_counts.items())
+            )
+        )
+    for item in report.source_sky_marker_brushes[:16]:
+        lines.append(
+            f"source brush: {item.name}, faces={item.sky_face_count}, "
+            f"center={_vec3_text(item.center)}"
+        )
+    if len(report.source_sky_marker_brushes) > 16:
+        lines.append(f"source brush: ... {len(report.source_sky_marker_brushes) - 16} more")
+    for item in report.compiled_residue_matches[:16]:
+        flags = ",".join(item.source_brush_flags) if item.source_brush_flags else "none"
+        lines.append(
+            f"match: {item.compiled_model_name}#{item.compiled_polygon_index} -> "
+            f"{item.source_brush_name or 'unmatched'}"
+            f"[model={item.source_model_index}, face={item.source_face_index}], "
+            f"status={item.status}, "
+            f"plane={_optional_float_text(item.plane_distance)}, "
+            f"normal_dot={_optional_float_text(item.normal_dot)}, "
+            f"center={_optional_float_text(item.center_distance, digits=2)}, "
+            f"flags={flags}"
+        )
+    if len(report.compiled_residue_matches) > 16:
+        lines.append(f"match: ... {len(report.compiled_residue_matches) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_sky_marker_residue_compile_audit_report(report: SkyMarkerResidueCompileAuditReport) -> str:
+    lines = [
+        "DAT SkyMarker residue compile audit",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+        f"source ED oracle: {report.source_ed_path}",
+        f"reference DAT: {report.reference_dat_path}",
+    ]
+    if report.work_dir:
+        lines.append(f"work dir: {report.work_dir}")
+    if report.generated_ed_path:
+        lines.append(f"generated ED: {report.generated_ed_path}")
+    if report.compiled_dat_path:
+        lines.append(f"compiled DAT: {report.compiled_dat_path}")
+    else:
+        lines.append("compiled DAT: pending")
+    if report.acceptance is not None:
+        lines.append(
+            "generated candidate: "
+            f"status={report.acceptance.status}, "
+            f"models={report.acceptance.model_count}, "
+            f"polygons={report.acceptance.polygon_count}, "
+            f"objects={report.acceptance.object_count}"
+        )
+    if report.residue_report is not None:
+        lines.append(
+            "residue correlation: "
+            f"status={report.residue_report.status}, "
+            f"matched_residues={report.residue_report.compiled_residue_match_count}, "
+            f"matched_source_faces={report.residue_report.matched_source_sky_marker_face_count}, "
+            f"source_faces={report.residue_report.source_sky_marker_face_count}"
+        )
+    if report.helper_leakage is not None:
+        lines.append(
+            "helper leakage: "
+            f"status={report.helper_leakage.status}, "
+            f"compiled_helpers={report.helper_leakage.compiled_total_helper_polygon_count}, "
+            f"reference_helpers={report.helper_leakage.reference_total_helper_polygon_count}, "
+            f"VisBSP={report.helper_leakage.compiled_visibility_helper_polygon_count}/"
+            f"{report.helper_leakage.reference_visibility_helper_polygon_count}, "
+            f"Terrain*={report.helper_leakage.compiled_terrain_helper_polygon_count}/"
+            f"{report.helper_leakage.reference_terrain_helper_polygon_count}"
+        )
+        for comparison in report.helper_leakage.role_comparisons:
+            lines.append(
+                f"  helper role {comparison.role}: {comparison.status}, "
+                f"compiled={comparison.compiled_total}, reference={comparison.reference_total}"
+            )
+    for log in report.processor_logs:
+        lines.append(
+            "processor log summary: "
+            f"status={log.status}, input_polies={log.input_polygon_count}, "
+            f"output_polies={log.output_polygon_count}, problem_brushes={log.problem_brush_count}"
+        )
+    for index, step in enumerate(report.manual_steps, start=1):
+        lines.append(f"manual step {index}: {step}")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_sound_helper_reconstruction_report(report: SoundHelperReconstructionReport) -> str:
+    lines = [
+        "DAT sound helper reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    class_counts: Dict[str, int] = {}
+    for item in report.source_sound_objects:
+        class_counts[item.class_name] = class_counts.get(item.class_name, 0) + 1
+    lines.append(
+        "summary: "
+        f"sound_helper_models={report.source_helper_model_count}, "
+        f"sound_helper_polygons={report.source_helper_polygon_count}, "
+        f"pure_helper_models={report.pure_helper_model_count}, "
+        f"source_sound_objects={report.source_sound_object_count}, "
+        f"generated_sound_objects={report.generated_object_count}, "
+        f"classes={_class_counts_text(class_counts)}"
+    )
+    for item in report.source_sound_objects[:16]:
+        outer_radius = "" if item.outer_radius is None else f"{item.outer_radius:g}"
+        lines.append(
+            f"sound object: {item.name}/{item.class_name}, "
+            f"pos={_vec3_text(item.pos)}, filename={item.filename}, "
+            f"outer_radius={outer_radius}, properties={item.property_count}"
+        )
+    if len(report.source_sound_objects) > 16:
+        lines.append(f"sound object: ... {len(report.source_sound_objects) - 16} more")
+    for candidate in report.candidates[:16]:
+        lines.append(
+            f"candidate: {candidate.source_model_name} status={candidate.status}, "
+            f"pure={candidate.pure_helper_model}, "
+            f"roles={','.join(f'{role}:{count}' for role, count in sorted(candidate.helper_roles.items()))}, "
+            f"center={_vec3_text(candidate.center)}"
+        )
+        for note in candidate.notes:
+            lines.append(f"  note: {note}")
+    if len(report.candidates) > 16:
+        lines.append(f"candidate: ... {len(report.candidates) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_gameplay_trigger_reconstruction_report(report: GameplayTriggerReconstructionReport) -> str:
+    lines = [
+        "DAT gameplay trigger reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    lines.append(
+        "summary: "
+        f"source_trigger_objects={report.source_trigger_object_count}, "
+        f"generated_trigger_objects={report.generated_object_count}, "
+        f"target_references={report.target_reference_count}, "
+        f"classes={_class_counts_text(report.class_counts)}"
+    )
+    if report.destination_worlds:
+        lines.append("destination worlds: " + ", ".join(report.destination_worlds))
+    if report.portal_names:
+        lines.append("portal names: " + ", ".join(report.portal_names))
+    for item in report.source_trigger_objects[:16]:
+        detail = (
+            f"trigger object: {item.name}/{item.class_name}, "
+            f"pos={_vec3_text(item.pos)}, dims={_vec3_text(item.dims)}, "
+            f"targets={item.target_count}, properties={item.property_count}"
+        )
+        if item.destination_world:
+            detail += f", destination={item.destination_world}"
+        if item.portal_name:
+            detail += f", portal={item.portal_name}"
+        lines.append(detail)
+    if len(report.source_trigger_objects) > 16:
+        lines.append(f"trigger object: ... {len(report.source_trigger_objects) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_static_prop_reconstruction_report(report: StaticPropReconstructionReport) -> str:
+    lines = [
+        "DAT static Prop reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    lines.append(
+        "summary: "
+        f"source_prop_objects={report.source_prop_object_count}, "
+        f"generated_prop_objects={report.generated_object_count}, "
+        f"unique_models={report.unique_model_count}, "
+        f"unique_skins={report.unique_skin_count}, "
+        f"solid={report.solid_count}, "
+        f"move_to_floor={report.move_to_floor_count}"
+    )
+    if report.top_filenames:
+        lines.append(
+            "top filenames: "
+            + ", ".join(f"{name}={count}" for name, count in report.top_filenames)
+        )
+    for item in report.source_prop_objects[:16]:
+        scale = "" if item.scale is None else f"{item.scale:g}"
+        lines.append(
+            f"prop object: {item.name}/{item.class_name}, "
+            f"pos={_vec3_text(item.pos)}, filename={item.filename}, "
+            f"skin={item.skin}, scale={scale}, solid={item.solid}, "
+            f"move_to_floor={item.move_to_floor}, properties={item.property_count}"
+        )
+    if len(report.source_prop_objects) > 16:
+        lines.append(f"prop object: ... {len(report.source_prop_objects) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_behavior_prop_reconstruction_report(report: BehaviorPropReconstructionReport) -> str:
+    lines = [
+        "DAT behavior prop reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    lines.append(
+        "summary: "
+        f"source_behavior_props={report.source_behavior_prop_object_count}, "
+        f"copy_candidates={report.copy_candidate_count}, "
+        f"unique_models={report.unique_model_count}, "
+        f"unique_skins={report.unique_skin_count}, "
+        f"solid={report.solid_count}, "
+        f"move_to_floor={report.move_to_floor_count}, "
+        f"classes={_class_counts_text(report.class_counts)}, "
+        f"roles={_class_counts_text(report.semantic_role_counts)}, "
+        f"risk={_class_counts_text(report.risk_level_counts)}"
+    )
+    if report.top_filenames:
+        lines.append(
+            "top filenames: "
+            + ", ".join(f"{name}={count}" for name, count in report.top_filenames)
+        )
+    for summary in report.class_summaries:
+        lines.append(
+            f"class summary: {summary.class_name}, objects={summary.object_count}, "
+            f"unique_models={summary.unique_model_count}, solid={summary.solid_count}, "
+            f"move_to_floor={summary.move_to_floor_count}, "
+            f"roles={_class_counts_text(summary.semantic_role_counts)}, "
+            f"risk={_class_counts_text(summary.risk_level_counts)}, "
+            f"copy_pass={summary.copy_pass_key or 'none'}, "
+            f"pass_status={summary.copy_pass_status}, "
+            f"validation={summary.validation_status}, "
+            f"samples={', '.join(summary.sample_names)}"
+        )
+    for item in report.source_behavior_prop_objects[:16]:
+        scale = "" if item.scale is None else f"{item.scale:g}"
+        detail = (
+            f"behavior prop: {item.name}/{item.class_name}, "
+            f"risk={item.risk_level}, roles={','.join(item.semantic_roles)}, "
+            f"pos={_vec3_text(item.pos)}, filename={item.filename}, "
+            f"skin={item.skin}, scale={scale}, solid={item.solid}, "
+            f"move_to_floor={item.move_to_floor}"
+        )
+        if item.sound_file:
+            detail += f", sound={item.sound_file}"
+        if item.trigger_target:
+            detail += f", trigger={item.trigger_target}"
+        if item.damage_trigger_target:
+            detail += f", damage_trigger={item.damage_trigger_target}"
+        if item.hit_points is not None:
+            detail += f", hit_points={item.hit_points:g}"
+        lines.append(detail)
+    if len(report.source_behavior_prop_objects) > 16:
+        lines.append(f"behavior prop: ... {len(report.source_behavior_prop_objects) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_collision_helper_reconstruction_report(
+    report: CollisionHelperReconstructionReport,
+) -> str:
+    lines = [
+        "DAT collision helper reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    class_counts: Dict[str, int] = {}
+    for candidate in report.candidates:
+        key = candidate.matched_object_class_name or candidate.target_class_name or "unknown"
+        class_counts[key] = class_counts.get(key, 0) + 1
+    class_text = _class_counts_text(class_counts)
+    lines.append(
+        "summary: "
+        f"collision_helpers={report.source_helper_model_count}, "
+        f"helper_polygons={report.source_helper_polygon_count}, "
+        f"source_objects={report.source_object_count}, "
+        f"helper_brushes={report.source_helper_brush_count}, "
+        f"matched_objects={report.matched_object_count}, "
+        f"skipped={report.skipped_candidate_count}, classes={class_text}"
+    )
+    for candidate in report.candidates[:16]:
+        detail = (
+            f"candidate: {candidate.source_model_name} status={candidate.status}, "
+            f"target={candidate.target_class_name or 'unknown'}, "
+            f"roles={','.join(f'{role}:{count}' for role, count in sorted(candidate.helper_roles.items()))}, "
+            f"center={_vec3_text(candidate.center)}"
+        )
+        if candidate.matched_object_name:
+            detail += (
+                f", source_object={candidate.matched_object_name}"
+                f"/{candidate.matched_object_class_name}"
+            )
+            if candidate.matched_object_distance is not None:
+                detail += f"@{candidate.matched_object_distance:.2f}"
+        if candidate.nearest_helper_brush_name:
+            detail += (
+                f", nearest_helper_brush={candidate.nearest_helper_brush_name}"
+                f"@{candidate.nearest_helper_brush_distance:.2f}"
+            )
+        lines.append(detail)
+    if len(report.candidates) > 16:
+        lines.append(f"candidate: ... {len(report.candidates) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_trigger_helper_reconstruction_report(
+    report: TriggerHelperReconstructionReport,
+) -> str:
+    lines = [
+        "DAT trigger helper reconstruction report",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+    ]
+    if report.source_ed_path:
+        lines.append(f"source ED oracle: {report.source_ed_path}")
+    class_counts: Dict[str, int] = {}
+    for candidate in report.candidates:
+        key = candidate.matched_object_class_name or "PortalZone"
+        class_counts[key] = class_counts.get(key, 0) + 1
+    class_text = _class_counts_text(class_counts)
+    lines.append(
+        "summary: "
+        f"trigger_helpers={report.source_helper_model_count}, "
+        f"helper_polygons={report.source_helper_polygon_count}, "
+        f"source_objects={report.source_object_count}, "
+        f"helper_brushes={report.source_helper_brush_count}, "
+        f"matched_objects={report.matched_object_count}, "
+        f"skipped={report.skipped_candidate_count}, classes={class_text}"
+    )
+    for candidate in report.candidates[:16]:
+        detail = (
+            f"candidate: {candidate.source_model_name} status={candidate.status}, "
+            f"roles={','.join(f'{role}:{count}' for role, count in sorted(candidate.helper_roles.items()))}, "
+            f"center={_vec3_text(candidate.center)}"
+        )
+        if candidate.matched_object_name:
+            detail += (
+                f", source_object={candidate.matched_object_name}"
+                f"/{candidate.matched_object_class_name}"
+            )
+            if candidate.matched_object_portal_name:
+                detail += f", portal={candidate.matched_object_portal_name}"
+            if candidate.matched_object_distance is not None:
+                detail += f"@{candidate.matched_object_distance:.2f}"
+        if candidate.nearest_helper_brush_name:
+            detail += (
+                f", nearest_helper_brush={candidate.nearest_helper_brush_name}"
+                f"@{candidate.nearest_helper_brush_distance:.2f}"
+            )
+        lines.append(detail)
+    if len(report.candidates) > 16:
+        lines.append(f"candidate: ... {len(report.candidates) - 16} more")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
 def build_dat_to_ed_selection_report(
     *,
     source_dat_path: str,
@@ -5357,6 +9679,11 @@ def build_dat_to_ed_selection_report(
     include_terrain_support_patch: bool = False,
     physics_shell_model_name: str = "PhysicsBSP",
     include_physics_shell_patch: bool = False,
+    include_airail_semantics: bool = False,
+    include_sky_semantics: bool = False,
+    include_sound_semantics: bool = False,
+    include_collision_semantics: bool = False,
+    include_trigger_semantics: bool = False,
     include_skyboxes: bool = False,
     max_models: int = 32,
     max_model_points: int = 2048,
@@ -5377,6 +9704,11 @@ def build_dat_to_ed_selection_report(
         "max_total_points": int(max_total_points),
         "max_total_polygons": int(max_total_polygons),
         "include_skyboxes": bool(include_skyboxes),
+        "include_airail_semantics": bool(include_airail_semantics),
+        "include_sky_semantics": bool(include_sky_semantics),
+        "include_sound_semantics": bool(include_sound_semantics),
+        "include_collision_semantics": bool(include_collision_semantics),
+        "include_trigger_semantics": bool(include_trigger_semantics),
     }
     if not os.path.exists(source_dat):
         return DatToEdSelectionReport(
@@ -5388,6 +9720,11 @@ def build_dat_to_ed_selection_report(
             include_terrain_support_patch=bool(include_terrain_support_patch),
             physics_shell_model_name=physics_shell_model_name,
             include_physics_shell_patch=bool(include_physics_shell_patch),
+            include_airail_semantics=bool(include_airail_semantics),
+            include_sky_semantics=bool(include_sky_semantics),
+            include_sound_semantics=bool(include_sound_semantics),
+            include_collision_semantics=bool(include_collision_semantics),
+            include_trigger_semantics=bool(include_trigger_semantics),
             limits=limits,
             blockers=(f"source DAT was not found: {source_dat}",),
         )
@@ -5404,6 +9741,11 @@ def build_dat_to_ed_selection_report(
             include_terrain_support_patch=bool(include_terrain_support_patch),
             physics_shell_model_name=physics_shell_model_name,
             include_physics_shell_patch=bool(include_physics_shell_patch),
+            include_airail_semantics=bool(include_airail_semantics),
+            include_sky_semantics=bool(include_sky_semantics),
+            include_sound_semantics=bool(include_sound_semantics),
+            include_collision_semantics=bool(include_collision_semantics),
+            include_trigger_semantics=bool(include_trigger_semantics),
             limits=limits,
             blockers=(f"DAT parse failed: {exc}",),
         )
@@ -5415,6 +9757,7 @@ def build_dat_to_ed_selection_report(
     model_reports: List[DatToEdSelectionModelReport] = []
     status_counts: Dict[str, int] = {}
     helper_exclusions_by_role: Dict[str, Dict[str, int]] = {}
+    helper_semantic_sources_by_role: Dict[str, Dict[str, int]] = {}
     total_points = 0
     total_polygons = 0
     selected_points = 0
@@ -5429,6 +9772,11 @@ def build_dat_to_ed_selection_report(
             include_terrain_support_patch=bool(include_terrain_support_patch),
             physics_shell_key=physics_shell_key,
             include_physics_shell_patch=bool(include_physics_shell_patch),
+            include_airail_semantics=bool(include_airail_semantics),
+            include_sky_semantics=bool(include_sky_semantics),
+            include_sound_semantics=bool(include_sound_semantics),
+            include_collision_semantics=bool(include_collision_semantics),
+            include_trigger_semantics=bool(include_trigger_semantics),
             include_skyboxes=bool(include_skyboxes),
             max_model_points=int(max_model_points),
             max_model_polygons=int(max_model_polygons),
@@ -5445,11 +9793,23 @@ def build_dat_to_ed_selection_report(
                 helper_exclusions_by_role,
                 model_report.helper_roles,
             )
+        if model_report.status == "helper_semantic_source":
+            _accumulate_helper_exclusion_roles(
+                helper_semantic_sources_by_role,
+                model_report.helper_roles,
+            )
 
     selected_count = status_counts.get("selected", 0)
     terrain_support_count = status_counts.get("terrain_support_source", 0)
     physics_shell_count = status_counts.get("physics_shell_source", 0)
-    excluded_count = len(model_reports) - selected_count - terrain_support_count - physics_shell_count
+    helper_semantic_count = status_counts.get("helper_semantic_source", 0)
+    excluded_count = (
+        len(model_reports)
+        - selected_count
+        - terrain_support_count
+        - physics_shell_count
+        - helper_semantic_count
+    )
     cautions: List[str] = []
     if selected_count > int(max_models):
         cautions.append(
@@ -5468,6 +9828,26 @@ def build_dat_to_ed_selection_report(
         "Terrain support source means the model feeds generated terrain support instead of direct Brush output.",
         "Physics shell source means the model feeds generated static-shell slab brushes instead of direct Brush output.",
     ]
+    if include_airail_semantics:
+        notes.append(
+            "AIRail helper semantic source means aiRail helper geometry is reserved for object reconstruction instead of visible Brush output."
+        )
+    if include_sky_semantics:
+        notes.append(
+            "Sky helper semantic source means SkyMarker helper geometry is reserved for sky visibility reconstruction instead of visible Brush output."
+        )
+    if include_sound_semantics:
+        notes.append(
+            "Sound helper semantic source means SoundOnly helper geometry is reserved for AmbientSound/volume reconstruction instead of visible Brush output."
+        )
+    if include_collision_semantics:
+        notes.append(
+            "Collision helper semantic source means Invisible/Firethrough helper geometry is reserved for collision/helper object reconstruction instead of visible Brush output."
+        )
+    if include_trigger_semantics:
+        notes.append(
+            "Trigger helper semantic source means GreenScreen helper geometry is reserved for PortalZone reconstruction instead of visible Brush output."
+        )
     return DatToEdSelectionReport(
         status="selection_report_built",
         source_dat_path=source_dat,
@@ -5478,10 +9858,16 @@ def build_dat_to_ed_selection_report(
         include_terrain_support_patch=bool(include_terrain_support_patch),
         physics_shell_model_name=physics_shell_model_name,
         include_physics_shell_patch=bool(include_physics_shell_patch),
+        include_airail_semantics=bool(include_airail_semantics),
+        include_sky_semantics=bool(include_sky_semantics),
+        include_sound_semantics=bool(include_sound_semantics),
+        include_collision_semantics=bool(include_collision_semantics),
+        include_trigger_semantics=bool(include_trigger_semantics),
         total_model_count=len(model_reports),
         selected_model_count=selected_count,
         terrain_support_source_count=terrain_support_count,
         physics_shell_source_count=physics_shell_count,
+        helper_semantic_source_count=helper_semantic_count,
         excluded_model_count=excluded_count,
         total_point_count=total_points,
         total_polygon_count=total_polygons,
@@ -5490,6 +9876,9 @@ def build_dat_to_ed_selection_report(
         status_counts=status_counts,
         helper_only_exclusions_by_role=_ordered_helper_exclusion_role_summary(
             helper_exclusions_by_role
+        ),
+        helper_semantic_sources_by_role=_ordered_helper_exclusion_role_summary(
+            helper_semantic_sources_by_role
         ),
         limits=limits,
         models=tuple(model_reports),
@@ -5523,6 +9912,11 @@ def _dat_to_ed_selection_model_report(
     include_terrain_support_patch: bool,
     physics_shell_key: str,
     include_physics_shell_patch: bool,
+    include_airail_semantics: bool,
+    include_sky_semantics: bool,
+    include_sound_semantics: bool,
+    include_collision_semantics: bool,
+    include_trigger_semantics: bool,
     include_skyboxes: bool,
     max_model_points: int,
     max_model_polygons: int,
@@ -5567,13 +9961,81 @@ def _dat_to_ed_selection_model_report(
         status = "excluded_empty"
         reasons.append("model has no writable points or polygons")
     elif terrain_semantics.model_has_only_helper_textures(model):
-        status = "excluded_helper_texture"
         helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+        detail = ""
         if helper_roles:
             detail = ", ".join(f"{role}={count}" for role, count in sorted(helper_roles.items()))
-            reasons.append(f"model uses only helper/non-render textures ({detail})")
+        if (
+            include_airail_semantics
+            and int(helper_roles.get("aiRail", 0)) > 0
+            and set(helper_roles.keys()) == {"aiRail"}
+        ):
+            status = "helper_semantic_source"
+            if detail:
+                reasons.append(
+                    f"model uses only AIRail helper geometry ({detail}); "
+                    "reserved for AIRail object reconstruction"
+                )
+            else:
+                reasons.append("model uses only AIRail helper geometry")
+        elif (
+            include_sky_semantics
+            and int(helper_roles.get("skyVisibility", 0)) > 0
+            and set(helper_roles.keys()) == {"skyVisibility"}
+        ):
+            status = "helper_semantic_source"
+            if detail:
+                reasons.append(
+                    f"model uses only sky helper geometry ({detail}); "
+                    "reserved for sky visibility reconstruction"
+                )
+            else:
+                reasons.append("model uses only sky helper geometry")
+        elif (
+            include_sound_semantics
+            and int(helper_roles.get("sound", 0)) > 0
+            and set(helper_roles.keys()) == {"sound"}
+        ):
+            status = "helper_semantic_source"
+            if detail:
+                reasons.append(
+                    f"model uses only SoundOnly helper geometry ({detail}); "
+                    "reserved for AmbientSound/volume reconstruction"
+                )
+            else:
+                reasons.append("model uses only SoundOnly helper geometry")
+        elif (
+            include_collision_semantics
+            and int(helper_roles.get("collision", 0)) > 0
+            and set(helper_roles.keys()).issubset({"collision", "sprite"})
+        ):
+            status = "helper_semantic_source"
+            if detail:
+                reasons.append(
+                    f"model uses only collision helper geometry ({detail}); "
+                    "reserved for collision helper reconstruction"
+                )
+            else:
+                reasons.append("model uses only collision helper geometry")
+        elif (
+            include_trigger_semantics
+            and int(helper_roles.get("trigger", 0)) > 0
+            and set(helper_roles.keys()) == {"trigger"}
+        ):
+            status = "helper_semantic_source"
+            if detail:
+                reasons.append(
+                    f"model uses only trigger helper geometry ({detail}); "
+                    "reserved for PortalZone reconstruction"
+                )
+            else:
+                reasons.append("model uses only trigger helper geometry")
         else:
-            reasons.append("model uses only helper/non-render textures")
+            status = "excluded_helper_texture"
+            if detail:
+                reasons.append(f"model uses only helper/non-render textures ({detail})")
+            else:
+                reasons.append("model uses only helper/non-render textures")
     elif summary.point_count > int(max_model_points) or summary.polygon_count > int(max_model_polygons):
         status = "excluded_oversized"
         if summary.point_count > int(max_model_points):
@@ -5657,11 +10119,15 @@ def _dat_to_ed_selection_manifest(
         diagnostics = {
             "terrain_cutout_coverage_manifest_path": acceptance_report.terrain_cutout_coverage_manifest_path,
             "terrain_support_source_coverage_manifest_path": acceptance_report.terrain_support_source_coverage_manifest_path,
+            "physics_shell_source_coverage_manifest_path": acceptance_report.physics_shell_source_coverage_manifest_path,
             "terrain_cutout_coverage": _full_world_manifest_cutout_summary(
                 acceptance_report.terrain_cutout_coverage
             ),
             "terrain_support_source_coverage": _full_world_manifest_source_coverage_summary(
                 acceptance_report.terrain_support_source_coverage
+            ),
+            "physics_shell_source_coverage": _full_world_manifest_physics_shell_coverage_summary(
+                acceptance_report.physics_shell_source_coverage
             ),
         }
     return {
@@ -5676,11 +10142,17 @@ def _dat_to_ed_selection_manifest(
         "include_terrain_support_patch": report.include_terrain_support_patch,
         "physics_shell_model_name": report.physics_shell_model_name,
         "include_physics_shell_patch": report.include_physics_shell_patch,
+        "include_airail_semantics": report.include_airail_semantics,
+        "include_sky_semantics": report.include_sky_semantics,
+        "include_sound_semantics": report.include_sound_semantics,
+        "include_collision_semantics": report.include_collision_semantics,
+        "include_trigger_semantics": report.include_trigger_semantics,
         "summary": {
             "total_model_count": report.total_model_count,
             "selected_model_count": report.selected_model_count,
             "terrain_support_source_count": report.terrain_support_source_count,
             "physics_shell_source_count": report.physics_shell_source_count,
+            "helper_semantic_source_count": report.helper_semantic_source_count,
             "excluded_model_count": report.excluded_model_count,
             "total_point_count": report.total_point_count,
             "total_polygon_count": report.total_polygon_count,
@@ -5690,6 +10162,10 @@ def _dat_to_ed_selection_manifest(
             "helper_only_exclusions_by_role": {
                 role: dict(values)
                 for role, values in report.helper_only_exclusions_by_role.items()
+            },
+            "helper_semantic_sources_by_role": {
+                role: dict(values)
+                for role, values in report.helper_semantic_sources_by_role.items()
             },
             "limits": dict(report.limits),
         },
@@ -5723,6 +10199,7 @@ def build_full_world_skeleton_acceptance_manifest(
     staged_source_dat_path: str = "",
     text_report_path: str = "",
     selection_report_path: str = "",
+    behavior_prop_report_path: str = "",
     dedit_saved_ed_path: str = "",
     compiled_dat_path: str = "",
     processor_log_paths: Sequence[str] = (),
@@ -5766,6 +10243,7 @@ def build_full_world_skeleton_acceptance_manifest(
             "generated_ed_path": report.generated_ed_path,
             "text_report_path": text_report_path,
             "selection_report_path": selection_report_path,
+            "behavior_prop_report_path": behavior_prop_report_path,
             "work_dir": report.work_dir,
             "suggested_world_install_path": report.world_install_path,
             "dedit_saved_ed_path": dedit_saved_ed_path,
@@ -5773,6 +10251,7 @@ def build_full_world_skeleton_acceptance_manifest(
             "processor_log_paths": list(processor_log_paths),
             "terrain_cutout_coverage_manifest_path": report.terrain_cutout_coverage_manifest_path,
             "terrain_support_source_coverage_manifest_path": report.terrain_support_source_coverage_manifest_path,
+            "physics_shell_source_coverage_manifest_path": report.physics_shell_source_coverage_manifest_path,
         },
         "generation": {
             "group_name": report.group_name,
@@ -5791,6 +10270,45 @@ def build_full_world_skeleton_acceptance_manifest(
             "include_validation_floor": report.include_validation_floor,
             "include_terrain_support_patch": report.include_terrain_support_patch,
             "include_physics_shell_patch": report.include_physics_shell_patch,
+            "include_door_objects": report.include_door_objects,
+            "door_source_ed_path": report.door_source_ed_path,
+            "door_behavior_context": report.door_behavior_context,
+            "include_airail_objects": report.include_airail_objects,
+            "airail_source_ed_path": report.airail_source_ed_path,
+            "include_sky_objects": report.include_sky_objects,
+            "sky_source_ed_path": report.sky_source_ed_path,
+            "include_sky_marker_brushes": report.include_sky_marker_brushes,
+            "include_sky_marker_residue_brushes": report.include_sky_marker_residue_brushes,
+            "sky_marker_residue_reference_dat_path": report.sky_marker_residue_reference_dat_path,
+            "include_sound_objects": report.include_sound_objects,
+            "sound_source_ed_path": report.sound_source_ed_path,
+            "include_gameplay_trigger_objects": report.include_gameplay_trigger_objects,
+            "gameplay_trigger_source_ed_path": report.gameplay_trigger_source_ed_path,
+            "include_static_prop_objects": report.include_static_prop_objects,
+            "static_prop_source_ed_path": report.static_prop_source_ed_path,
+            "include_low_risk_behavior_prop_objects": report.include_low_risk_behavior_prop_objects,
+            "low_risk_behavior_prop_source_ed_path": report.low_risk_behavior_prop_source_ed_path,
+            "include_wall_torch_objects": report.include_wall_torch_objects,
+            "wall_torch_source_ed_path": report.wall_torch_source_ed_path,
+            "include_fire_objects": report.include_fire_objects,
+            "fire_source_ed_path": report.fire_source_ed_path,
+            "include_candle_prop_objects": report.include_candle_prop_objects,
+            "candle_prop_source_ed_path": report.candle_prop_source_ed_path,
+            "include_brazier_objects": report.include_brazier_objects,
+            "brazier_source_ed_path": report.brazier_source_ed_path,
+            "include_treasure_chest_objects": report.include_treasure_chest_objects,
+            "treasure_chest_source_ed_path": report.treasure_chest_source_ed_path,
+            "include_prop_damager_objects": report.include_prop_damager_objects,
+            "prop_damager_source_ed_path": report.prop_damager_source_ed_path,
+            "include_destructable_prop_objects": report.include_destructable_prop_objects,
+            "destructable_prop_source_ed_path": report.destructable_prop_source_ed_path,
+            "include_destructable_brush_objects": report.include_destructable_brush_objects,
+            "include_collision_helper_objects": report.include_collision_helper_objects,
+            "include_collision_helper_brushes": report.include_collision_helper_brushes,
+            "collision_helper_source_ed_path": report.collision_helper_source_ed_path,
+            "include_trigger_helper_objects": report.include_trigger_helper_objects,
+            "include_trigger_helper_brushes": report.include_trigger_helper_brushes,
+            "trigger_helper_source_ed_path": report.trigger_helper_source_ed_path,
             "max_processor_brushes": report.max_processor_brushes,
             "max_processor_polygons": report.max_processor_polygons,
             "models": models,
@@ -5801,6 +10319,9 @@ def build_full_world_skeleton_acceptance_manifest(
             ),
             "terrain_support_source_coverage": _full_world_manifest_source_coverage_summary(
                 report.terrain_support_source_coverage
+            ),
+            "physics_shell_source_coverage": _full_world_manifest_physics_shell_coverage_summary(
+                report.physics_shell_source_coverage
             ),
             "manual_steps": list(report.manual_steps),
             "blockers": list(report.blockers),
@@ -5823,6 +10344,162 @@ def write_full_world_skeleton_acceptance_manifest(
         json.dump(manifest, f, indent=2, sort_keys=True)
         f.write("\n")
     return manifest_path
+
+
+def build_sky_marker_residue_compile_audit_manifest(
+    report: SkyMarkerResidueCompileAuditReport,
+) -> Dict[str, object]:
+    return {
+        "kind": "mm9_sky_marker_residue_compile_audit",
+        "schema_version": 1,
+        "status": report.status,
+        "source_dat_path": report.source_dat_path,
+        "source_ed_path": report.source_ed_path,
+        "reference_dat_path": report.reference_dat_path,
+        "artifacts": {
+            "work_dir": report.work_dir,
+            "generated_ed_path": report.generated_ed_path,
+            "compiled_dat_path": report.compiled_dat_path,
+            "processor_log_paths": list(report.processor_log_paths),
+        },
+        "generated_candidate": (
+            {
+                "status": report.acceptance.status,
+                "model_count": report.acceptance.model_count,
+                "point_count": report.acceptance.point_count,
+                "polygon_count": report.acceptance.polygon_count,
+                "object_count": report.acceptance.object_count,
+                "object_property_count": report.acceptance.object_property_count,
+                "generated_object_class_counts": dict(report.acceptance.generated_object_class_counts),
+                "include_sky_marker_residue_brushes": report.acceptance.include_sky_marker_residue_brushes,
+                "sky_marker_residue_reference_dat_path": report.acceptance.sky_marker_residue_reference_dat_path,
+            }
+            if report.acceptance is not None
+            else None
+        ),
+        "residue_correlation": (
+            {
+                "status": report.residue_report.status,
+                "source_sky_marker_face_count": report.residue_report.source_sky_marker_face_count,
+                "compiled_sky_visibility_polygon_count": report.residue_report.compiled_sky_visibility_polygon_count,
+                "compiled_physics_sky_visibility_polygon_count": report.residue_report.compiled_physics_sky_visibility_polygon_count,
+                "compiled_visibility_sky_visibility_polygon_count": report.residue_report.compiled_visibility_sky_visibility_polygon_count,
+                "compiled_residue_match_count": report.residue_report.compiled_residue_match_count,
+                "compiled_residue_unmatched_count": report.residue_report.compiled_residue_unmatched_count,
+                "matched_source_sky_marker_face_count": report.residue_report.matched_source_sky_marker_face_count,
+                "matched_source_sky_marker_brush_count": report.residue_report.matched_source_sky_marker_brush_count,
+            }
+            if report.residue_report is not None
+            else None
+        ),
+        "helper_leakage": (
+            build_compiled_dat_helper_leakage_manifest(report.helper_leakage)
+            if report.helper_leakage is not None
+            else None
+        ),
+        "processor_logs": [
+            {
+                "path": log.path,
+                "status": log.status,
+                "problem_brush_count": log.problem_brush_count,
+                "warning_counts": dict(log.warning_counts),
+                "warnings": list(log.warnings),
+            }
+            for log in report.processor_logs
+        ],
+        "manual_steps": list(report.manual_steps),
+        "blockers": list(report.blockers),
+        "cautions": list(report.cautions),
+        "notes": list(report.notes),
+    }
+
+
+def write_sky_marker_residue_compile_audit_manifest(
+    report: SkyMarkerResidueCompileAuditReport,
+    manifest_path: str,
+) -> str:
+    manifest = build_sky_marker_residue_compile_audit_manifest(report)
+    os.makedirs(os.path.dirname(os.path.abspath(manifest_path)) or ".", exist_ok=True)
+    with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    return manifest_path
+
+
+def build_compiled_dat_helper_leakage_manifest(
+    report: CompiledDatHelperLeakageReport,
+) -> Dict[str, object]:
+    return {
+        "kind": "mm9_compiled_dat_helper_leakage",
+        "schema_version": 1,
+        "status": report.status,
+        "compiled_dat_path": report.compiled_dat_path,
+        "reference_dat_path": report.reference_dat_path,
+        "summary": {
+            "compiled_model_count": report.compiled_model_count,
+            "reference_model_count": report.reference_model_count,
+            "compiled_total_helper_polygon_count": report.compiled_total_helper_polygon_count,
+            "reference_total_helper_polygon_count": report.reference_total_helper_polygon_count,
+            "compiled_visibility_helper_polygon_count": report.compiled_visibility_helper_polygon_count,
+            "reference_visibility_helper_polygon_count": report.reference_visibility_helper_polygon_count,
+            "compiled_terrain_helper_polygon_count": report.compiled_terrain_helper_polygon_count,
+            "reference_terrain_helper_polygon_count": report.reference_terrain_helper_polygon_count,
+            "compiled_world_model_helper_polygon_count": report.compiled_world_model_helper_polygon_count,
+            "reference_world_model_helper_polygon_count": report.reference_world_model_helper_polygon_count,
+        },
+        "role_comparisons": [
+            {
+                "role": item.role,
+                "status": item.status,
+                "compiled_total": item.compiled_total,
+                "reference_total": item.reference_total,
+                "compiled_by_model_kind": dict(item.compiled_by_model_kind),
+                "reference_by_model_kind": dict(item.reference_by_model_kind),
+                "notes": list(item.notes),
+            }
+            for item in report.role_comparisons
+        ],
+        "models": [
+            _compiled_dat_helper_model_manifest(item)
+            for item in report.model_summaries
+            if item.helper_polygon_count > 0
+        ],
+        "reference_models": [
+            _compiled_dat_helper_model_manifest(item)
+            for item in report.reference_model_summaries
+            if item.helper_polygon_count > 0
+        ],
+        "blockers": list(report.blockers),
+        "cautions": list(report.cautions),
+        "notes": list(report.notes),
+    }
+
+
+def write_compiled_dat_helper_leakage_manifest(
+    report: CompiledDatHelperLeakageReport,
+    manifest_path: str,
+) -> str:
+    manifest = build_compiled_dat_helper_leakage_manifest(report)
+    os.makedirs(os.path.dirname(os.path.abspath(manifest_path)) or ".", exist_ok=True)
+    with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    return manifest_path
+
+
+def _compiled_dat_helper_model_manifest(
+    item: CompiledDatHelperModelSummary,
+) -> Dict[str, object]:
+    return {
+        "model_name": item.model_name,
+        "model_kind": item.model_kind,
+        "status": item.status,
+        "polygon_count": item.polygon_count,
+        "helper_polygon_count": item.helper_polygon_count,
+        "helper_roles": dict(item.helper_roles),
+        "helper_textures": dict(item.helper_textures),
+        "notes": list(item.notes),
+    }
 
 
 def _full_world_manifest_cutout_summary(
@@ -5863,6 +10540,159 @@ def _full_world_manifest_source_coverage_summary(
         "cautions": list(report.cautions),
         "notes": list(report.notes),
     }
+
+
+def _full_world_manifest_physics_shell_coverage_summary(
+    report: Optional["PhysicsShellSourceCoverageReport"],
+) -> Optional[Dict[str, object]]:
+    if report is None:
+        return None
+    return {
+        "status": report.status,
+        "physics_model_name": report.physics_model_name,
+        "source_polygon_count": report.source_polygon_count,
+        "classified_source_polygon_count": report.classified_source_polygon_count,
+        "generated_source_polygon_count": report.generated_source_polygon_count,
+        "uncovered_source_polygon_count": report.uncovered_source_polygon_count,
+        "generated_unknown_polygon_count": report.generated_unknown_polygon_count,
+        "role_summaries": [
+            {
+                "role": item.role,
+                "source_polygon_count": item.source_polygon_count,
+                "generated_polygon_count": item.generated_polygon_count,
+                "uncovered_polygon_count": item.uncovered_polygon_count,
+            }
+            for item in report.role_summaries
+        ],
+        "blockers": list(report.blockers),
+        "cautions": list(report.cautions),
+        "notes": list(report.notes),
+    }
+
+
+def _physics_shell_source_coverage_manifest(
+    report: PhysicsShellSourceCoverageReport,
+) -> Dict[str, object]:
+    return {
+        "kind": "mm9_physics_shell_source_coverage",
+        "schema_version": 1,
+        "status": report.status,
+        "source_dat_path": report.source_dat_path,
+        "generated_ed_path": report.generated_ed_path,
+        "physics_model_name": report.physics_model_name,
+        "source_polygon_count": report.source_polygon_count,
+        "classified_source_polygon_count": report.classified_source_polygon_count,
+        "generated_source_polygon_count": report.generated_source_polygon_count,
+        "uncovered_source_polygon_count": report.uncovered_source_polygon_count,
+        "generated_unknown_polygon_count": report.generated_unknown_polygon_count,
+        "role_summaries": [
+            {
+                "role": item.role,
+                "source_polygon_count": item.source_polygon_count,
+                "generated_polygon_count": item.generated_polygon_count,
+                "uncovered_polygon_count": item.uncovered_polygon_count,
+            }
+            for item in report.role_summaries
+        ],
+        "generated_source_polygon_indices": list(report.generated_source_polygon_indices),
+        "generated_unknown_polygon_indices": list(report.generated_unknown_polygon_indices),
+        "blockers": list(report.blockers),
+        "cautions": list(report.cautions),
+        "notes": list(report.notes),
+    }
+
+
+def format_physics_shell_source_coverage_report(
+    report: PhysicsShellSourceCoverageReport,
+) -> str:
+    lines = [
+        "DAT PhysicsBSP shell source coverage",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+        f"generated ED: {report.generated_ed_path}",
+        f"physics model: {report.physics_model_name}",
+        (
+            "coverage: "
+            f"source_polygons={report.source_polygon_count}, "
+            f"classified={report.classified_source_polygon_count}, "
+            f"generated={report.generated_source_polygon_count}, "
+            f"uncovered={report.uncovered_source_polygon_count}, "
+            f"unknown_generated={report.generated_unknown_polygon_count}"
+        ),
+    ]
+    for item in report.role_summaries:
+        lines.append(
+            f"- {item.role}: source={item.source_polygon_count}, "
+            f"generated={item.generated_polygon_count}, uncovered={item.uncovered_polygon_count}"
+        )
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
+def format_compiled_dat_helper_leakage_report(
+    report: CompiledDatHelperLeakageReport,
+) -> str:
+    lines = [
+        "DAT compiled helper leakage",
+        f"status: {report.status}",
+        f"compiled DAT: {report.compiled_dat_path}",
+    ]
+    if report.reference_dat_path:
+        lines.append(f"reference DAT: {report.reference_dat_path}")
+    lines.append(
+        "helper totals: "
+        f"compiled={report.compiled_total_helper_polygon_count}, "
+        f"reference={report.reference_total_helper_polygon_count}, "
+        f"VisBSP={report.compiled_visibility_helper_polygon_count}/"
+        f"{report.reference_visibility_helper_polygon_count}, "
+        f"Terrain*={report.compiled_terrain_helper_polygon_count}/"
+        f"{report.reference_terrain_helper_polygon_count}, "
+        f"world_models={report.compiled_world_model_helper_polygon_count}/"
+        f"{report.reference_world_model_helper_polygon_count}"
+    )
+    for comparison in report.role_comparisons:
+        compiled_kinds = ", ".join(
+            f"{kind}:{count}"
+            for kind, count in sorted(comparison.compiled_by_model_kind.items())
+        ) or "none"
+        reference_kinds = ", ".join(
+            f"{kind}:{count}"
+            for kind, count in sorted(comparison.reference_by_model_kind.items())
+        ) or "none"
+        lines.append(
+            f"- role {comparison.role}: {comparison.status}, "
+            f"compiled={comparison.compiled_total}, reference={comparison.reference_total}, "
+            f"compiled_kinds={compiled_kinds}, reference_kinds={reference_kinds}"
+        )
+        for note in comparison.notes:
+            lines.append(f"  note: {note}")
+    for item in report.model_summaries:
+        if item.helper_polygon_count <= 0:
+            continue
+        role_text = ", ".join(f"{role}:{count}" for role, count in sorted(item.helper_roles.items()))
+        texture_text = ", ".join(
+            f"{texture}:{count}"
+            for texture, count in sorted(item.helper_textures.items())
+        )
+        lines.append(
+            f"- model {item.model_name}: kind={item.model_kind}, status={item.status}, "
+            f"polygons={item.polygon_count}, helpers={item.helper_polygon_count}, "
+            f"roles={role_text or 'none'}, textures={texture_text or 'none'}"
+        )
+        for note in item.notes:
+            lines.append(f"  note: {note}")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
 
 
 def format_terrain_cutout_coverage_report(report: TerrainCutoutCoverageReport) -> str:
@@ -6314,6 +11144,147 @@ def _artifact_for_path(path: str) -> Optional[SourceWorldArtifact]:
         version=version,
         status=status,
         notes=tuple(notes),
+    )
+
+
+@dataclass(frozen=True)
+class _SkyMarkerSourceFaceEvidence:
+    brush_name: str
+    model_index: int
+    face_index: int
+    vertex_count: int = 0
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    normal: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    brush_flags: Tuple[str, ...] = ()
+    texture_flags: Optional[int] = None
+    surface_flags: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class _SkyMarkerCompiledResiduePolygon:
+    model_name: str
+    model_kind: str
+    model_index: int
+    polygon_index: int
+    vertex_count: int = 0
+    texture_name: str = ""
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    normal: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+def _sky_marker_face_key(item: object) -> Tuple[int, int]:
+    return (
+        int(getattr(item, "model_index", -1)),
+        int(getattr(item, "face_index", -1)),
+    )
+
+
+def _compiled_dat_helper_model_summaries(
+    bsp_world: object,
+) -> Tuple[CompiledDatHelperModelSummary, ...]:
+    summaries: List[CompiledDatHelperModelSummary] = []
+    for model in getattr(bsp_world, "world_models", ()) or ():
+        name = str(getattr(model, "name", "") or "")
+        kind = _compiled_dat_model_kind(model)
+        polygons = tuple(getattr(model, "polygons", ()) or ())
+        helper_roles: Dict[str, int] = {}
+        helper_textures: Dict[str, int] = {}
+        notes: List[str] = []
+        for polygon in polygons:
+            try:
+                texture = str(model.texture_name_for(polygon) or "")
+            except Exception as exc:
+                notes.append(f"{name}: texture lookup failed: {exc}")
+                texture = ""
+            role = terrain_semantics.helper_texture_role(texture)
+            if not role:
+                continue
+            helper_roles[role] = int(helper_roles.get(role, 0)) + 1
+            helper_textures[texture] = int(helper_textures.get(texture, 0)) + 1
+        helper_count = sum(helper_roles.values())
+        if helper_count <= 0:
+            status = "no_helper_textures"
+        elif kind == "physics_bsp":
+            status = "physics_helper_data"
+        elif kind == "visibility_bsp":
+            status = "visibility_helper_leak"
+        elif kind == "terrain":
+            status = "terrain_helper_leak"
+        elif kind == "world_model":
+            status = "world_model_helper_geometry"
+        else:
+            status = "helper_geometry"
+        summaries.append(CompiledDatHelperModelSummary(
+            model_name=name,
+            model_kind=kind,
+            polygon_count=len(polygons),
+            helper_polygon_count=helper_count,
+            helper_roles=dict(sorted(helper_roles.items())),
+            helper_textures=dict(sorted(helper_textures.items())),
+            status=status,
+            notes=tuple(_unique_text(notes)),
+        ))
+    return tuple(summaries)
+
+
+def _compiled_dat_model_kind(model: object) -> str:
+    if terrain_semantics.is_physics_bsp_model(model):
+        return "physics_bsp"
+    if terrain_semantics.is_vis_bsp_model(model):
+        return "visibility_bsp"
+    if terrain_semantics.is_terrain_model(model):
+        return "terrain"
+    try:
+        if bool(getattr(model, "is_skybox", lambda: False)()):
+            return "skybox"
+    except Exception:
+        pass
+    return "world_model"
+
+
+def _helper_counts_by_role_and_kind(
+    model_summaries: Sequence[CompiledDatHelperModelSummary],
+) -> Dict[str, Dict[str, int]]:
+    result: Dict[str, Dict[str, int]] = {}
+    for item in model_summaries:
+        for role, count in item.helper_roles.items():
+            role_entry = result.setdefault(str(role), {})
+            role_entry[item.model_kind] = int(role_entry.get(item.model_kind, 0)) + int(count)
+    return {
+        role: dict(sorted(kind_counts.items()))
+        for role, kind_counts in sorted(result.items())
+    }
+
+
+def _helper_counts_by_model_and_role(
+    model_summaries: Sequence[CompiledDatHelperModelSummary],
+) -> Dict[Tuple[str, str], int]:
+    result: Dict[Tuple[str, str], int] = {}
+    for item in model_summaries:
+        for role, count in item.helper_roles.items():
+            key = (item.model_name, str(role))
+            result[key] = int(result.get(key, 0)) + int(count)
+    return result
+
+
+def _helper_role_totals(
+    model_summaries: Sequence[CompiledDatHelperModelSummary],
+) -> Dict[str, int]:
+    result: Dict[str, int] = {}
+    for item in model_summaries:
+        for role, count in item.helper_roles.items():
+            result[str(role)] = int(result.get(str(role), 0)) + int(count)
+    return dict(sorted(result.items()))
+
+
+def _helper_count_for_kind(
+    model_summaries: Sequence[CompiledDatHelperModelSummary],
+    kind: str,
+) -> int:
+    return sum(
+        int(item.helper_polygon_count)
+        for item in model_summaries
+        if item.model_kind == kind
     )
 
 
@@ -7188,6 +12159,42 @@ def _binary_ascii_strings(data: bytes, *, min_length: int = 4) -> List[str]:
     ]
 
 
+def _generated_physics_shell_source_polygon_indices(
+    brush_names: Sequence[str],
+    shell_prefix: str,
+) -> Tuple[int, ...]:
+    prefix = _legacy_name_component(shell_prefix or "PhysicsShell")
+    if not prefix:
+        prefix = "PhysicsShell"
+    pattern = re.compile(r"(?:^|_)" + re.escape(prefix) + r"_(\d+)(?:_\d+)?$")
+    result: List[int] = []
+    seen = set()
+    for name in brush_names:
+        match = pattern.search(str(name or ""))
+        if not match:
+            continue
+        index = int(match.group(1))
+        if index in seen:
+            continue
+        seen.add(index)
+        result.append(index)
+    return tuple(result)
+
+
+def _physics_shell_source_polygon_roles(model: object) -> Dict[int, str]:
+    return terrain_reconstruction.physics_shell_source_polygon_roles(model)
+
+
+def _legacy_name_component(value: object) -> str:
+    result: List[str] = []
+    for ch in str(value or ""):
+        if ch.isalnum() or ch in {"_", "-"}:
+            result.append(ch)
+        elif ch.isspace():
+            result.append("_")
+    return "".join(result).strip("_-")
+
+
 def _terrain_source_coverage_items(
     terrain: object,
     *,
@@ -7246,6 +12253,1273 @@ def _terrain_cutout_coverage_items(
         ignored_textures=ignored_textures,
         require_texture=False,
     )
+
+
+def _airail_oracle_objects(source_ed_path: str) -> Tuple[AirailOracleObject, ...]:
+    from features.dat_editing import legacy_ed
+
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[AirailOracleObject] = []
+    for record in scan.records:
+        if str(record.class_name).lower() != "airail":
+            continue
+        raw_pos = record.property_value("Pos", (0.0, 0.0, 0.0))
+        name = str(record.property_value("Name", "") or f"AIRail{len(result)}")
+        result.append(AirailOracleObject(
+            name=name,
+            class_name=str(record.class_name),
+            pos=_safe_vec3(raw_pos),
+        ))
+    return tuple(result)
+
+
+def _airail_rail_brush_oracles(source_ed_path: str) -> Tuple[AirailRailBrushOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    scene = legacy_ed.load_legacy_ed_geometry_scene(source_ed_path)
+    result: List[AirailRailBrushOracle] = []
+    for model in scene.models:
+        rail_indices = set()
+        rail_face_count = 0
+        for face in getattr(model, "faces", ()) or ():
+            if "rail.dtx" not in str(getattr(face, "material_name", "") or "").lower():
+                continue
+            rail_face_count += 1
+            rail_indices.update(int(index) for index in getattr(face, "vertex_indices", ()) or ())
+        if not rail_indices:
+            continue
+        points = [
+            _safe_vec3(model.points[index])
+            for index in rail_indices
+            if 0 <= index < len(getattr(model, "points", ()) or ())
+        ]
+        if not points:
+            continue
+        bounds_min, bounds_max, center = _points_bounds_center(points)
+        result.append(AirailRailBrushOracle(
+            name=str(getattr(model, "name", "") or f"RailBrush{len(result)}"),
+            bounds_min=bounds_min,
+            bounds_max=bounds_max,
+            center=center,
+            rail_face_count=rail_face_count,
+        ))
+    return tuple(result)
+
+
+def _airail_reconstruction_candidate(
+    model_index: int,
+    summary: PrefabSurrogateCompositeModelSummary,
+    *,
+    source_airail_objects: Sequence[AirailOracleObject],
+    source_rail_brushes: Sequence[AirailRailBrushOracle],
+    max_object_match_distance: float,
+    ambiguous_distance_epsilon: float,
+) -> AirailReconstructionCandidate:
+    nearest_object, object_distance, ambiguous_object = _nearest_airail_object(
+        summary.center,
+        source_airail_objects,
+        ambiguous_distance_epsilon=ambiguous_distance_epsilon,
+    )
+    nearest_brush, brush_distance, _ambiguous_brush = _nearest_airail_rail_brush(
+        summary.center,
+        source_rail_brushes,
+        ambiguous_distance_epsilon=ambiguous_distance_epsilon,
+    )
+
+    notes: List[str] = []
+    if not source_airail_objects:
+        status = "pending_source_oracle"
+        notes.append("source ED AIRail object oracle is not available")
+    elif nearest_object is None or object_distance is None:
+        status = "unmatched_source_airail"
+        notes.append("no source AIRail object candidate was found")
+    elif object_distance > max(0.0, float(max_object_match_distance)):
+        status = "unmatched_source_airail"
+        notes.append(
+            f"nearest AIRail object is {object_distance:.2f} units away, beyond match distance {float(max_object_match_distance):.2f}"
+        )
+    elif ambiguous_object:
+        status = "ambiguous_source_airail"
+        notes.append("nearest AIRail object is ambiguous within the distance epsilon")
+    else:
+        status = "matched_source_airail"
+
+    return AirailReconstructionCandidate(
+        source_model_name=summary.name,
+        source_model_index=int(model_index),
+        polygon_count=summary.polygon_count,
+        bounds_min=summary.bounds_min,
+        bounds_max=summary.bounds_max,
+        center=summary.center,
+        nearest_airail_name=nearest_object.name if nearest_object else "",
+        nearest_airail_distance=object_distance,
+        nearest_rail_brush_name=nearest_brush.name if nearest_brush else "",
+        nearest_rail_brush_distance=brush_distance,
+        status=status,
+        notes=tuple(notes),
+    )
+
+
+def _sky_object_oracles(source_ed_path: str) -> Tuple[SkyObjectOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[SkyObjectOracle] = []
+    for record in scan.records:
+        class_name = str(record.class_name)
+        if class_name not in _SKY_OBJECT_CLASSES:
+            continue
+        name = str(record.property_value("Name", "") or f"{class_name}{len(result)}")
+        result.append(SkyObjectOracle(
+            name=name,
+            class_name=class_name,
+            pos=_safe_vec3(record.property_value("Pos", (0.0, 0.0, 0.0))),
+            property_count=len(record.properties),
+        ))
+    return tuple(result)
+
+
+def _sky_marker_brush_oracles(source_ed_path: str) -> Tuple[SkyMarkerBrushOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    scene = legacy_ed.load_legacy_ed_geometry_scene(source_ed_path)
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    brush_records = [record for record in scan.records if record.class_name == "Brush"]
+    result: List[SkyMarkerBrushOracle] = []
+    for model_index, model in enumerate(scene.models):
+        sky_indices = set()
+        sky_face_count = 0
+        for face in getattr(model, "faces", ()) or ():
+            role = terrain_semantics.helper_texture_role(getattr(face, "material_name", ""))
+            if role != "skyVisibility":
+                continue
+            sky_face_count += 1
+            sky_indices.update(int(index) for index in getattr(face, "vertex_indices", ()) or ())
+        if sky_face_count <= 0:
+            continue
+        points = [
+            _safe_vec3(model.points[index])
+            for index in sky_indices
+            if 0 <= index < len(getattr(model, "points", ()) or ())
+        ]
+        if not points:
+            continue
+        bounds_min, bounds_max, center = _points_bounds_center(points)
+        name = ""
+        if model_index < len(brush_records):
+            name = str(brush_records[model_index].property_value("Name", "") or "")
+        result.append(SkyMarkerBrushOracle(
+            name=name or str(getattr(model, "name", "") or f"SkyMarkerBrush{len(result)}"),
+            bounds_min=bounds_min,
+            bounds_max=bounds_max,
+            center=center,
+            sky_face_count=sky_face_count,
+        ))
+    return tuple(result)
+
+
+_SKY_MARKER_BRUSH_FLAG_NAMES = (
+    "SkyPortal",
+    "FullyBright",
+    "FlatShade",
+    "GouraudShade",
+    "LightMap",
+    "Subdivide",
+    "NoSnap",
+    "SkyPan",
+    "Additive",
+    "TimeOfDay",
+    "TerrainOccluder",
+    "VisBlocker",
+    "NotAStep",
+)
+
+
+def _sky_marker_brush_flag_counts(source_ed_path: str) -> Dict[str, int]:
+    from features.dat_editing import legacy_ed
+
+    scene = legacy_ed.load_legacy_ed_geometry_scene(source_ed_path)
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    brush_records = [record for record in scan.records if record.class_name == "Brush"]
+    counts: Dict[str, int] = {name: 0 for name in _SKY_MARKER_BRUSH_FLAG_NAMES}
+    for model_index, model in enumerate(scene.models):
+        role_counts: Dict[str, int] = {}
+        for face in getattr(model, "faces", ()) or ():
+            role = terrain_semantics.helper_texture_role(getattr(face, "material_name", ""))
+            if role:
+                role_counts[role] = role_counts.get(role, 0) + 1
+        if int(role_counts.get("skyVisibility", 0)) <= 0:
+            continue
+        if set(role_counts.keys()) != {"skyVisibility"}:
+            continue
+        if model_index >= len(brush_records):
+            continue
+        record = brush_records[model_index]
+        for flag_name in _SKY_MARKER_BRUSH_FLAG_NAMES:
+            if bool(record.property_value(flag_name, False)):
+                counts[flag_name] += 1
+    return {name: count for name, count in counts.items() if count}
+
+
+def _sky_marker_source_face_evidence(
+    source_ed_path: str,
+) -> Tuple[_SkyMarkerSourceFaceEvidence, ...]:
+    from features.dat_editing import legacy_ed
+
+    scene = legacy_ed.load_legacy_ed_geometry_scene(source_ed_path)
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    brush_records = [record for record in scan.records if record.class_name == "Brush"]
+    result: List[_SkyMarkerSourceFaceEvidence] = []
+    for model_index, model in enumerate(scene.models):
+        record = brush_records[model_index] if model_index < len(brush_records) else None
+        brush_name = ""
+        brush_flags: Tuple[str, ...] = ()
+        if record is not None:
+            brush_name = str(record.property_value("Name", "") or "")
+            brush_flags = tuple(
+                flag_name
+                for flag_name in _SKY_MARKER_BRUSH_FLAG_NAMES
+                if bool(record.property_value(flag_name, False))
+            )
+        if not brush_name:
+            brush_name = str(getattr(model, "name", "") or f"SkyMarkerBrush{model_index}")
+        model_points = tuple(_safe_vec3(point) for point in getattr(model, "points", ()) or ())
+        for face_index, face in enumerate(getattr(model, "faces", ()) or ()):
+            role = terrain_semantics.helper_texture_role(getattr(face, "material_name", ""))
+            if role != "skyVisibility":
+                continue
+            indices = tuple(int(index) for index in getattr(face, "vertex_indices", ()) or ())
+            points = [
+                model_points[index]
+                for index in indices
+                if 0 <= index < len(model_points)
+            ]
+            if len(points) < 3 or len(points) != len(indices):
+                continue
+            normal = _normalized_vec3(_safe_vec3(getattr(face, "extras", {}).get("normal", (0.0, 0.0, 0.0))))
+            if _vec3_length(normal) <= 0.0:
+                normal = _polygon_normal(points)
+            texture_flags = _optional_int(getattr(face, "extras", {}).get("texture_flags", None))
+            surface_flags = _optional_int(getattr(face, "extras", {}).get("surface_flags", None))
+            result.append(_SkyMarkerSourceFaceEvidence(
+                brush_name=brush_name,
+                model_index=int(model_index),
+                face_index=int(face_index),
+                vertex_count=len(indices),
+                center=_polygon_center(points),
+                normal=normal,
+                brush_flags=brush_flags,
+                texture_flags=texture_flags,
+                surface_flags=surface_flags,
+            ))
+    return tuple(result)
+
+
+def _compiled_sky_marker_residue_polygons(
+    bsp_world: object,
+) -> Tuple[_SkyMarkerCompiledResiduePolygon, ...]:
+    result: List[_SkyMarkerCompiledResiduePolygon] = []
+    for model_index, model in enumerate(getattr(bsp_world, "world_models", ()) or ()):
+        model_name = str(getattr(model, "name", "") or "")
+        model_kind = _compiled_dat_model_kind(model)
+        model_points = tuple(_safe_vec3(point) for point in getattr(model, "points", ()) or ())
+        for polygon_index, polygon in enumerate(getattr(model, "polygons", ()) or ()):
+            try:
+                texture_name = str(model.texture_name_for(polygon) or "")
+            except Exception:
+                texture_name = ""
+            role = terrain_semantics.helper_texture_role(texture_name)
+            if role != "skyVisibility":
+                continue
+            indices = tuple(int(index) for index in getattr(polygon, "vertex_indices", ()) or ())
+            points = [
+                model_points[index]
+                for index in indices
+                if 0 <= index < len(model_points)
+            ]
+            center = _polygon_center(points) if points else (0.0, 0.0, 0.0)
+            normal = _polygon_normal(points) if len(points) >= 3 else (0.0, 0.0, 0.0)
+            result.append(_SkyMarkerCompiledResiduePolygon(
+                model_name=model_name,
+                model_kind=model_kind,
+                model_index=int(model_index),
+                polygon_index=int(polygon_index),
+                vertex_count=len(indices),
+                texture_name=texture_name,
+                center=center,
+                normal=normal,
+            ))
+    return tuple(result)
+
+
+def _compiled_structural_polygon_centers(
+    bsp_world: object,
+) -> Tuple[Tuple[float, float, float], ...]:
+    result: List[Tuple[float, float, float]] = []
+    for model in getattr(bsp_world, "world_models", ()) or ():
+        if not (
+            terrain_semantics.is_physics_bsp_model(model)
+            or terrain_semantics.is_terrain_model(model)
+        ):
+            continue
+        model_points = tuple(_safe_vec3(point) for point in getattr(model, "points", ()) or ())
+        for polygon in getattr(model, "polygons", ()) or ():
+            try:
+                texture_name = str(model.texture_name_for(polygon) or "")
+            except Exception:
+                texture_name = ""
+            if terrain_semantics.helper_texture_role(texture_name):
+                continue
+            indices = tuple(int(index) for index in getattr(polygon, "vertex_indices", ()) or ())
+            points = [
+                model_points[index]
+                for index in indices
+                if 0 <= index < len(model_points)
+            ]
+            if len(points) < 3 or len(points) != len(indices):
+                continue
+            result.append(_polygon_center(points))
+    return tuple(result)
+
+
+def _nearest_source_face_world_geometry_distances(
+    source_faces: Sequence[_SkyMarkerSourceFaceEvidence],
+    world_geometry_centers: Sequence[Tuple[float, float, float]],
+) -> Dict[Tuple[int, int], float]:
+    if not source_faces or not world_geometry_centers:
+        return {}
+    result: Dict[Tuple[int, int], float] = {}
+    for face in source_faces:
+        best_sq: Optional[float] = None
+        for center in world_geometry_centers:
+            distance_sq = terrain_reconstruction.vec3_distance_sq(face.center, center)
+            if best_sq is None or distance_sq < best_sq:
+                best_sq = distance_sq
+        if best_sq is not None:
+            result[_sky_marker_face_key(face)] = math.sqrt(float(best_sq))
+    return result
+
+
+def _sky_marker_source_face_cohort_summary(
+    cohort: str,
+    source_faces: Sequence[_SkyMarkerSourceFaceEvidence],
+    nearest_world_geometry_distances: Dict[Tuple[int, int], float],
+) -> SkyMarkerSourceFaceCohortSummary:
+    if not source_faces:
+        return SkyMarkerSourceFaceCohortSummary(cohort=cohort)
+    centers = [item.center for item in source_faces]
+    center_bounds_min, center_bounds_max, _center = _points_bounds_center(centers)
+    brush_keys = {
+        (int(item.model_index), str(item.brush_name))
+        for item in source_faces
+    }
+    orientation_counts: Dict[str, int] = {}
+    brush_flag_counts: Dict[str, int] = {}
+    brush_flag_set_counts: Dict[str, int] = {}
+    texture_flag_counts: Dict[str, int] = {}
+    surface_flag_counts: Dict[str, int] = {}
+    vertex_count_counts: Dict[str, int] = {}
+    for item in source_faces:
+        orientation = _axis_orientation_label(item.normal)
+        orientation_counts[orientation] = int(orientation_counts.get(orientation, 0)) + 1
+        flag_set = "+".join(item.brush_flags) if item.brush_flags else "none"
+        brush_flag_set_counts[flag_set] = int(brush_flag_set_counts.get(flag_set, 0)) + 1
+        for flag_name in item.brush_flags:
+            brush_flag_counts[flag_name] = int(brush_flag_counts.get(flag_name, 0)) + 1
+        texture_key = _optional_int_count_key(item.texture_flags)
+        texture_flag_counts[texture_key] = int(texture_flag_counts.get(texture_key, 0)) + 1
+        surface_key = _optional_int_count_key(item.surface_flags)
+        surface_flag_counts[surface_key] = int(surface_flag_counts.get(surface_key, 0)) + 1
+        vertex_key = str(int(item.vertex_count))
+        vertex_count_counts[vertex_key] = int(vertex_count_counts.get(vertex_key, 0)) + 1
+    distances = [
+        float(nearest_world_geometry_distances[_sky_marker_face_key(item)])
+        for item in source_faces
+        if _sky_marker_face_key(item) in nearest_world_geometry_distances
+    ]
+    return SkyMarkerSourceFaceCohortSummary(
+        cohort=cohort,
+        source_face_count=len(source_faces),
+        source_brush_count=len(brush_keys),
+        orientation_counts=dict(sorted(orientation_counts.items())),
+        brush_flag_counts=dict(sorted(brush_flag_counts.items())),
+        brush_flag_set_counts=dict(sorted(brush_flag_set_counts.items())),
+        texture_flag_counts=dict(sorted(texture_flag_counts.items())),
+        surface_flag_counts=dict(sorted(surface_flag_counts.items())),
+        vertex_count_counts=dict(sorted(vertex_count_counts.items())),
+        center_bounds_min=center_bounds_min,
+        center_bounds_max=center_bounds_max,
+        nearest_world_geometry_distance_min=min(distances) if distances else None,
+        nearest_world_geometry_distance_median=_median_float(distances),
+        nearest_world_geometry_distance_average=(
+            sum(distances) / float(len(distances)) if distances else None
+        ),
+        nearest_world_geometry_distance_max=max(distances) if distances else None,
+    )
+
+
+def _sky_marker_residue_rule_candidates(
+    source_faces: Sequence[_SkyMarkerSourceFaceEvidence],
+    matched_source_face_keys: set[Tuple[int, int]],
+    nearest_world_geometry_distances: Dict[Tuple[int, int], float],
+) -> Tuple[SkyMarkerResidueRuleCandidate, ...]:
+    source_face_keys = {_sky_marker_face_key(item) for item in source_faces}
+
+    def selected_keys_for(predicate: Callable[[_SkyMarkerSourceFaceEvidence], bool]) -> set[Tuple[int, int]]:
+        result: set[Tuple[int, int]] = set()
+        for item in source_faces:
+            try:
+                if bool(predicate(item)):
+                    result.add(_sky_marker_face_key(item))
+            except Exception:
+                continue
+        return result
+
+    def candidate(
+        rule_name: str,
+        selected_keys: set[Tuple[int, int]],
+        *,
+        notes: Tuple[str, ...] = (),
+        oracle: bool = False,
+    ) -> SkyMarkerResidueRuleCandidate:
+        selected_keys = {key for key in selected_keys if key in source_face_keys}
+        true_positive = len(selected_keys & matched_source_face_keys)
+        false_positive = len(selected_keys - matched_source_face_keys)
+        false_negative = len(matched_source_face_keys - selected_keys)
+        precision = (
+            float(true_positive) / float(len(selected_keys))
+            if selected_keys
+            else None
+        )
+        recall = (
+            float(true_positive) / float(len(matched_source_face_keys))
+            if matched_source_face_keys
+            else None
+        )
+        status_notes = list(notes)
+        if oracle:
+            status = "oracle_target"
+        elif false_positive == 0 and false_negative == 0:
+            status = "exact_candidate"
+        elif false_negative == 0:
+            status = "complete_but_too_broad"
+            status_notes.append("captures every known residue source face but includes extra source faces")
+        elif false_positive == 0:
+            status = "precise_but_incomplete"
+            status_notes.append("selects only known residue source faces but misses some residues")
+        else:
+            status = "heuristic_only"
+            status_notes.append("does not yet match the shipped residue target")
+        return SkyMarkerResidueRuleCandidate(
+            rule_name=rule_name,
+            selected_source_face_count=len(selected_keys),
+            matched_source_face_count=true_positive,
+            unmatched_source_face_count=false_positive,
+            missed_matched_source_face_count=false_negative,
+            precision=precision,
+            recall=recall,
+            status=status,
+            notes=tuple(_unique_text(status_notes)),
+        )
+
+    rules: List[SkyMarkerResidueRuleCandidate] = [
+        candidate(
+            "compiled_reference_correlated_faces",
+            set(matched_source_face_keys),
+            oracle=True,
+            notes=("requires a shipped compiled reference; useful as the target set, not as a standalone generator rule",),
+        ),
+        candidate(
+            "texture_flags_1",
+            selected_keys_for(lambda item: item.texture_flags == 1),
+        ),
+        candidate(
+            "texture_flags_1_not_positive_y",
+            selected_keys_for(
+                lambda item: item.texture_flags == 1
+                and _axis_orientation_label(item.normal) != "+Y"
+            ),
+        ),
+        candidate(
+            "texture_flags_1_not_positive_y_center_y_at_or_above_700",
+            selected_keys_for(
+                lambda item: item.texture_flags == 1
+                and _axis_orientation_label(item.normal) != "+Y"
+                and float(item.center[1]) >= 700.0
+            ),
+        ),
+        candidate(
+            "texture_flags_1_not_positive_y_near_world_geometry_2304",
+            selected_keys_for(
+                lambda item: item.texture_flags == 1
+                and _axis_orientation_label(item.normal) != "+Y"
+                and nearest_world_geometry_distances.get(_sky_marker_face_key(item), float("inf")) <= 2304.0
+            ),
+        ),
+        candidate(
+            "texture_flags_1_not_positive_y_near_world_geometry_768",
+            selected_keys_for(
+                lambda item: item.texture_flags == 1
+                and _axis_orientation_label(item.normal) != "+Y"
+                and nearest_world_geometry_distances.get(_sky_marker_face_key(item), float("inf")) <= 768.0
+            ),
+        ),
+    ]
+    return tuple(rules)
+
+
+def _sky_marker_compiled_residue_matches(
+    source_faces: Sequence[_SkyMarkerSourceFaceEvidence],
+    compiled_polygons: Sequence[_SkyMarkerCompiledResiduePolygon],
+) -> Tuple[SkyMarkerCompiledResidueMatch, ...]:
+    matches: List[SkyMarkerCompiledResidueMatch] = []
+    for compiled in compiled_polygons:
+        if not source_faces:
+            matches.append(SkyMarkerCompiledResidueMatch(
+                compiled_model_name=compiled.model_name,
+                compiled_model_kind=compiled.model_kind,
+                compiled_model_index=compiled.model_index,
+                compiled_polygon_index=compiled.polygon_index,
+                compiled_vertex_count=compiled.vertex_count,
+                compiled_center=compiled.center,
+                compiled_normal=compiled.normal,
+                status="unmatched_no_source_faces",
+            ))
+            continue
+        ranked: List[Tuple[float, float, float, _SkyMarkerSourceFaceEvidence, float, float, float]] = []
+        for source in source_faces:
+            normal_dot = abs(_vec3_dot(compiled.normal, source.normal))
+            center_distance = terrain_reconstruction.vec3_distance(compiled.center, source.center)
+            plane_distance = abs(_vec3_dot(source.normal, _vec3_subtract(compiled.center, source.center)))
+            ranked.append((
+                plane_distance,
+                1.0 - normal_dot,
+                center_distance,
+                source,
+                normal_dot,
+                center_distance,
+                plane_distance,
+            ))
+        ranked.sort(key=lambda item: (
+            item[0],
+            item[1],
+            item[2],
+            item[3].model_index,
+            item[3].face_index,
+        ))
+        _rank_plane, _rank_normal, _rank_center, source, normal_dot, center_distance, plane_distance = ranked[0]
+        notes: List[str] = []
+        if normal_dot >= 0.999 and plane_distance <= 1.0:
+            status = "source_face_plane_match"
+        elif normal_dot >= 0.99 and plane_distance <= 32.0:
+            status = "source_face_near_plane_match"
+        elif normal_dot >= 0.95:
+            status = "nearest_parallel_source_face"
+            notes.append("nearest source face is parallel but not on the same plane")
+        else:
+            status = "nearest_source_face"
+            notes.append("nearest source face has a weak normal match")
+        if status == "source_face_plane_match" and center_distance > 256.0:
+            notes.append("center differs after Processor clipping or polygon merging")
+        matches.append(SkyMarkerCompiledResidueMatch(
+            compiled_model_name=compiled.model_name,
+            compiled_model_kind=compiled.model_kind,
+            compiled_model_index=compiled.model_index,
+            compiled_polygon_index=compiled.polygon_index,
+            compiled_vertex_count=compiled.vertex_count,
+            compiled_center=compiled.center,
+            compiled_normal=compiled.normal,
+            source_brush_name=source.brush_name,
+            source_model_index=source.model_index,
+            source_face_index=source.face_index,
+            source_vertex_count=source.vertex_count,
+            source_center=source.center,
+            source_normal=source.normal,
+            source_brush_flags=source.brush_flags,
+            source_texture_flags=source.texture_flags,
+            source_surface_flags=source.surface_flags,
+            center_distance=center_distance,
+            plane_distance=plane_distance,
+            normal_dot=normal_dot,
+            status=status,
+            notes=tuple(notes),
+        ))
+    return tuple(matches)
+
+
+def _compiled_helper_role_total(
+    summaries: Sequence[CompiledDatHelperModelSummary],
+    role: str,
+) -> int:
+    return sum(int(item.helper_roles.get(role, 0) or 0) for item in summaries)
+
+
+def _compiled_helper_role_count_for_kind(
+    summaries: Sequence[CompiledDatHelperModelSummary],
+    role: str,
+    model_kind: str,
+) -> int:
+    return sum(
+        int(item.helper_roles.get(role, 0) or 0)
+        for item in summaries
+        if item.model_kind == model_kind
+    )
+
+
+def _sound_object_oracles(source_ed_path: str) -> Tuple[SoundObjectOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[SoundObjectOracle] = []
+    for record in scan.records:
+        class_name = str(record.class_name)
+        if class_name != "AmbientSound":
+            continue
+        name = str(record.property_value("Name", "") or f"AmbientSound{len(result)}")
+        outer_radius = record.property_value("OuterRadius", None)
+        inner_radius = record.property_value("InnerRadius", None)
+        result.append(SoundObjectOracle(
+            name=name,
+            class_name=class_name,
+            pos=_safe_vec3(record.property_value("Pos", (0.0, 0.0, 0.0))),
+            filename=str(record.property_value("Filename", "") or ""),
+            outer_radius=float(outer_radius) if isinstance(outer_radius, (int, float)) else None,
+            inner_radius=float(inner_radius) if isinstance(inner_radius, (int, float)) else None,
+            property_count=len(record.properties),
+        ))
+    return tuple(result)
+
+
+_GAMEPLAY_TRIGGER_CLASSES = {"Trigger", "ExitTrigger", "PortalTrigger"}
+
+
+def _gameplay_trigger_object_oracles(source_ed_path: str) -> Tuple[GameplayTriggerObjectOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[GameplayTriggerObjectOracle] = []
+    for record in scan.records:
+        class_name = str(record.class_name)
+        if class_name not in _GAMEPLAY_TRIGGER_CLASSES:
+            continue
+        name = str(record.property_value("Name", "") or f"{class_name}{len(result)}")
+        target_count = 0
+        for index in range(1, 11):
+            if str(record.property_value(f"TargetName{index}", "") or "").strip():
+                target_count += 1
+        result.append(GameplayTriggerObjectOracle(
+            name=name,
+            class_name=class_name,
+            pos=_safe_vec3(record.property_value("Pos", (0.0, 0.0, 0.0))),
+            dims=_safe_vec3(record.property_value("Dims", (0.0, 0.0, 0.0))),
+            target_count=target_count,
+            destination_world=str(record.property_value("DestinationWorld", "") or ""),
+            portal_name=str(record.property_value("PortalName", "") or ""),
+            property_count=len(record.properties),
+        ))
+    return tuple(result)
+
+
+def _static_prop_object_oracles(source_ed_path: str) -> Tuple[StaticPropObjectOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    def optional_float(value: object) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    def optional_bool(value: object) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        return None
+
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[StaticPropObjectOracle] = []
+    for record in scan.records:
+        class_name = str(record.class_name)
+        if class_name != "Prop":
+            continue
+        name = str(record.property_value("Name", "") or f"Prop{len(result)}")
+        result.append(StaticPropObjectOracle(
+            name=name,
+            class_name=class_name,
+            pos=_safe_vec3(record.property_value("Pos", (0.0, 0.0, 0.0))),
+            filename=str(record.property_value("Filename", "") or ""),
+            skin=str(record.property_value("Skin", "") or ""),
+            scale=optional_float(record.property_value("Scale", None)),
+            visible=optional_bool(record.property_value("Visible", None)),
+            solid=optional_bool(record.property_value("Solid", None)),
+            move_to_floor=optional_bool(record.property_value("MoveToFloor", None)),
+            property_count=len(record.properties),
+        ))
+    return tuple(result)
+
+
+_BEHAVIOR_PROP_OBJECT_CLASSES = {
+    "Barrel",
+    "BonePile",
+    "Brazier",
+    "CandleProp",
+    "Cauldron",
+    "Cookpot",
+    "DestructableProp",
+    "Fire",
+    "PropDamager",
+    "StatStone",
+    "TreasureChest",
+    "WallTorch",
+}
+
+
+_BEHAVIOR_PROP_COPY_PASS_KEYS = {
+    "Barrel": "include_low_risk_behavior_prop_objects",
+    "BonePile": "include_low_risk_behavior_prop_objects",
+    "Cauldron": "include_low_risk_behavior_prop_objects",
+    "Cookpot": "include_low_risk_behavior_prop_objects",
+    "StatStone": "include_low_risk_behavior_prop_objects",
+    "WallTorch": "include_wall_torch_objects",
+    "Fire": "include_fire_objects",
+    "CandleProp": "include_candle_prop_objects",
+    "Brazier": "include_brazier_objects",
+    "TreasureChest": "include_treasure_chest_objects",
+    "PropDamager": "include_prop_damager_objects",
+    "DestructableProp": "include_destructable_prop_objects",
+}
+
+
+def _behavior_prop_copy_pass_key(class_name: str) -> str:
+    return str(_BEHAVIOR_PROP_COPY_PASS_KEYS.get(str(class_name), ""))
+
+
+def _behavior_prop_validation_status(
+    risk_level_counts: Dict[str, int],
+    *,
+    class_name: str = "",
+    copy_pass_status: str,
+) -> str:
+    if copy_pass_status != "explicit_copy_pass_available":
+        return "needs_class_specific_copy_pass"
+    if int(risk_level_counts.get("high", 0)) > 0:
+        if str(class_name) == "TreasureChest":
+            return "high_risk_loot_default_after_initial_manual_validation"
+        if str(class_name) == "PropDamager":
+            return "high_risk_damage_default_after_initial_manual_validation"
+        if str(class_name) == "DestructableProp":
+            return "high_risk_destructible_default_after_initial_manual_validation"
+        return "needs_high_risk_manual_validation"
+    if int(risk_level_counts.get("medium", 0)) > 0:
+        if str(class_name) in {"WallTorch", "Fire", "CandleProp", "Brazier"}:
+            return "medium_light_default_after_initial_manual_validation"
+        return "needs_medium_risk_manual_validation"
+    return "low_risk_default_after_initial_manual_validation"
+
+
+def _behavior_prop_object_oracles(source_ed_path: str) -> Tuple[BehaviorPropObjectOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    def optional_float(value: object) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    def optional_bool(value: object) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        return None
+
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[BehaviorPropObjectOracle] = []
+    for record in scan.records:
+        class_name = str(record.class_name)
+        if class_name not in _BEHAVIOR_PROP_OBJECT_CLASSES:
+            continue
+        name = str(record.property_value("Name", "") or f"{class_name}{len(result)}")
+        semantic_roles = _behavior_prop_semantic_roles(record)
+        result.append(BehaviorPropObjectOracle(
+            name=name,
+            class_name=class_name,
+            pos=_safe_vec3(record.property_value("Pos", (0.0, 0.0, 0.0))),
+            filename=str(record.property_value("Filename", "") or ""),
+            skin=str(record.property_value("Skin", "") or ""),
+            scale=optional_float(record.property_value("Scale", None)),
+            visible=optional_bool(record.property_value("Visible", None)),
+            solid=optional_bool(record.property_value("Solid", None)),
+            move_to_floor=optional_bool(record.property_value("MoveToFloor", None)),
+            semantic_roles=semantic_roles,
+            risk_level=_behavior_prop_risk_level(semantic_roles),
+            on=optional_bool(record.property_value("On", None)),
+            fire=optional_bool(record.property_value("Fire", None)),
+            sound_file=str(record.property_value("SoundFile", "") or ""),
+            sound_radius=optional_float(record.property_value("SoundRadius", None)),
+            light_min_radius=optional_float(record.property_value("LightMinRadius", None)),
+            light_max_radius=optional_float(record.property_value("LightMaxRadius", None)),
+            locked=optional_bool(record.property_value("Locked", None)),
+            trigger_target=str(record.property_value("TriggerTarget", "") or ""),
+            damage_trigger_target=str(record.property_value("DamageTriggerTarget", "") or ""),
+            hit_points=optional_float(record.property_value("HitPoints", None)),
+            property_count=len(record.properties),
+        ))
+    return tuple(result)
+
+
+def _behavior_prop_semantic_roles(record: object) -> Tuple[str, ...]:
+    class_name = str(getattr(record, "class_name", "") or "")
+
+    def value(name: str, default: object = "") -> object:
+        try:
+            return record.property_value(name, default)  # type: ignore[attr-defined]
+        except Exception:
+            return default
+
+    roles: List[str] = []
+    if str(value("Filename", "") or "") or str(value("Skin", "") or ""):
+        roles.append("model_prop")
+    if class_name in {"CandleProp", "WallTorch", "Fire", "Brazier"}:
+        roles.append("light_fire_sound")
+    if (
+        value("On", None) is not None
+        or value("Fire", None) is not None
+        or str(value("SoundFile", "") or "").strip()
+        or value("LightMinRadius", None) is not None
+        or value("LightMaxRadius", None) is not None
+        or value("FlameProps", None) is not None
+        or value("SmokeProps", None) is not None
+    ):
+        roles.append("light_fire_sound")
+    if class_name == "TreasureChest" or str(value("OpenSoundName", "") or "").strip() or str(value("CloseSoundName", "") or "").strip():
+        roles.append("loot_interaction")
+    if str(value("TriggerTarget", "") or "").strip():
+        roles.append("trigger_reference")
+    if class_name == "DestructableProp" or value("HitPoints", None) is not None or str(value("DamageTriggerTarget", "") or "").strip():
+        roles.append("destructible")
+    if class_name == "PropDamager" or value("DamagerStuff", None) is not None:
+        roles.append("damage")
+    if not any(role in roles for role in ("light_fire_sound", "loot_interaction", "trigger_reference", "destructible", "damage")):
+        roles.append("physical_decor")
+    return tuple(_unique_text(roles))
+
+
+def _behavior_prop_risk_level(semantic_roles: Sequence[str]) -> str:
+    roles = set(str(role) for role in semantic_roles)
+    if roles.intersection({"loot_interaction", "trigger_reference", "destructible", "damage"}):
+        return "high"
+    if "light_fire_sound" in roles:
+        return "medium"
+    return "low"
+
+
+def _nearest_airail_object(
+    center: Tuple[float, float, float],
+    objects: Sequence[AirailOracleObject],
+    *,
+    ambiguous_distance_epsilon: float,
+) -> Tuple[Optional[AirailOracleObject], Optional[float], bool]:
+    ranked = sorted(
+        (
+            (terrain_reconstruction.vec3_distance(center, item.pos), item)
+            for item in objects
+        ),
+        key=lambda item: (item[0], item[1].name.lower()),
+    )
+    if not ranked:
+        return None, None, False
+    ambiguous = len(ranked) > 1 and ranked[1][0] - ranked[0][0] <= max(0.0, float(ambiguous_distance_epsilon))
+    return ranked[0][1], ranked[0][0], ambiguous
+
+
+def _nearest_airail_rail_brush(
+    center: Tuple[float, float, float],
+    brushes: Sequence[AirailRailBrushOracle],
+    *,
+    ambiguous_distance_epsilon: float,
+) -> Tuple[Optional[AirailRailBrushOracle], Optional[float], bool]:
+    ranked = sorted(
+        (
+            (terrain_reconstruction.vec3_distance(center, item.center), item)
+            for item in brushes
+        ),
+        key=lambda item: (item[0], item[1].name.lower()),
+    )
+    if not ranked:
+        return None, None, False
+    ambiguous = len(ranked) > 1 and ranked[1][0] - ranked[0][0] <= max(0.0, float(ambiguous_distance_epsilon))
+    return ranked[0][1], ranked[0][0], ambiguous
+
+
+def _collision_helper_oracle_objects(
+    source_ed_path: str,
+    *,
+    candidate_names: Sequence[str],
+) -> Tuple[CollisionHelperOracleObject, ...]:
+    from features.dat_editing import legacy_ed
+
+    wanted = {str(name or "").lower() for name in candidate_names if str(name or "")}
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[CollisionHelperOracleObject] = []
+    for record in scan.records:
+        name = str(record.property_value("Name", "") or "")
+        if not name or name.lower() not in wanted:
+            continue
+        result.append(CollisionHelperOracleObject(
+            name=name,
+            class_name=str(record.class_name),
+            pos=_safe_vec3(record.property_value("Pos", (0.0, 0.0, 0.0))),
+            property_count=len(record.properties),
+        ))
+    return tuple(result)
+
+
+def _collision_helper_brush_oracles(source_ed_path: str) -> Tuple[CollisionHelperBrushOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    scene = legacy_ed.load_legacy_ed_geometry_scene(source_ed_path)
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    brush_records = [record for record in scan.records if record.class_name == "Brush"]
+    result: List[CollisionHelperBrushOracle] = []
+    for model_index, model in enumerate(scene.models):
+        helper_roles: Dict[str, int] = {}
+        helper_indices = set()
+        for face in getattr(model, "faces", ()) or ():
+            role = terrain_semantics.helper_texture_role(getattr(face, "material_name", ""))
+            if role not in {"collision", "sprite"}:
+                continue
+            helper_roles[role] = helper_roles.get(role, 0) + 1
+            helper_indices.update(int(index) for index in getattr(face, "vertex_indices", ()) or ())
+        if int(helper_roles.get("collision", 0)) <= 0:
+            continue
+        points = [
+            _safe_vec3(model.points[index])
+            for index in helper_indices
+            if 0 <= index < len(getattr(model, "points", ()) or ())
+        ]
+        if not points:
+            continue
+        bounds_min, bounds_max, center = _points_bounds_center(points)
+        name = ""
+        if model_index < len(brush_records):
+            name = str(brush_records[model_index].property_value("Name", "") or "")
+        result.append(CollisionHelperBrushOracle(
+            name=name or str(getattr(model, "name", "") or f"CollisionHelperBrush{len(result)}"),
+            bounds_min=bounds_min,
+            bounds_max=bounds_max,
+            center=center,
+            helper_roles=dict(helper_roles),
+        ))
+    return tuple(result)
+
+
+def _collision_helper_reconstruction_candidate(
+    model_index: int,
+    summary: PrefabSurrogateCompositeModelSummary,
+    *,
+    helper_roles: Dict[str, int],
+    source_objects_by_name: Dict[str, CollisionHelperOracleObject],
+    source_helper_brushes: Sequence[CollisionHelperBrushOracle],
+) -> CollisionHelperReconstructionCandidate:
+    target_class_name = _collision_helper_target_class_name(summary.name)
+    matched = source_objects_by_name.get(summary.name.lower())
+    nearest_brush, brush_distance = _nearest_collision_helper_brush(
+        summary.center,
+        source_helper_brushes,
+    )
+    notes: List[str] = []
+    if not source_objects_by_name:
+        status = "pending_source_oracle"
+        notes.append("source ED collision helper object oracle is not available")
+    elif matched is None:
+        status = "unmatched_source_collision_helper"
+        notes.append("no same-name source ED collision helper object was found")
+    else:
+        status = "matched_source_collision_helper"
+        if target_class_name and matched.class_name != target_class_name:
+            notes.append(
+                f"same-name source object class {matched.class_name} differs from inferred target {target_class_name}"
+            )
+
+    return CollisionHelperReconstructionCandidate(
+        source_model_name=summary.name,
+        source_model_index=int(model_index),
+        target_class_name=target_class_name,
+        helper_roles=dict(helper_roles),
+        polygon_count=summary.polygon_count,
+        bounds_min=summary.bounds_min,
+        bounds_max=summary.bounds_max,
+        center=summary.center,
+        matched_object_name=matched.name if matched else "",
+        matched_object_class_name=matched.class_name if matched else "",
+        matched_object_distance=(
+            terrain_reconstruction.vec3_distance(summary.center, matched.pos)
+            if matched is not None else None
+        ),
+        nearest_helper_brush_name=nearest_brush.name if nearest_brush else "",
+        nearest_helper_brush_distance=brush_distance,
+        status=status,
+        notes=tuple(notes),
+    )
+
+
+def _trigger_helper_oracle_objects(
+    source_ed_path: str,
+    *,
+    candidate_names: Sequence[str],
+) -> Tuple[TriggerHelperOracleObject, ...]:
+    from features.dat_editing import legacy_ed
+
+    wanted = {str(name or "").lower() for name in candidate_names if str(name or "")}
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    result: List[TriggerHelperOracleObject] = []
+    for record in scan.records:
+        if str(record.class_name) != "PortalZone":
+            continue
+        name = str(record.property_value("Name", "") or "")
+        if not name or name.lower() not in wanted:
+            continue
+        result.append(TriggerHelperOracleObject(
+            name=name,
+            class_name=str(record.class_name),
+            pos=_safe_vec3(record.property_value("Pos", (0.0, 0.0, 0.0))),
+            portal_name=str(record.property_value("PortalName", "") or ""),
+            property_count=len(record.properties),
+        ))
+    return tuple(result)
+
+
+def _trigger_helper_brush_oracles(source_ed_path: str) -> Tuple[TriggerHelperBrushOracle, ...]:
+    from features.dat_editing import legacy_ed
+
+    scene = legacy_ed.load_legacy_ed_geometry_scene(source_ed_path)
+    scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed_path)
+    brush_records = [record for record in scan.records if record.class_name == "Brush"]
+    result: List[TriggerHelperBrushOracle] = []
+    for model_index, model in enumerate(scene.models):
+        trigger_indices = set()
+        trigger_face_count = 0
+        for face in getattr(model, "faces", ()) or ():
+            role = terrain_semantics.helper_texture_role(getattr(face, "material_name", ""))
+            if role != "trigger":
+                continue
+            trigger_face_count += 1
+            trigger_indices.update(int(index) for index in getattr(face, "vertex_indices", ()) or ())
+        if trigger_face_count <= 0:
+            continue
+        points = [
+            _safe_vec3(model.points[index])
+            for index in trigger_indices
+            if 0 <= index < len(getattr(model, "points", ()) or ())
+        ]
+        if not points:
+            continue
+        bounds_min, bounds_max, center = _points_bounds_center(points)
+        name = ""
+        if model_index < len(brush_records):
+            name = str(brush_records[model_index].property_value("Name", "") or "")
+        result.append(TriggerHelperBrushOracle(
+            name=name or str(getattr(model, "name", "") or f"TriggerHelperBrush{len(result)}"),
+            bounds_min=bounds_min,
+            bounds_max=bounds_max,
+            center=center,
+            trigger_face_count=trigger_face_count,
+        ))
+    return tuple(result)
+
+
+def _trigger_helper_reconstruction_candidate(
+    model_index: int,
+    summary: PrefabSurrogateCompositeModelSummary,
+    *,
+    helper_roles: Dict[str, int],
+    source_objects_by_name: Dict[str, TriggerHelperOracleObject],
+    source_helper_brushes: Sequence[TriggerHelperBrushOracle],
+) -> TriggerHelperReconstructionCandidate:
+    matched = source_objects_by_name.get(summary.name.lower())
+    nearest_brush, brush_distance = _nearest_trigger_helper_brush(
+        summary.center,
+        source_helper_brushes,
+    )
+    notes: List[str] = []
+    if not source_objects_by_name:
+        status = "pending_source_oracle"
+        notes.append("source ED PortalZone object oracle is not available")
+    elif matched is None:
+        status = "unmatched_source_trigger_helper"
+        notes.append("no same-name source ED PortalZone object was found")
+    else:
+        status = "matched_source_trigger_helper"
+        if matched.class_name != "PortalZone":
+            notes.append(
+                f"same-name source object class {matched.class_name} differs from inferred PortalZone target"
+            )
+        if not matched.portal_name:
+            notes.append("matched PortalZone object has an empty PortalName property")
+
+    return TriggerHelperReconstructionCandidate(
+        source_model_name=summary.name,
+        source_model_index=int(model_index),
+        helper_roles=dict(helper_roles),
+        polygon_count=summary.polygon_count,
+        bounds_min=summary.bounds_min,
+        bounds_max=summary.bounds_max,
+        center=summary.center,
+        matched_object_name=matched.name if matched else "",
+        matched_object_class_name=matched.class_name if matched else "",
+        matched_object_portal_name=matched.portal_name if matched else "",
+        matched_object_distance=(
+            terrain_reconstruction.vec3_distance(summary.center, matched.pos)
+            if matched is not None else None
+        ),
+        nearest_helper_brush_name=nearest_brush.name if nearest_brush else "",
+        nearest_helper_brush_distance=brush_distance,
+        status=status,
+        notes=tuple(notes),
+    )
+
+
+def _collision_helper_target_class_name(name: str) -> str:
+    lower = str(name or "").lower()
+    if lower.startswith("invisiblebrush"):
+        return "InvisibleBrush"
+    if lower.startswith("perceptionbrush"):
+        return "PerceptionBrush"
+    if lower.startswith("ladderblocker"):
+        return "WorldObject"
+    if lower.startswith("ladder"):
+        return "Ladder"
+    return ""
+
+
+def _is_pure_collision_helper_semantic_model(model: object) -> bool:
+    helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+    return (
+        int(helper_roles.get("collision", 0)) > 0
+        and set(helper_roles.keys()).issubset({"collision", "sprite"})
+        and terrain_semantics.model_has_only_helper_textures(model)
+    )
+
+
+def _is_pure_trigger_helper_semantic_model(model: object) -> bool:
+    helper_roles = terrain_semantics.helper_texture_roles_for_model(model)
+    return (
+        int(helper_roles.get("trigger", 0)) > 0
+        and set(helper_roles.keys()) == {"trigger"}
+        and terrain_semantics.model_has_only_helper_textures(model)
+    )
+
+
+def _nearest_collision_helper_brush(
+    center: Tuple[float, float, float],
+    brushes: Sequence[CollisionHelperBrushOracle],
+) -> Tuple[Optional[CollisionHelperBrushOracle], Optional[float]]:
+    ranked = sorted(
+        (
+            (terrain_reconstruction.vec3_distance(center, item.center), item)
+            for item in brushes
+        ),
+        key=lambda item: (item[0], item[1].name),
+    )
+    if not ranked:
+        return None, None
+    return ranked[0][1], ranked[0][0]
+
+
+def _nearest_trigger_helper_brush(
+    center: Tuple[float, float, float],
+    brushes: Sequence[TriggerHelperBrushOracle],
+) -> Tuple[Optional[TriggerHelperBrushOracle], Optional[float]]:
+    ranked = sorted(
+        (
+            (terrain_reconstruction.vec3_distance(center, item.center), item)
+            for item in brushes
+        ),
+        key=lambda item: (item[0], item[1].name),
+    )
+    if not ranked:
+        return None, None
+    return ranked[0][1], ranked[0][0]
+
+
+def _points_bounds_center(
+    points: Sequence[Tuple[float, float, float]],
+) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]:
+    mins = tuple(min(point[index] for point in points) for index in range(3))
+    maxs = tuple(max(point[index] for point in points) for index in range(3))
+    center = tuple((mins[index] + maxs[index]) * 0.5 for index in range(3))
+    return mins, maxs, center  # type: ignore[return-value]
+
+
+def _polygon_center(
+    points: Sequence[Tuple[float, float, float]],
+) -> Tuple[float, float, float]:
+    if not points:
+        return (0.0, 0.0, 0.0)
+    return tuple(
+        sum(float(point[index]) for point in points) / float(len(points))
+        for index in range(3)
+    )  # type: ignore[return-value]
+
+
+def _polygon_normal(
+    points: Sequence[Tuple[float, float, float]],
+) -> Tuple[float, float, float]:
+    if len(points) < 3:
+        return (0.0, 0.0, 0.0)
+    origin = points[0]
+    for index in range(1, len(points) - 1):
+        normal = _vec3_cross(
+            _vec3_subtract(points[index], origin),
+            _vec3_subtract(points[index + 1], origin),
+        )
+        if _vec3_length(normal) > 0.000001:
+            return _normalized_vec3(normal)
+    return (0.0, 0.0, 0.0)
+
+
+def _vec3_subtract(
+    a: Tuple[float, float, float],
+    b: Tuple[float, float, float],
+) -> Tuple[float, float, float]:
+    return (float(a[0]) - float(b[0]), float(a[1]) - float(b[1]), float(a[2]) - float(b[2]))
+
+
+def _vec3_dot(
+    a: Tuple[float, float, float],
+    b: Tuple[float, float, float],
+) -> float:
+    return float(a[0]) * float(b[0]) + float(a[1]) * float(b[1]) + float(a[2]) * float(b[2])
+
+
+def _vec3_cross(
+    a: Tuple[float, float, float],
+    b: Tuple[float, float, float],
+) -> Tuple[float, float, float]:
+    return (
+        float(a[1]) * float(b[2]) - float(a[2]) * float(b[1]),
+        float(a[2]) * float(b[0]) - float(a[0]) * float(b[2]),
+        float(a[0]) * float(b[1]) - float(a[1]) * float(b[0]),
+    )
+
+
+def _vec3_length(value: Tuple[float, float, float]) -> float:
+    return math.sqrt(_vec3_dot(value, value))
+
+
+def _normalized_vec3(value: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    length = _vec3_length(value)
+    if length <= 0.0:
+        return (0.0, 0.0, 0.0)
+    return (float(value[0]) / length, float(value[1]) / length, float(value[2]) / length)
+
+
+def _axis_orientation_label(normal: Tuple[float, float, float]) -> str:
+    axis_index = max(range(3), key=lambda index: abs(float(normal[index])))
+    axis_name = ("X", "Y", "Z")[axis_index]
+    sign = "+" if float(normal[axis_index]) >= 0.0 else "-"
+    return sign + axis_name
 
 
 def _terrain_cutout_coverage_candidate(
@@ -7380,28 +13654,13 @@ def _budgeted_physics_shell_source_polygon_count(
     )
     if model is None:
         return requested
-    points = tuple(_safe_vec3(point) for point in (getattr(model, "points", ()) or ()))
-    candidates: List[Tuple[float, int, int]] = []
-    for polygon_index, polygon in enumerate(getattr(model, "polygons", ()) or ()):
-        indices = tuple(int(index) for index in (getattr(polygon, "vertex_indices", ()) or ()))
-        if not (3 <= len(indices) <= 64) or any(index < 0 or index >= len(points) for index in indices):
-            continue
-        polygon_points = tuple(points[index] for index in indices)
-        area = terrain_reconstruction.polygon_area(polygon_points)
-        if not math.isfinite(area) or area <= 1.0e-4:
-            continue
-        candidates.append((float(area), int(polygon_index), len(indices) + 2))
+    candidates = terrain_reconstruction.physics_shell_candidates(model)
 
-    generated_count = 0
-    source_count = 0
-    for _area, _polygon_index, face_count in sorted(candidates, key=lambda item: (-item[0], item[1])):
-        if source_count >= requested:
-            break
-        if generated_count + face_count > budget:
-            break
-        generated_count += face_count
-        source_count += 1
-    return source_count
+    return terrain_reconstruction.budgeted_balanced_physics_shell_source_polygon_count(
+        candidates,
+        requested_source_polygon_count=requested,
+        generated_polygon_budget=budget,
+    )
 
 
 def _auto_direct_root_composite_groups(
@@ -7490,6 +13749,29 @@ def _safe_vec3(value: object) -> Tuple[float, float, float]:
         return (0.0, 0.0, 0.0)
 
 
+def _optional_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _optional_int_count_key(value: Optional[int]) -> str:
+    return "none" if value is None else str(int(value))
+
+
+def _median_float(values: Sequence[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) * 0.5
+
+
 def _is_vec3(value: object) -> bool:
     try:
         x, y, z = value  # type: ignore[misc]
@@ -7500,6 +13782,12 @@ def _is_vec3(value: object) -> bool:
 
 def _vec3_text(value: Tuple[float, float, float]) -> str:
     return "(" + ", ".join(f"{float(item):.2f}" for item in value) + ")"
+
+
+def _optional_float_text(value: Optional[float], *, digits: int = 4) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.{int(digits)}f}"
 
 
 def _safe_filename_component(value: object) -> str:

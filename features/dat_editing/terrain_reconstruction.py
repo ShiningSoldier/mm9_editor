@@ -45,6 +45,31 @@ class GeneratedTerrainCoverageItem(NamedTuple):
     xz_points: Tuple[XZPoint, ...]
 
 
+PHYSICS_SHELL_COVERAGE_ROLES: Tuple[str, ...] = (
+    "floor",
+    "ceiling",
+    "side_wall",
+    "helper/special",
+    "degenerate",
+)
+
+
+class PhysicsShellCandidate(NamedTuple):
+    polygon_index: int
+    polygon: object
+    indices: Tuple[int, ...]
+    points: Tuple[Vec3, ...]
+    area: float
+    role: str
+    generated_face_count: int
+
+
+_PHYSICS_SHELL_MIN_POLYGON_AREA = 0.25
+_PHYSICS_SHELL_MIN_EDGE_LENGTH = 0.05
+_PHYSICS_SHELL_MAX_PLANE_DEVIATION = 0.01
+_PHYSICS_SHELL_MIN_EXTRUSION_THICKNESS = 1.0
+
+
 class TerrainCutoutModelInfo(NamedTuple):
     model_index: int
     name: str
@@ -276,6 +301,400 @@ def dat_polygon_texture_name(model: object, polygon: object) -> str:
         return str(textures[texture_index])
     except Exception:
         return ""
+
+
+def physics_shell_source_polygon_role(
+    model: object,
+    polygon: object,
+    model_points: Sequence[object],
+) -> str:
+    """Classify a PhysicsBSP polygon by reconstruction value."""
+    indices = _quality_checked_physics_shell_polygon_indices(
+        tuple(int(index) for index in (getattr(polygon, "vertex_indices", ()) or ())),
+        model_points,
+    )
+    if not indices:
+        return "degenerate"
+    polygon_points = tuple(_finite_vec3(model_points[index]) for index in indices)
+    return _physics_shell_role_for_valid_polygon(model, polygon, polygon_points)
+
+
+def physics_shell_source_polygon_roles(model: object) -> Dict[int, str]:
+    """Return role labels for every source PhysicsBSP polygon."""
+    points = tuple(_finite_vec3(point) for point in (getattr(model, "points", ()) or ()))
+    return {
+        int(polygon_index): physics_shell_source_polygon_role(model, polygon, points)
+        for polygon_index, polygon in enumerate(getattr(model, "polygons", ()) or ())
+    }
+
+
+def physics_shell_candidates(model: object) -> Tuple[PhysicsShellCandidate, ...]:
+    """Build valid PhysicsBSP source polygons that can be slabbed into ED brushes."""
+    points = tuple(_finite_vec3(point) for point in (getattr(model, "points", ()) or ()))
+    result: List[PhysicsShellCandidate] = []
+    for polygon_index, polygon in enumerate(getattr(model, "polygons", ()) or ()):
+        indices = _quality_checked_physics_shell_polygon_indices(
+            tuple(int(index) for index in (getattr(polygon, "vertex_indices", ()) or ())),
+            points,
+        )
+        if not indices:
+            continue
+        polygon_points = tuple(points[index] for index in indices)
+        area = polygon_area(polygon_points)
+        role = _physics_shell_role_for_valid_polygon(model, polygon, polygon_points)
+        if role == "degenerate":
+            continue
+        result.append(
+            PhysicsShellCandidate(
+                polygon_index=int(polygon_index),
+                polygon=polygon,
+                indices=indices,
+                points=polygon_points,
+                area=float(area),
+                role=role,
+                generated_face_count=len(indices) + 2,
+            )
+        )
+    return tuple(result)
+
+
+def physics_shell_slab_quality_ok(
+    points: Sequence[object],
+    *,
+    thickness: float = 4.0,
+) -> bool:
+    """Return whether a polygon can form stable front/back slab planes."""
+    polygon_points = tuple(_finite_vec3(point) for point in points)
+    return _physics_shell_polygon_quality_ok(polygon_points, thickness=thickness)
+
+
+def _quality_checked_physics_shell_polygon_indices(
+    indices: Sequence[int],
+    model_points: Sequence[object],
+) -> Optional[Tuple[int, ...]]:
+    if not (3 <= len(indices) <= 64):
+        return None
+    if any(index < 0 or index >= len(model_points) for index in indices):
+        return None
+
+    simplified = _simplify_physics_shell_quality_indices(indices, model_points)
+    if not (3 <= len(simplified) <= 64):
+        return None
+    polygon_points = tuple(_finite_vec3(model_points[index]) for index in simplified)
+    if not _physics_shell_polygon_quality_ok(polygon_points, thickness=4.0):
+        return None
+    return tuple(simplified)
+
+
+def _simplify_physics_shell_quality_indices(
+    indices: Sequence[int],
+    model_points: Sequence[object],
+) -> Tuple[int, ...]:
+    result = [int(index) for index in indices]
+    min_edge_sq = _PHYSICS_SHELL_MIN_EDGE_LENGTH * _PHYSICS_SHELL_MIN_EDGE_LENGTH
+    changed = True
+    while changed and len(result) > 3:
+        changed = False
+        for offset, index in enumerate(tuple(result)):
+            next_offset = (offset + 1) % len(result)
+            current_point = _finite_vec3(model_points[index])
+            next_point = _finite_vec3(model_points[result[next_offset]])
+            if vec3_distance_sq(current_point, next_point) <= min_edge_sq:
+                del result[next_offset]
+                changed = True
+                break
+    return tuple(result)
+
+
+def _physics_shell_polygon_quality_ok(
+    points: Sequence[Vec3],
+    *,
+    thickness: float,
+) -> bool:
+    polygon_points = tuple(_finite_vec3(point) for point in points)
+    if len(polygon_points) < 3:
+        return False
+
+    area = polygon_area(polygon_points)
+    if not math.isfinite(area) or area < _PHYSICS_SHELL_MIN_POLYGON_AREA:
+        return False
+
+    min_edge_sq = _PHYSICS_SHELL_MIN_EDGE_LENGTH * _PHYSICS_SHELL_MIN_EDGE_LENGTH
+    for point, next_point in zip(polygon_points, polygon_points[1:] + polygon_points[:1]):
+        if vec3_distance_sq(point, next_point) < min_edge_sq:
+            return False
+
+    normal, distance = polygon_plane(polygon_points, tuple(range(len(polygon_points))))
+    if not all(math.isfinite(value) for value in normal) or not math.isfinite(distance):
+        return False
+    max_plane_delta = max(
+        abs(vec3_dot(normal, point) - distance)
+        for point in polygon_points
+    )
+    if max_plane_delta > _PHYSICS_SHELL_MAX_PLANE_DEVIATION:
+        return False
+
+    safe_thickness = max(0.0, float(thickness))
+    if safe_thickness < _PHYSICS_SHELL_MIN_EXTRUSION_THICKNESS:
+        return False
+    for point in polygon_points:
+        back_point = (
+            point[0] - normal[0] * safe_thickness,
+            point[1] - normal[1] * safe_thickness,
+            point[2] - normal[2] * safe_thickness,
+        )
+        if not all(math.isfinite(value) for value in back_point):
+            return False
+        separation = abs(vec3_dot(normal, point) - vec3_dot(normal, back_point))
+        if separation < _PHYSICS_SHELL_MIN_EXTRUSION_THICKNESS:
+            return False
+    return True
+
+
+def balanced_physics_shell_candidates(
+    candidates: Sequence[PhysicsShellCandidate],
+    limit: int,
+) -> Tuple[PhysicsShellCandidate, ...]:
+    """Select PhysicsBSP shell polygons with side-wall coverage before helper fill."""
+    by_role, structural_candidates, helper_candidates = _physics_shell_candidate_sort_groups(candidates)
+    return _balanced_physics_shell_candidates_from_sorted(
+        by_role,
+        structural_candidates,
+        helper_candidates,
+        limit,
+    )
+
+
+def budgeted_balanced_physics_shell_source_polygon_count(
+    candidates: Sequence[PhysicsShellCandidate],
+    *,
+    requested_source_polygon_count: int,
+    generated_polygon_budget: int,
+) -> int:
+    """Return the largest balanced source count that fits a generated face budget."""
+    requested = max(0, int(requested_source_polygon_count))
+    budget = max(0, int(generated_polygon_budget))
+    if requested <= 0 or budget <= 0:
+        return 0
+    by_role, structural_candidates, helper_candidates = _physics_shell_candidate_sort_groups(candidates)
+    candidate_limit = min(
+        requested,
+        sum(len(role_candidates) for role_candidates in by_role.values()),
+    )
+
+    fitted_count = 0
+    for candidate_count in range(1, candidate_limit + 1):
+        selected = _balanced_physics_shell_candidates_from_sorted(
+            by_role,
+            structural_candidates,
+            helper_candidates,
+            candidate_count,
+        )
+        generated_count = sum(candidate.generated_face_count for candidate in selected)
+        if generated_count > budget:
+            break
+        fitted_count = candidate_count
+    return fitted_count
+
+
+def _physics_shell_candidate_sort_groups(
+    candidates: Sequence[PhysicsShellCandidate],
+) -> Tuple[
+    Dict[str, Tuple[PhysicsShellCandidate, ...]],
+    Tuple[PhysicsShellCandidate, ...],
+    Tuple[PhysicsShellCandidate, ...],
+]:
+    ranked_candidates = _connected_spatial_physics_shell_candidate_order(candidates)
+    by_role_lists: Dict[str, List[PhysicsShellCandidate]] = defaultdict(list)
+    for candidate in ranked_candidates:
+        if candidate.role == "degenerate":
+            continue
+        by_role_lists[str(candidate.role)].append(candidate)
+    by_role: Dict[str, Tuple[PhysicsShellCandidate, ...]] = {}
+    for role, role_candidates in by_role_lists.items():
+        by_role[role] = tuple(role_candidates)
+
+    structural_roles = ("side_wall", "floor", "ceiling")
+    structural_candidates = tuple(
+        (
+            candidate
+            for candidate in ranked_candidates
+            if candidate.role in structural_roles
+        ),
+    )
+    helper_candidates = by_role.get("helper/special", ())
+    return by_role, structural_candidates, helper_candidates
+
+
+def _connected_spatial_physics_shell_candidate_order(
+    candidates: Sequence[PhysicsShellCandidate],
+) -> Tuple[PhysicsShellCandidate, ...]:
+    valid_candidates = tuple(candidate for candidate in candidates if candidate.role != "degenerate")
+    if not valid_candidates:
+        return ()
+
+    components = _physics_shell_candidate_components(valid_candidates)
+    ordered_components = sorted(
+        components,
+        key=lambda component: (
+            not any(candidate.role == "side_wall" for candidate in component),
+            -_physics_shell_component_score(component),
+            min(candidate.polygon_index for candidate in component),
+        ),
+    )
+    result: List[PhysicsShellCandidate] = []
+    for component in ordered_components:
+        result.extend(_spatial_physics_shell_component_order(component))
+    return tuple(result)
+
+
+def _physics_shell_candidate_components(
+    candidates: Sequence[PhysicsShellCandidate],
+) -> Tuple[Tuple[PhysicsShellCandidate, ...], ...]:
+    vertex_to_offsets: Dict[int, List[int]] = defaultdict(list)
+    for offset, candidate in enumerate(candidates):
+        for index in set(candidate.indices):
+            vertex_to_offsets[int(index)].append(offset)
+
+    visited = [False] * len(candidates)
+    components: List[Tuple[PhysicsShellCandidate, ...]] = []
+    for start_offset, start_candidate in enumerate(candidates):
+        if visited[start_offset]:
+            continue
+        stack = [start_offset]
+        visited[start_offset] = True
+        component: List[PhysicsShellCandidate] = []
+        while stack:
+            offset = stack.pop()
+            candidate = candidates[offset]
+            component.append(candidate)
+            for index in set(candidate.indices):
+                for neighbor_offset in vertex_to_offsets.get(int(index), ()):
+                    if visited[neighbor_offset]:
+                        continue
+                    visited[neighbor_offset] = True
+                    stack.append(neighbor_offset)
+        components.append(tuple(component))
+    return tuple(components)
+
+
+def _spatial_physics_shell_component_order(
+    component: Sequence[PhysicsShellCandidate],
+) -> Tuple[PhysicsShellCandidate, ...]:
+    vertex_to_candidates: Dict[int, List[PhysicsShellCandidate]] = defaultdict(list)
+    remaining: Dict[int, PhysicsShellCandidate] = {}
+    for candidate in component:
+        remaining[int(candidate.polygon_index)] = candidate
+        for index in set(candidate.indices):
+            vertex_to_candidates[int(index)].append(candidate)
+
+    result: List[PhysicsShellCandidate] = []
+    frontier: Dict[int, PhysicsShellCandidate] = {}
+
+    while remaining:
+        if frontier:
+            candidate = min(frontier.values(), key=_physics_shell_candidate_spatial_key)
+        else:
+            candidate = min(remaining.values(), key=_physics_shell_candidate_spatial_key)
+
+        remaining.pop(candidate.polygon_index, None)
+        frontier.pop(candidate.polygon_index, None)
+        result.append(candidate)
+
+        for index in set(candidate.indices):
+            for neighbor in vertex_to_candidates.get(int(index), ()):
+                if neighbor.polygon_index in remaining:
+                    frontier[int(neighbor.polygon_index)] = neighbor
+
+    return tuple(result)
+
+
+def _physics_shell_component_score(component: Sequence[PhysicsShellCandidate]) -> float:
+    side_wall_area = 0.0
+    support_area = 0.0
+    helper_area = 0.0
+    for candidate in component:
+        if candidate.role == "side_wall":
+            side_wall_area += float(candidate.area)
+        elif candidate.role in {"floor", "ceiling"}:
+            support_area += float(candidate.area)
+        elif candidate.role == "helper/special":
+            helper_area += float(candidate.area)
+    return side_wall_area * 8.0 + support_area * 0.25 + helper_area * 0.01
+
+
+def _physics_shell_candidate_spatial_key(candidate: PhysicsShellCandidate) -> Tuple[int, float, int]:
+    role_priority = {
+        "side_wall": 0,
+        "floor": 1,
+        "ceiling": 1,
+        "helper/special": 3,
+    }.get(str(candidate.role), 2)
+    return role_priority, -float(candidate.area), int(candidate.polygon_index)
+
+
+def _balanced_physics_shell_candidates_from_sorted(
+    by_role: Dict[str, Tuple[PhysicsShellCandidate, ...]],
+    structural_candidates: Sequence[PhysicsShellCandidate],
+    helper_candidates: Sequence[PhysicsShellCandidate],
+    limit: int,
+) -> Tuple[PhysicsShellCandidate, ...]:
+    safe_limit = max(0, int(limit))
+    if safe_limit <= 0:
+        return ()
+
+    selected: List[PhysicsShellCandidate] = []
+    selected_indices = set()
+
+    def add_from_role(role: str, count: int) -> None:
+        remaining = max(0, int(count))
+        if remaining <= 0:
+            return
+        for candidate in by_role.get(role, ()):
+            if len(selected) >= safe_limit or remaining <= 0:
+                return
+            if candidate.polygon_index in selected_indices:
+                continue
+            selected_indices.add(candidate.polygon_index)
+            selected.append(candidate)
+            remaining -= 1
+
+    side_wall_quota = max(1, (safe_limit + 1) // 2)
+    floor_quota = max(1 if safe_limit >= 2 else 0, safe_limit // 5)
+    ceiling_quota = max(1 if safe_limit >= 4 else 0, safe_limit // 10)
+
+    add_from_role("side_wall", side_wall_quota)
+    add_from_role("floor", floor_quota)
+    add_from_role("ceiling", ceiling_quota)
+
+    for candidate in tuple(structural_candidates) + tuple(helper_candidates):
+        if len(selected) >= safe_limit:
+            break
+        if candidate.polygon_index in selected_indices:
+            continue
+        selected_indices.add(candidate.polygon_index)
+        selected.append(candidate)
+
+    return tuple(selected)
+
+
+def _physics_shell_role_for_valid_polygon(
+    model: object,
+    polygon: object,
+    polygon_points: Sequence[Vec3],
+) -> str:
+    texture_name = dat_polygon_texture_name(model, polygon)
+    if terrain_semantics.helper_texture_role(texture_name):
+        return "helper/special"
+
+    normal, _dist = polygon_plane(polygon_points, tuple(range(len(polygon_points))))
+    if not all(math.isfinite(value) for value in normal):
+        return "degenerate"
+    if normal[1] > 0.45:
+        return "floor"
+    if normal[1] < -0.45:
+        return "ceiling"
+    return "side_wall"
 
 
 def unique_polygon_indices(indices: Sequence[int]) -> Tuple[int, ...]:
