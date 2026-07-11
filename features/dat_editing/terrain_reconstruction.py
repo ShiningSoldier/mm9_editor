@@ -64,6 +64,14 @@ class PhysicsShellCandidate(NamedTuple):
     generated_face_count: int
 
 
+class PhysicsShellFocusedSelection(NamedTuple):
+    selected: Tuple[PhysicsShellCandidate, ...]
+    anchor_candidate_count: int = 0
+    focus_candidate_count: int = 0
+    focus_component_count: int = 0
+    focus_selected_count: int = 0
+
+
 _PHYSICS_SHELL_MIN_POLYGON_AREA = 0.25
 _PHYSICS_SHELL_MIN_EDGE_LENGTH = 0.05
 _PHYSICS_SHELL_MAX_PLANE_DEVIATION = 0.01
@@ -465,6 +473,96 @@ def balanced_physics_shell_candidates(
     )
 
 
+def focused_balanced_physics_shell_candidates(
+    candidates: Sequence[PhysicsShellCandidate],
+    limit: int,
+    *,
+    focus_points: Sequence[object] = (),
+    focus_radius: float = 0.0,
+    focus_budget: int = 0,
+    focus_seed_radius: float = 0.0,
+) -> PhysicsShellFocusedSelection:
+    """Prioritize a connected local shell neighborhood before global fill.
+
+    The focused set starts from candidate centers near one of ``focus_points``.
+    It only retains nearby faces from components containing those seeds, which
+    avoids spending a stairwell reservation on disconnected nearby residue.
+    By default the seed radius is one quarter of the outer focus radius.
+    When the local set fits the reservation it is retained in full so floors,
+    risers, and ceilings are not lost to the global side-wall quota.
+    """
+    safe_limit = max(0, int(limit))
+    default_selected = balanced_physics_shell_candidates(candidates, safe_limit)
+    safe_radius = max(0.0, float(focus_radius))
+    safe_seed_radius = min(
+        safe_radius,
+        max(0.0, float(focus_seed_radius)) if float(focus_seed_radius) > 0.0 else safe_radius * 0.25,
+    )
+    anchors = tuple(_finite_vec3(point) for point in focus_points)
+    if safe_limit <= 0 or safe_radius <= 0.0 or safe_seed_radius <= 0.0 or not anchors:
+        return PhysicsShellFocusedSelection(selected=default_selected)
+
+    valid_candidates = tuple(
+        candidate for candidate in candidates if candidate.role != "degenerate"
+    )
+    radius_sq = safe_radius * safe_radius
+    seed_radius_sq = safe_seed_radius * safe_seed_radius
+    anchor_indices = {
+        candidate.polygon_index
+        for candidate in valid_candidates
+        if _physics_shell_candidate_near_any_focus(candidate, anchors, seed_radius_sq)
+    }
+    if not anchor_indices:
+        return PhysicsShellFocusedSelection(selected=default_selected)
+
+    components = _physics_shell_candidate_components(valid_candidates)
+    focus_components = tuple(
+        component for component in components
+        if any(candidate.polygon_index in anchor_indices for candidate in component)
+    )
+    focus_component_indices = {
+        candidate.polygon_index
+        for component in focus_components
+        for candidate in component
+    }
+    focused_candidates = tuple(
+        candidate for candidate in valid_candidates
+        if candidate.polygon_index in focus_component_indices
+        and _physics_shell_candidate_near_any_focus(candidate, anchors, radius_sq)
+    )
+    if not focused_candidates:
+        return PhysicsShellFocusedSelection(
+            selected=default_selected,
+            anchor_candidate_count=len(anchor_indices),
+            focus_component_count=len(focus_components),
+        )
+
+    reservation = min(
+        safe_limit,
+        max(0, int(focus_budget)) if int(focus_budget) > 0 else safe_limit,
+    )
+    if len(focused_candidates) <= reservation:
+        focused_selected = _connected_spatial_physics_shell_candidate_order(focused_candidates)
+    else:
+        focused_selected = balanced_physics_shell_candidates(focused_candidates, reservation)
+    focused_selected_indices = {item.polygon_index for item in focused_selected}
+    remaining_candidates = tuple(
+        candidate for candidate in valid_candidates
+        if candidate.polygon_index not in focused_selected_indices
+    )
+    remaining_selected = balanced_physics_shell_candidates(
+        remaining_candidates,
+        safe_limit - len(focused_selected),
+    )
+    return PhysicsShellFocusedSelection(
+        selected=tuple(focused_selected) + tuple(remaining_selected),
+        anchor_candidate_count=len(anchor_indices),
+        focus_candidate_count=len(focused_candidates),
+        focus_component_count=len(focus_components),
+        focus_selected_count=len(focused_selected),
+    )
+
+
 def budgeted_balanced_physics_shell_source_polygon_count(
     candidates: Sequence[PhysicsShellCandidate],
     *,
@@ -621,6 +719,22 @@ def _physics_shell_component_score(component: Sequence[PhysicsShellCandidate]) -
         elif candidate.role == "helper/special":
             helper_area += float(candidate.area)
     return side_wall_area * 8.0 + support_area * 0.25 + helper_area * 0.01
+
+
+def _physics_shell_candidate_near_any_focus(
+    candidate: PhysicsShellCandidate,
+    focus_points: Sequence[Vec3],
+    radius_sq: float,
+) -> bool:
+    if not candidate.points:
+        return False
+    point_count = float(len(candidate.points))
+    center = (
+        sum(point[0] for point in candidate.points) / point_count,
+        sum(point[1] for point in candidate.points) / point_count,
+        sum(point[2] for point in candidate.points) / point_count,
+    )
+    return any(vec3_distance_sq(center, focus) <= radius_sq for focus in focus_points)
 
 
 def _physics_shell_candidate_spatial_key(candidate: PhysicsShellCandidate) -> Tuple[int, float, int]:

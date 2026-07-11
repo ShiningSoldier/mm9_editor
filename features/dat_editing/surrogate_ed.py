@@ -740,6 +740,11 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     physics_shell_max_polygons: int = 128,
     physics_shell_thickness: float = 16.0,
     physics_shell_side_texture: str = "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx",
+    physics_shell_source_polygon_indices: Sequence[int] = (),
+    physics_shell_focus_points: Sequence[object] = (),
+    physics_shell_focus_radius: float = 0.0,
+    physics_shell_focus_budget: int = 0,
+    physics_shell_focus_seed_radius: float = 0.0,
     include_door_objects: bool = False,
     door_source_ed_path: str = "",
     include_airail_objects: bool = False,
@@ -880,6 +885,11 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
                 max_polygons=physics_shell_max_polygons,
                 thickness=physics_shell_thickness,
                 side_texture=physics_shell_side_texture,
+                source_polygon_indices=physics_shell_source_polygon_indices,
+                focus_points=physics_shell_focus_points,
+                focus_radius=physics_shell_focus_radius,
+                focus_budget=physics_shell_focus_budget,
+                focus_seed_radius=physics_shell_focus_seed_radius,
             )
         except ValueError as exc:
             blockers = tuple(_unique_text(tuple(raw_report.blockers) + (str(exc),)))
@@ -1582,6 +1592,11 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
     physics_shell_max_polygons: int = 128,
     physics_shell_thickness: float = 16.0,
     physics_shell_side_texture: str = "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx",
+    physics_shell_source_polygon_indices: Sequence[int] = (),
+    physics_shell_focus_points: Sequence[object] = (),
+    physics_shell_focus_radius: float = 0.0,
+    physics_shell_focus_budget: int = 0,
+    physics_shell_focus_seed_radius: float = 0.0,
     include_door_objects: bool = False,
     door_source_ed_path: str = "",
     include_airail_objects: bool = False,
@@ -1666,6 +1681,11 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
         physics_shell_max_polygons=physics_shell_max_polygons,
         physics_shell_thickness=physics_shell_thickness,
         physics_shell_side_texture=physics_shell_side_texture,
+        physics_shell_source_polygon_indices=physics_shell_source_polygon_indices,
+        physics_shell_focus_points=physics_shell_focus_points,
+        physics_shell_focus_radius=physics_shell_focus_radius,
+        physics_shell_focus_budget=physics_shell_focus_budget,
+        physics_shell_focus_seed_radius=physics_shell_focus_seed_radius,
         include_door_objects=include_door_objects,
         door_source_ed_path=door_source_ed_path,
         include_airail_objects=include_airail_objects,
@@ -4314,6 +4334,11 @@ def _physics_shell_patch_brushes(
     max_polygons: int,
     thickness: float,
     side_texture: str,
+    source_polygon_indices: Sequence[int] = (),
+    focus_points: Sequence[object] = (),
+    focus_radius: float = 0.0,
+    focus_budget: int = 0,
+    focus_seed_radius: float = 0.0,
 ) -> Tuple[
     Tuple[legacy_ed_writer.LegacyEdBrush, ...],
     Tuple[SurrogateEdModelSummary, ...],
@@ -4336,8 +4361,16 @@ def _physics_shell_patch_brushes(
         raise ValueError(f"PhysicsBSP shell source model was not found: {source_name}")
 
     polygons = tuple(getattr(model, "polygons", ()) or ())
-    candidates = terrain_reconstruction.physics_shell_candidates(model)
-    invalid_polygon_count = max(0, len(polygons) - len(candidates))
+    all_candidates = terrain_reconstruction.physics_shell_candidates(model)
+    invalid_polygon_count = max(0, len(polygons) - len(all_candidates))
+    candidates = all_candidates
+    requested_indices = tuple(sorted({int(index) for index in source_polygon_indices}))
+    if requested_indices:
+        requested_index_set = set(requested_indices)
+        candidates = tuple(
+            candidate for candidate in candidates
+            if candidate.polygon_index in requested_index_set
+        )
 
     if not candidates:
         raise ValueError(f"PhysicsBSP shell patch found no writable polygons in {source_name}")
@@ -4352,7 +4385,15 @@ def _physics_shell_patch_brushes(
     floor_candidates: List[Tuple[float, Vec3, float]] = []
     generated_role_counts: Dict[str, int] = defaultdict(int)
 
-    primary_candidates = terrain_reconstruction.balanced_physics_shell_candidates(candidates, limit)
+    focus_selection = terrain_reconstruction.focused_balanced_physics_shell_candidates(
+        candidates,
+        limit,
+        focus_points=focus_points,
+        focus_radius=focus_radius,
+        focus_budget=focus_budget,
+        focus_seed_radius=focus_seed_radius,
+    )
+    primary_candidates = focus_selection.selected
     attempted_indices = set()
 
     def add_candidate_slabs(ordered_candidates: Sequence[terrain_reconstruction.PhysicsShellCandidate]) -> None:
@@ -4366,7 +4407,10 @@ def _physics_shell_patch_brushes(
                 candidate.polygon,
                 candidate.points,
                 polygon_index=candidate.polygon_index,
-                name=f"{prefix}_{candidate.polygon_index:04d}",
+                name=(
+                    f"{prefix}_{_physics_shell_role_name_component(candidate.role)}_"
+                    f"{candidate.polygon_index:04d}"
+                ),
                 thickness=safe_thickness,
                 side_texture=side_texture_name,
             )
@@ -4415,6 +4459,31 @@ def _physics_shell_patch_brushes(
         + ".",
         f"PhysicsBSP shell polygon budget: {limit}; slab thickness: {safe_thickness:g}.",
     ]
+    if requested_indices:
+        notes.append(
+            "PhysicsBSP shell patch is restricted to requested source polygon indices: "
+            + ", ".join(str(index) for index in requested_indices) + "."
+        )
+        missing_requested_count = len(requested_indices) - len(candidates)
+        if missing_requested_count:
+            notes.append(
+                f"{missing_requested_count} requested source polygon(s) were not writable PhysicsBSP shell candidates."
+            )
+    if focus_points and float(focus_radius) > 0.0:
+        if focus_selection.focus_candidate_count:
+            notes.append(
+                "PhysicsBSP shell focused selector: "
+                f"anchors={len(tuple(focus_points))}, radius={float(focus_radius):g}, "
+                f"seed_radius={min(float(focus_radius), max(0.0, float(focus_seed_radius)) if float(focus_seed_radius) > 0.0 else float(focus_radius) * 0.25):g}, "
+                f"connected_candidates={focus_selection.focus_candidate_count}, "
+                f"components={focus_selection.focus_component_count}, "
+                f"reserved={focus_selection.focus_selected_count}, budget={max(0, int(focus_budget)) or limit}."
+            )
+        else:
+            notes.append(
+                "PhysicsBSP shell focused selector found no nearby connected source polygons; "
+                "used the normal balanced selector."
+            )
     if len(brushes) >= limit and len(candidates) > limit:
         notes.append(
             f"PhysicsBSP shell patch stopped at the polygon budget; {len(candidates) - len(brushes)} candidate polygon(s) remain ungenerated."
@@ -4427,6 +4496,12 @@ def _physics_shell_patch_brushes(
         notes.append("Default StartPoint support candidate is the broadest upward-facing generated PhysicsBSP shell face.")
 
     return tuple(brushes), tuple(summaries), placement, tuple(notes)
+
+
+def _physics_shell_role_name_component(role: object) -> str:
+    """Return a stable legacy-name token for a shell polygon role."""
+    token = _safe_legacy_name_component(str(role or "unknown").replace("/", "_"))
+    return token or "unknown"
 
 
 def _physics_shell_polygon_slab_brush(

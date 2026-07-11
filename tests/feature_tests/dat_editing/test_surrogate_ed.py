@@ -1605,6 +1605,10 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertTrue(any("side_wall=2, floor=1, ceiling=1, helper/special=0" in item for item in report.notes))
         for summary in shell_summaries:
             self.assertEqual(summary.status, "written")
+            self.assertRegex(
+                summary.name,
+                r"^PhysicsShellProbe_(?:side_wall|floor|ceiling|helper_special)_\d{4}$",
+            )
             self.assertGreaterEqual(summary.point_count, 6)
             self.assertGreaterEqual(summary.polygon_count, 5)
 
@@ -1621,6 +1625,45 @@ class SurrogateEdTests(unittest.TestCase):
         ]
         self.assertGreater(len(invisible_faces), 0)
         self.assertTrue(all(face.extras["texture_flags"] == 1 for face in invisible_faces))
+
+    def test_full_world_skeleton_can_restrict_physics_shell_to_source_polygons(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedPhysicsShellProbe",
+            include_physics_shell_patch=True,
+            physics_shell_name_prefix="PhysicsShellProbe",
+            physics_shell_max_polygons=8,
+            physics_shell_thickness=16.0,
+            physics_shell_source_polygon_indices=(4205, 6861),
+        )
+
+        shell_summaries = [
+            summary for summary in report.model_summaries
+            if summary.name.startswith("PhysicsShellProbe_")
+        ]
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(len(shell_summaries), 2)
+        self.assertEqual(
+            {
+                int(summary.name.rsplit("_", 1)[1])
+                for summary in shell_summaries
+            },
+            {4205, 6861},
+        )
+        self.assertTrue(any(
+            "restricted to requested source polygon indices: 4205, 6861" in item
+            for item in report.notes
+        ))
+        self.assertGreater(len(generated), 0)
 
     def test_anskramkeep_no_helper_physics_shell_candidate_baseline(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")

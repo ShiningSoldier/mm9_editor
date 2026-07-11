@@ -58,6 +58,7 @@ DEFAULT_BLACK_BOX_ACCEPTED_REGENERATED_SYSTEMS: Tuple[str, ...] = (
 )
 
 _PHYSICS_SHELL_COVERAGE_ROLES = terrain_reconstruction.PHYSICS_SHELL_COVERAGE_ROLES
+ANSKRAMKEEP_BACK_START_POINT = (0.0, -104.0, 16.0)
 
 
 @dataclass(frozen=True)
@@ -514,6 +515,10 @@ class FullWorldSkeletonAcceptanceReport:
     include_validation_floor: bool = False
     include_terrain_support_patch: bool = False
     include_physics_shell_patch: bool = False
+    physics_shell_focus_points: Tuple[Tuple[float, float, float], ...] = ()
+    physics_shell_focus_radius: float = 0.0
+    physics_shell_focus_budget: int = 0
+    physics_shell_focus_seed_radius: float = 0.0
     include_door_objects: bool = False
     door_source_ed_path: str = ""
     door_behavior_context: str = ""
@@ -1302,6 +1307,14 @@ class PhysicsShellSourceCoverageRoleSummary:
 
 
 @dataclass(frozen=True)
+class PhysicsShellGeneratedBrushAttribution:
+    brush_name: str
+    source_model_name: str
+    source_polygon_index: int
+    role: str
+
+
+@dataclass(frozen=True)
 class PhysicsShellSourceCoverageReport:
     status: str
     source_dat_path: str
@@ -1313,6 +1326,7 @@ class PhysicsShellSourceCoverageReport:
     uncovered_source_polygon_count: int = 0
     generated_unknown_polygon_count: int = 0
     role_summaries: Tuple[PhysicsShellSourceCoverageRoleSummary, ...] = ()
+    generated_brush_attributions: Tuple[PhysicsShellGeneratedBrushAttribution, ...] = ()
     generated_source_polygon_indices: Tuple[int, ...] = ()
     generated_unknown_polygon_indices: Tuple[int, ...] = ()
     blockers: Tuple[str, ...] = ()
@@ -2905,6 +2919,11 @@ def build_full_world_skeleton_acceptance_report(
     physics_shell_max_polygons: int = 128,
     physics_shell_thickness: float = 16.0,
     physics_shell_side_texture: str = "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx",
+    physics_shell_source_polygon_indices: Sequence[int] = (),
+    physics_shell_focus_points: Sequence[object] = (),
+    physics_shell_focus_radius: float = 0.0,
+    physics_shell_focus_budget: int = 0,
+    physics_shell_focus_seed_radius: float = 0.0,
     include_door_objects: bool = False,
     door_source_ed_path: str = "",
     include_airail_objects: bool = False,
@@ -3932,6 +3951,11 @@ def build_full_world_skeleton_acceptance_report(
         physics_shell_max_polygons=effective_physics_shell_max_polygons,
         physics_shell_thickness=physics_shell_thickness,
         physics_shell_side_texture=physics_shell_side_texture,
+        physics_shell_source_polygon_indices=physics_shell_source_polygon_indices,
+        physics_shell_focus_points=physics_shell_focus_points,
+        physics_shell_focus_radius=physics_shell_focus_radius,
+        physics_shell_focus_budget=physics_shell_focus_budget,
+        physics_shell_focus_seed_radius=physics_shell_focus_seed_radius,
         include_door_objects=include_door_objects,
         door_source_ed_path=source_door_ed,
         include_airail_objects=include_airail_objects,
@@ -4544,6 +4568,15 @@ def build_full_world_skeleton_acceptance_report(
         manual_steps = manual_steps[:2] + (
             "Review the PhysicsBSP shell source coverage manifest; uncovered side-wall and ceiling counts are the actionable shell selector gaps.",
         ) + manual_steps[2:]
+    reported_shell_focus_points: List[Tuple[float, float, float]] = []
+    for raw_point in physics_shell_focus_points:
+        try:
+            x, y, z = raw_point  # type: ignore[misc]
+            point = (float(x), float(y), float(z))
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(value) for value in point):
+            reported_shell_focus_points.append(point)
     return FullWorldSkeletonAcceptanceReport(
         status="ready_for_manual_full_world_skeleton_test",
         source_dat_path=source_dat,
@@ -4554,6 +4587,10 @@ def build_full_world_skeleton_acceptance_report(
         include_validation_floor=include_validation_floor,
         include_terrain_support_patch=include_terrain_support_patch,
         include_physics_shell_patch=include_physics_shell_patch,
+        physics_shell_focus_points=tuple(reported_shell_focus_points),
+        physics_shell_focus_radius=max(0.0, float(physics_shell_focus_radius)),
+        physics_shell_focus_budget=max(0, int(physics_shell_focus_budget)),
+        physics_shell_focus_seed_radius=max(0.0, float(physics_shell_focus_seed_radius)),
         include_door_objects=include_door_objects,
         door_source_ed_path=source_door_ed,
         door_behavior_context=door_behavior_context,
@@ -5045,6 +5082,10 @@ def build_anskramkeep_physics_shell_retest_report(
     manual_validation: Optional[BlackBoxCompilerManualValidation] = None,
     physics_shell_max_polygons: int = 864,
     physics_shell_thickness: float = 16.0,
+    physics_shell_focus_points: Sequence[Tuple[float, float, float]] = (ANSKRAMKEEP_BACK_START_POINT,),
+    physics_shell_focus_radius: float = 512.0,
+    physics_shell_focus_budget: int = 512,
+    physics_shell_focus_seed_radius: float = 128.0,
 ) -> AnskramkeepPhysicsShellRetestReport:
     """Build the current ANSKRAMKEEP shell candidate and compare validation signals.
 
@@ -5059,7 +5100,7 @@ def build_anskramkeep_physics_shell_retest_report(
     blockers: List[str] = []
     cautions: List[str] = []
     notes: List[str] = [
-        "ANSKRAMKEEP PhysicsBSP shell retest report rebuilds the current no-helper candidate for comparison.",
+        "ANSKRAMKEEP PhysicsBSP shell retest report rebuilds the no-helper candidate with a connected StartPoint-focused shell reservation.",
         "Processor and in-game validation are external manual steps; pass the current Processor log and manual validation results after running them.",
     ]
 
@@ -5090,6 +5131,10 @@ def build_anskramkeep_physics_shell_retest_report(
         physics_shell_name_prefix="ANSKRAMKEEP_PhysicsShell",
         physics_shell_max_polygons=physics_shell_max_polygons,
         physics_shell_thickness=physics_shell_thickness,
+        physics_shell_focus_points=physics_shell_focus_points,
+        physics_shell_focus_radius=physics_shell_focus_radius,
+        physics_shell_focus_budget=physics_shell_focus_budget,
+        physics_shell_focus_seed_radius=physics_shell_focus_seed_radius,
         include_physics_shell_source_coverage=True,
         block_unreconstructed_physics_shell=True,
         max_processor_brushes=1500,
@@ -6987,14 +7032,25 @@ def build_physics_shell_source_coverage_report(
         )
 
     source_roles = _physics_shell_source_polygon_roles(model)
-    generated_indices = _generated_physics_shell_source_polygon_indices(
+    generated_brush_indices = _generated_physics_shell_brush_indices(
         layout.brush_names,
         shell_prefix,
     )
+    generated_indices = tuple(index for _name, index in generated_brush_indices)
     source_index_set = set(source_roles)
     generated_source_indices = tuple(index for index in generated_indices if index in source_index_set)
     generated_source_set = set(generated_source_indices)
     generated_unknown_indices = tuple(index for index in generated_indices if index not in source_index_set)
+    generated_brush_attributions = tuple(
+        PhysicsShellGeneratedBrushAttribution(
+            brush_name=brush_name,
+            source_model_name=physics_name,
+            source_polygon_index=polygon_index,
+            role=source_roles.get(polygon_index, "unknown"),
+        )
+        for brush_name, polygon_index in generated_brush_indices
+        if polygon_index in source_index_set
+    )
     role_summaries: List[PhysicsShellSourceCoverageRoleSummary] = []
     for role in _PHYSICS_SHELL_COVERAGE_ROLES:
         source_count = sum(1 for value in source_roles.values() if value == role)
@@ -7033,6 +7089,7 @@ def build_physics_shell_source_coverage_report(
         uncovered_source_polygon_count=uncovered_count,
         generated_unknown_polygon_count=len(generated_unknown_indices),
         role_summaries=tuple(role_summaries),
+        generated_brush_attributions=generated_brush_attributions,
         generated_source_polygon_indices=generated_source_indices,
         generated_unknown_polygon_indices=generated_unknown_indices,
         cautions=tuple(_unique_text(cautions)),
@@ -8771,6 +8828,14 @@ def format_full_world_skeleton_acceptance_report(
         lines.append("terrain support patch: included")
     if report.include_physics_shell_patch:
         lines.append("PhysicsBSP shell patch: included")
+    if report.physics_shell_focus_points and report.physics_shell_focus_radius > 0.0:
+        lines.append(
+            "PhysicsBSP shell focus: "
+            f"anchors={len(report.physics_shell_focus_points)}, "
+            f"radius={report.physics_shell_focus_radius:g}, "
+            f"budget={report.physics_shell_focus_budget or 'all'}, "
+            f"seed_radius={report.physics_shell_focus_seed_radius or report.physics_shell_focus_radius * 0.25:g}"
+        )
     if report.include_door_objects:
         detail = "Door/RotatingDoor objects: included"
         if report.door_source_ed_path:
@@ -10270,6 +10335,10 @@ def build_full_world_skeleton_acceptance_manifest(
             "include_validation_floor": report.include_validation_floor,
             "include_terrain_support_patch": report.include_terrain_support_patch,
             "include_physics_shell_patch": report.include_physics_shell_patch,
+            "physics_shell_focus_points": [list(point) for point in report.physics_shell_focus_points],
+            "physics_shell_focus_radius": report.physics_shell_focus_radius,
+            "physics_shell_focus_budget": report.physics_shell_focus_budget,
+            "physics_shell_focus_seed_radius": report.physics_shell_focus_seed_radius,
             "include_door_objects": report.include_door_objects,
             "door_source_ed_path": report.door_source_ed_path,
             "door_behavior_context": report.door_behavior_context,
@@ -10564,6 +10633,7 @@ def _full_world_manifest_physics_shell_coverage_summary(
             }
             for item in report.role_summaries
         ],
+        "generated_brush_attribution_count": len(report.generated_brush_attributions),
         "blockers": list(report.blockers),
         "cautions": list(report.cautions),
         "notes": list(report.notes),
@@ -10575,7 +10645,7 @@ def _physics_shell_source_coverage_manifest(
 ) -> Dict[str, object]:
     return {
         "kind": "mm9_physics_shell_source_coverage",
-        "schema_version": 1,
+        "schema_version": 2,
         "status": report.status,
         "source_dat_path": report.source_dat_path,
         "generated_ed_path": report.generated_ed_path,
@@ -10593,6 +10663,15 @@ def _physics_shell_source_coverage_manifest(
                 "uncovered_polygon_count": item.uncovered_polygon_count,
             }
             for item in report.role_summaries
+        ],
+        "generated_brush_attributions": [
+            {
+                "brush_name": item.brush_name,
+                "source_model_name": item.source_model_name,
+                "source_polygon_index": item.source_polygon_index,
+                "role": item.role,
+            }
+            for item in report.generated_brush_attributions
         ],
         "generated_source_polygon_indices": list(report.generated_source_polygon_indices),
         "generated_unknown_polygon_indices": list(report.generated_unknown_polygon_indices),
@@ -10625,6 +10704,20 @@ def format_physics_shell_source_coverage_report(
             f"- {item.role}: source={item.source_polygon_count}, "
             f"generated={item.generated_polygon_count}, uncovered={item.uncovered_polygon_count}"
         )
+    if report.generated_brush_attributions:
+        lines.append(
+            "generated brush provenance: "
+            f"{len(report.generated_brush_attributions)} brush(es) mapped to source model, polygon, and role"
+        )
+        for item in report.generated_brush_attributions[:16]:
+            lines.append(
+                f"- {item.brush_name}: source={item.source_model_name}[{item.source_polygon_index}], "
+                f"role={item.role}"
+            )
+        if len(report.generated_brush_attributions) > 16:
+            lines.append(
+                f"- ... {len(report.generated_brush_attributions) - 16} more; see the JSON manifest"
+            )
     for blocker in report.blockers:
         lines.append(f"blocker: {blocker}")
     for caution in report.cautions:
@@ -12163,11 +12256,28 @@ def _generated_physics_shell_source_polygon_indices(
     brush_names: Sequence[str],
     shell_prefix: str,
 ) -> Tuple[int, ...]:
+    return tuple(
+        index
+        for _brush_name, index in _generated_physics_shell_brush_indices(
+            brush_names,
+            shell_prefix,
+        )
+    )
+
+
+def _generated_physics_shell_brush_indices(
+    brush_names: Sequence[str],
+    shell_prefix: str,
+) -> Tuple[Tuple[str, int], ...]:
     prefix = _legacy_name_component(shell_prefix or "PhysicsShell")
     if not prefix:
         prefix = "PhysicsShell"
-    pattern = re.compile(r"(?:^|_)" + re.escape(prefix) + r"_(\d+)(?:_\d+)?$")
-    result: List[int] = []
+    role_tokens = "floor|ceiling|side_wall|helper_special|degenerate|unknown"
+    pattern = re.compile(
+        r"(?:^|_)" + re.escape(prefix)
+        + rf"_(?:(?:{role_tokens})_)?(\d+)(?:_\d+)?$"
+    )
+    result: List[Tuple[str, int]] = []
     seen = set()
     for name in brush_names:
         match = pattern.search(str(name or ""))
@@ -12177,7 +12287,7 @@ def _generated_physics_shell_source_polygon_indices(
         if index in seen:
             continue
         seen.add(index)
-        result.append(index)
+        result.append((str(name or ""), index))
     return tuple(result)
 
 

@@ -3141,7 +3141,7 @@ class CompilerStrategyTests(unittest.TestCase):
                 f.write(
                     "Processing ANSKRAMKEEP_reconstructed_physics_shell_retest.ed\n"
                     "** Unable to generate a plane (0)\n"
-                    "Number of input polies: 11440\n"
+                    "Number of input polies: 10516\n"
                     "Number of output polies: 4300\n"
                     "Tree depth: 49\n"
                     "Number of (unseen) polies removed: 42\n"
@@ -3166,9 +3166,16 @@ class CompilerStrategyTests(unittest.TestCase):
 
         self.assertEqual(report.status, "anskramkeep_retest_validated")
         self.assertIsNotNone(report.acceptance)
-        self.assertEqual(report.acceptance.polygon_count, 11440)
+        self.assertEqual(report.acceptance.polygon_count, 10516)
+        self.assertEqual(
+            report.acceptance.physics_shell_focus_points,
+            (compiler_strategy.ANSKRAMKEEP_BACK_START_POINT,),
+        )
+        self.assertEqual(report.acceptance.physics_shell_focus_radius, 512.0)
+        self.assertEqual(report.acceptance.physics_shell_focus_budget, 512)
+        self.assertEqual(report.acceptance.physics_shell_focus_seed_radius, 128.0)
         by_metric = {item.metric: item for item in report.comparisons}
-        self.assertEqual(by_metric["generated_input_polygons"].delta, "-281")
+        self.assertEqual(by_metric["generated_input_polygons"].delta, "-1205")
         self.assertEqual(by_metric["unable_to_generate_plane_warnings"].delta, "-3")
         self.assertEqual(by_metric["processor_output_polygons"].delta, "-170")
         self.assertEqual(by_metric["processor_tree_depth"].delta, "-3")
@@ -3181,6 +3188,13 @@ class CompilerStrategyTests(unittest.TestCase):
         self.assertIn("generated candidate: status=ready_for_manual_full_world_skeleton_test", text)
         self.assertIn("comparison: processor_output_polygons status=changed", text)
         self.assertIn("manual validation: status=passed", text)
+        acceptance_text = compiler_strategy.format_full_world_skeleton_acceptance_report(report.acceptance)
+        self.assertIn("PhysicsBSP shell focus: anchors=1, radius=512, budget=512, seed_radius=128", acceptance_text)
+        manifest = compiler_strategy.build_full_world_skeleton_acceptance_manifest(report.acceptance)
+        self.assertEqual(
+            manifest["generation"]["physics_shell_focus_points"],
+            [[0.0, -104.0, 16.0]],
+        )
 
     def test_full_world_skeleton_acceptance_report_generates_multi_cluster_world(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
@@ -3525,7 +3539,23 @@ class CompilerStrategyTests(unittest.TestCase):
             with open(report.physics_shell_source_coverage_manifest_path, "r", encoding="utf-8") as f:
                 coverage_manifest = json.load(f)
             self.assertEqual(coverage_manifest["kind"], "mm9_physics_shell_source_coverage")
+            self.assertEqual(coverage_manifest["schema_version"], 2)
             self.assertEqual(coverage_manifest["generated_source_polygon_count"], 4)
+            attributions = coverage_manifest["generated_brush_attributions"]
+            self.assertEqual(len(attributions), 4)
+            self.assertEqual(
+                {item["source_model_name"] for item in attributions},
+                {"PhysicsBSP"},
+            )
+            self.assertEqual(
+                {item["role"] for item in attributions},
+                {"side_wall", "floor", "ceiling"},
+            )
+            self.assertTrue(all(
+                f"PhysicsShellProbe_{item['role']}_{item['source_polygon_index']:04d}"
+                in item["brush_name"]
+                for item in attributions
+            ))
             manifest = compiler_strategy.build_full_world_skeleton_acceptance_manifest(report)
             self.assertEqual(
                 manifest["artifacts"]["physics_shell_source_coverage_manifest_path"],
@@ -3548,6 +3578,69 @@ class CompilerStrategyTests(unittest.TestCase):
             )
             self.assertIn("side_wall", coverage_text)
             self.assertIn("uncovered=5788", coverage_text)
+            self.assertIn("generated brush provenance: 4 brush(es)", coverage_text)
+            self.assertIn("source=PhysicsBSP[", coverage_text)
+
+    def test_physics_shell_brush_index_parser_supports_role_and_legacy_names(self):
+        parsed = compiler_strategy._generated_physics_shell_brush_indices(
+            (
+                "PhysicsShellProbe_side_wall_0012",
+                "PhysicsShellProbe_helper_special_0013",
+                "PhysicsShellProbe_0014",
+                "Unrelated_0015",
+            ),
+            "PhysicsShellProbe",
+        )
+
+        self.assertEqual(
+            parsed,
+            (
+                ("PhysicsShellProbe_side_wall_0012", 12),
+                ("PhysicsShellProbe_helper_special_0013", 13),
+                ("PhysicsShellProbe_0014", 14),
+            ),
+        )
+
+    def test_full_world_skeleton_acceptance_can_probe_requested_physics_shell_polygons(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="GeneratedPhysicsShellProbe",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="physics_shell_requested_probe.ed",
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="PhysicsShellProbe",
+                physics_shell_max_polygons=8,
+                physics_shell_thickness=16.0,
+                physics_shell_source_polygon_indices=(4205, 6861),
+                include_physics_shell_source_coverage=True,
+                max_processor_brushes=16,
+                max_processor_polygons=128,
+                max_models=8,
+                max_total_points=512,
+                max_total_polygons=512,
+            )
+
+            self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+            self.assertIsNotNone(report.physics_shell_source_coverage)
+            provenance = report.physics_shell_source_coverage.generated_brush_attributions
+            self.assertEqual(
+                {item.source_polygon_index for item in provenance},
+                {4205, 6861},
+            )
+            self.assertTrue(all(
+                item.brush_name.startswith("Brush_PhysicsShellProbe_")
+                for item in provenance
+            ))
+            self.assertTrue(any(
+                "restricted to requested source polygon indices: 4205, 6861" in item
+                for item in report.notes
+            ))
 
     def test_full_world_skeleton_acceptance_caps_physics_shell_by_generated_face_budget(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")

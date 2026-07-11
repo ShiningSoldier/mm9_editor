@@ -328,19 +328,7 @@ blockers for game-bound output.
 
 ## Future Plan
 
-### 1. Default-Path Validation
-
-Validate the promoted normal path through the actual UI command rather than
-hidden validation profiles.
-
-- Generate BATHHOUSE with `Generate DEDit ED from DAT...`.
-- Confirm `DestructableProp`, `Fire`, and `TreasureChest` behavior still matches
-  the focused validation candidate.
-- Confirm the generated report shows `include_physics_shell_patch=false` and
-  `include_validation_floor=true` for no-Terrain0 `DestructableProp` output.
-- Keep this as a regression artifact.
-
-### 2. ANSKRAMKEEP Stair And PhysicsBSP Repair
+### 1. ANSKRAMKEEP Stair And PhysicsBSP Repair
 
 Recover more indoor shell geometry without exceeding Processor limits.
 
@@ -351,7 +339,7 @@ Recover more indoor shell geometry without exceeding Processor limits.
   and after Processor.
 - Tighten slab selection/quality filters before increasing shell budgets.
 
-### 3. DAT-Native Object Reconstruction
+### 2. DAT-Native Object Reconstruction
 
 Reduce reliance on shipped source ED oracles.
 
@@ -361,7 +349,7 @@ Reduce reliance on shipped source ED oracles.
   against source-oracle generated output.
 - Promote classes only after DEDit, Processor, and game validation.
 
-### 4. Helper Semantics Without Helper Brush Leakage
+### 3. Helper Semantics Without Helper Brush Leakage
 
 Continue restoring helper systems as objects/properties first.
 
@@ -373,7 +361,7 @@ Continue restoring helper systems as objects/properties first.
 - Do not revisit SkyMarker shell emission until enough surrounding source-world
   context can explain the shipped compile reduction.
 
-### 5. Large-World And Outdoor Regression Matrix
+### 4. Large-World And Outdoor Regression Matrix
 
 Derive per-world selection rules instead of one global heuristic.
 
@@ -384,7 +372,7 @@ Derive per-world selection rules instead of one global heuristic.
 - Track selected model counts, helper exclusions, generated object classes,
   Processor warnings, and manual game-validation results in manifests.
 
-### 6. Workflow And Cleanup
+### 5. Workflow And Cleanup
 
 Keep the tool usable as reconstruction broadens.
 

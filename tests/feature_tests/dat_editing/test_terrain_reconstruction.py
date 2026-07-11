@@ -1,4 +1,5 @@
 import inspect
+import os
 import types
 import unittest
 
@@ -359,6 +360,80 @@ class TerrainReconstructionTests(unittest.TestCase):
 
         self.assertEqual([item.polygon_index for item in selected], [10, 11, 12])
         self.assertEqual([item.role for item in selected], ["side_wall", "floor", "ceiling"])
+
+    def test_focused_physics_shell_selection_keeps_connected_local_faces(self):
+        def candidate(
+            index: int,
+            role: str,
+            vertex_indices: tuple[int, int, int],
+            center_x: float,
+        ) -> terrain_reconstruction.PhysicsShellCandidate:
+            return terrain_reconstruction.PhysicsShellCandidate(
+                polygon_index=index,
+                polygon=types.SimpleNamespace(vertex_indices=vertex_indices),
+                indices=vertex_indices,
+                points=(
+                    (center_x - 1.0, 0.0, 0.0),
+                    (center_x, 0.0, 1.0),
+                    (center_x + 1.0, 0.0, 0.0),
+                ),
+                area=10.0,
+                role=role,
+                generated_face_count=5,
+            )
+
+        connected_room = (
+            candidate(10, "side_wall", (0, 1, 2), 0.0),
+            candidate(11, "floor", (2, 3, 0), 50.0),
+            candidate(12, "ceiling", (3, 4, 2), 80.0),
+        )
+        disconnected_nearby = candidate(20, "side_wall", (100, 101, 102), 40.0)
+        distant = candidate(30, "side_wall", (200, 201, 202), 500.0)
+
+        selection = terrain_reconstruction.focused_balanced_physics_shell_candidates(
+            connected_room + (disconnected_nearby, distant),
+            3,
+            focus_points=((0.0, 0.0, 0.0),),
+            focus_radius=100.0,
+            focus_budget=3,
+        )
+
+        self.assertEqual(selection.anchor_candidate_count, 1)
+        self.assertEqual(selection.focus_component_count, 1)
+        self.assertEqual(selection.focus_candidate_count, 3)
+        self.assertEqual(selection.focus_selected_count, 3)
+        self.assertEqual([item.polygon_index for item in selection.selected], [10, 11, 12])
+
+    def test_anskramkeep_startpoint_focus_reserves_connected_stairwell_neighborhood(self):
+        from core import bsp
+        from features.dat_editing import terrain_semantics
+
+        path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        if not os.path.exists(path):
+            self.skipTest(f"missing test level: {path}")
+        with open(path, "rb") as f:
+            parsed = bsp.parse(f.read())
+        physics = terrain_semantics.model_by_name(parsed.world_models, "PhysicsBSP")
+        candidates = terrain_reconstruction.physics_shell_candidates(physics)
+
+        selection = terrain_reconstruction.focused_balanced_physics_shell_candidates(
+            candidates,
+            864,
+            focus_points=((0.0, -104.0, 16.0),),
+            focus_radius=512.0,
+            focus_budget=512,
+        )
+
+        focused = selection.selected[:selection.focus_selected_count]
+        self.assertEqual(selection.anchor_candidate_count, 16)
+        self.assertEqual(selection.focus_component_count, 1)
+        self.assertEqual(selection.focus_candidate_count, 350)
+        self.assertEqual(selection.focus_selected_count, 350)
+        self.assertEqual(
+            {role: sum(item.role == role for item in focused)
+             for role in ("floor", "ceiling", "side_wall")},
+            {"floor": 52, "ceiling": 59, "side_wall": 239},
+        )
 
     def test_builds_terrain_coverage_items_with_texture_filtering(self):
         terrain = types.SimpleNamespace(
