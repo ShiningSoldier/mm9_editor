@@ -62,10 +62,11 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
 import struct
 import sys
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import _path_setup  # noqa: F401  (adds mm9_patcher/ to sys.path)
 from .actor_visuals import (
@@ -253,15 +254,56 @@ def _object_lto_template_properties(class_info: Dict[str, Any]) -> List[Dict[str
     return props
 
 
-def _object_lto_filenames(template_props: Iterable[Dict[str, Any]]) -> Set[str]:
+def _normalise_resource_path(value: object, root: str, extensions: Sequence[str]) -> str:
+    text = str(value or "").strip().strip('"').replace("/", "\\").lstrip("\\")
+    if not text or not text.lower().endswith(tuple(ext.lower() for ext in extensions)):
+        return ""
+    if not text.lower().startswith(root.lower() + "\\"):
+        text = root + "\\" + text
+    return text.lower()
+
+
+def _split_skin_values(value: object) -> List[str]:
+    return [
+        path
+        for piece in str(value or "").split(";")
+        if (path := _normalise_resource_path(piece, "skins", (".dtx",)))
+    ]
+
+
+def _object_lto_resources(
+    template_props: Iterable[Dict[str, Any]],
+) -> Tuple[Set[str], Set[str], Set[str]]:
     filenames: Set[str] = set()
+    skins: Set[str] = set()
+    accessory_skins: Set[str] = set()
     for prop in template_props:
-        name = str(prop.get("name") or "")
+        name = str(prop.get("name") or "").lower()
         value = prop.get("value")
-        if name.lower() in {"filename", "skin", "skin2", "skin3"}:
-            if isinstance(value, str) and value:
-                filenames.add(value.lower())
-    return filenames
+        if name == "filename":
+            path = _normalise_resource_path(value, "models", (".abc", ".lta", ".ltb"))
+            if path:
+                filenames.add(path)
+        elif name in {"skin", "skinname", "skin2", "skin3"}:
+            paths = _split_skin_values(value)
+            skins.update(paths)
+            if name in {"skin2", "skin3"}:
+                accessory_skins.update(paths)
+    return filenames, skins, accessory_skins
+
+
+def _object_lto_variant_skins(template_props: Iterable[Dict[str, Any]]) -> List[str]:
+    by_name: Dict[str, List[str]] = {}
+    for prop in template_props:
+        name = str(prop.get("name") or "").lower()
+        if name in {"skin", "skinname", "skin2", "skin3"}:
+            by_name[name] = _split_skin_values(prop.get("value"))
+    ordered: List[str] = []
+    for name in ("skin", "skinname", "skin2", "skin3"):
+        for path in by_name.get(name, ()):
+            if path not in ordered:
+                ordered.append(path)
+    return ordered
 
 
 def _merge_object_lto_classes(classes: Dict[str, Dict[str, Any]],
@@ -276,9 +318,26 @@ def _merge_object_lto_classes(classes: Dict[str, Dict[str, Any]],
         if not isinstance(class_info, dict):
             continue
 
+        template_props = _object_lto_template_properties(class_info)
+        property_names = {str(p["name"]) for p in template_props}
+        filenames, skins, accessory_skins = _object_lto_resources(template_props)
         existing = classes.get(class_name)
         if existing is not None:
             existing["source"] = "object.lto+dat"
+            existing["property_names"] = sorted(
+                set(existing.get("property_names") or ()) | property_names
+            )
+            existing["filenames"] = sorted(
+                set(existing.get("filenames") or ()) | filenames
+            )
+            if skins:
+                existing["skins"] = sorted(
+                    set(existing.get("skins") or ()) | skins
+                )
+            if accessory_skins:
+                existing["accessory_skins"] = sorted(
+                    set(existing.get("accessory_skins") or ()) | accessory_skins
+                )
             existing["object_lto"] = {
                 "parent": class_info.get("parent"),
                 "hierarchy": class_info.get("hierarchy") or [],
@@ -286,6 +345,7 @@ def _merge_object_lto_classes(classes: Dict[str, Dict[str, Any]],
                 "flag_names": class_info.get("flag_names") or [],
                 "hidden_in_dedit": bool(class_info.get("hidden_in_dedit")),
                 "runtime_loadable": bool(class_info.get("runtime_loadable", True)),
+                "template_properties": template_props,
             }
             continue
 
@@ -294,15 +354,14 @@ def _merge_object_lto_classes(classes: Dict[str, Dict[str, Any]],
         if class_info.get("runtime_loadable") is False:
             continue
 
-        template_props = _object_lto_template_properties(class_info)
-        property_names = {str(p["name"]) for p in template_props}
-        filenames = _object_lto_filenames(template_props)
         classes[class_name] = {
             "instance_count": 0,
             "levels": [],
             "category": categorize(class_name, property_names, filenames),
             "property_names": sorted(property_names),
             "filenames": sorted(filenames),
+            **({"skins": sorted(skins)} if skins else {}),
+            **({"accessory_skins": sorted(accessory_skins)} if accessory_skins else {}),
             "source": "object.lto",
             "object_lto": {
                 "parent": class_info.get("parent"),
@@ -319,6 +378,106 @@ def _merge_object_lto_classes(classes: Dict[str, Dict[str, Any]],
                 "properties": template_props,
             },
         }
+
+
+def _add_model_variant(
+    variants: Dict[str, Dict[Tuple[str, ...], Dict[str, List[str]]]],
+    model: object,
+    skins: Iterable[object],
+    *,
+    name: object = "",
+    source_key: object = "",
+) -> None:
+    model_path = _normalise_resource_path(model, "models", (".abc", ".lta", ".ltb"))
+    skin_paths: List[str] = []
+    for value in skins:
+        for path in _split_skin_values(value):
+            if path not in skin_paths:
+                skin_paths.append(path)
+    if not model_path or not skin_paths:
+        return
+    entry = variants.setdefault(model_path, {}).setdefault(
+        tuple(skin_paths), {"names": [], "source_keys": []}
+    )
+    label = str(name or "").strip()
+    source = str(source_key or "").strip()
+    if label and label not in entry["names"]:
+        entry["names"].append(label)
+    if source and source not in entry["source_keys"]:
+        entry["source_keys"].append(source)
+
+
+_INFERRED_VARIANT_SUFFIXES = (
+    "chief", "elite", "warrior", "red", "blue", "green", "black", "white",
+    "gold", "silver", "dark", "light",
+)
+
+
+def _inferred_variant_suffix(model_stem: str, skin_stem: str) -> Optional[str]:
+    if skin_stem == model_stem:
+        return ""
+    if not skin_stem.startswith(model_stem):
+        return None
+    suffix = skin_stem[len(model_stem):]
+    if suffix in _INFERRED_VARIANT_SUFFIXES:
+        return suffix
+    if re.fullmatch(r"(?:\d+[a-z]?|[abc])", suffix):
+        return suffix
+    return None
+
+
+def _add_inferred_model_variants(
+    variants: Dict[str, Dict[Tuple[str, ...], Dict[str, List[str]]]],
+    model_paths: Iterable[str],
+    skin_paths: Iterable[str],
+) -> None:
+    skins_by_stem: Dict[str, List[str]] = {}
+    for value in skin_paths:
+        path = _normalise_resource_path(value, "skins", (".dtx",))
+        if path:
+            skins_by_stem.setdefault(os.path.splitext(os.path.basename(path))[0].casefold(), []).append(path)
+    for model_path in model_paths:
+        stem = os.path.splitext(os.path.basename(model_path))[0].casefold()
+        if stem not in skins_by_stem:
+            continue
+        candidates: List[Tuple[str, str]] = []
+        for skin_stem, paths in skins_by_stem.items():
+            suffix = _inferred_variant_suffix(stem, skin_stem)
+            if suffix is None:
+                continue
+            candidates.extend((suffix, path) for path in paths)
+        for suffix, path in sorted(candidates):
+            raw_label = os.path.splitext(os.path.basename(model_path))[0]
+            label = raw_label[:1].upper() + raw_label[1:]
+            if suffix:
+                label += " " + (suffix.title() if not suffix.isdigit() else suffix)
+            _add_model_variant(
+                variants,
+                model_path,
+                [path],
+                name=label,
+                source_key=f"asset-name:{path}",
+            )
+
+
+def _json_model_variants(
+    variants: Dict[str, Dict[Tuple[str, ...], Dict[str, List[str]]]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for model_path, skin_sets in sorted(variants.items()):
+        rows: List[Dict[str, Any]] = []
+        used_names: Dict[str, int] = {}
+        for skins, details in sorted(skin_sets.items()):
+            base_name = details["names"][0] if details["names"] else os.path.splitext(os.path.basename(model_path))[0]
+            count = used_names.get(base_name.casefold(), 0) + 1
+            used_names[base_name.casefold()] = count
+            rows.append({
+                "name": base_name if count == 1 else f"{base_name} {count}",
+                "skins": list(skins),
+                "source_keys": details["source_keys"],
+            })
+        result[model_path] = rows
+    return result
 
 # --------------------------------------------------------------------------
 # Categorisation
@@ -600,6 +759,7 @@ def build_catalog(
     actor_visuals: Optional[Dict[str, ActorVisual]] = None,
     actor_visual_rules: Optional[Iterable[object]] = None,
     object_lto_dump: Optional[Dict[str, Any]] = None,
+    skin_paths: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Scan all *.DAT files in *worlds_dir* and return a catalog dict.
 
@@ -608,8 +768,17 @@ def build_catalog(
     """
     classes: Dict[str, Dict[str, Any]] = {}
     filenames: Dict[str, Dict[str, Any]] = {}
+    model_variants: Dict[str, Dict[Tuple[str, ...], Dict[str, List[str]]]] = {}
     max_npc_nbr = 0
-    # print(actor_visuals)
+
+    for key, visual in (actor_visuals or {}).items():
+        _add_model_variant(
+            model_variants,
+            visual.model,
+            visual.all_skins,
+            name=visual.type_picture or visual.monster_name or key,
+            source_key=key,
+        )
 
     dat_paths = sorted(glob.glob(os.path.join(worlds_dir, "*.DAT")))
     for path in dat_paths:
@@ -662,6 +831,38 @@ def build_catalog(
                             else ""
                         )
                     )
+                    variant_skins: Iterable[object] = actor_visual.all_skins
+                    variant_name = actor_visual.type_picture or actor_visual.monster_name or cls
+                    variant_source = f"{actor_visual.source_file}:{actor_visual.number}"
+                else:
+                    variant_skins = [
+                        obj.get("Skin"), obj.get("Skin2"), obj.get("Skin3")
+                    ]
+                    observed_skins = {
+                        skin
+                        for value in variant_skins
+                        for skin in _split_skin_values(value)
+                    }
+                    if observed_skins:
+                        entry.setdefault("skins", set()).update(observed_skins)
+                    observed_accessories = {
+                        skin
+                        for value in (obj.get("Skin2"), obj.get("Skin3"))
+                        for skin in _split_skin_values(value)
+                    }
+                    if observed_accessories:
+                        entry.setdefault("accessory_skins", set()).update(
+                            observed_accessories
+                        )
+                    variant_name = cls
+                    variant_source = f"{lvl}:{obj.get('Name') or cls}"
+                _add_model_variant(
+                    model_variants,
+                    fname,
+                    variant_skins,
+                    name=variant_name,
+                    source_key=variant_source,
+                )
                 fnentry = filenames.setdefault(fname_key, {
                     "uses": 0, "classes": set(), "levels": set()
                 })
@@ -704,10 +905,31 @@ def build_catalog(
 
     _merge_object_lto_classes(classes, object_lto_dump)
 
+    for class_name, class_info in ((object_lto_dump or {}).get("classes") or {}).items():
+        if class_name not in classes or not isinstance(class_info, dict):
+            continue
+        template_props = _object_lto_template_properties(class_info)
+        lto_models, lto_skins, _accessory_skins = _object_lto_resources(template_props)
+        ordered_lto_skins = _object_lto_variant_skins(template_props)
+        for model_path in lto_models:
+            _add_model_variant(
+                model_variants,
+                model_path,
+                ordered_lto_skins,
+                name=class_name,
+                source_key=f"object.lto:{class_name}",
+            )
+
+    all_model_paths = set(filenames)
+    for entry in classes.values():
+        all_model_paths.update(entry.get("filenames") or ())
+    _add_inferred_model_variants(model_variants, all_model_paths, skin_paths or ())
+
     catalog = {
         "classes":   classes,
         "filenames": filenames,
         "actor_visuals": _json_actor_visuals(actor_visuals),
+        "model_variants": _json_model_variants(model_variants),
         "summary": {
             "total_levels":            len(dat_paths),
             "total_classes":           len(classes),
@@ -746,6 +968,8 @@ def build_catalog_from_rez(
     object_lto_path: Optional[str] = None,
     object_lto_helper_path: Optional[str] = None,
     actor_visual_rules: Optional[Iterable[object]] = None,
+    skins_rez_path: Optional[str] = None,
+    skins_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the catalog by extracting .DAT levels from *worlds_rez_path*.
 
@@ -776,6 +1000,34 @@ def build_catalog_from_rez(
         actor_visuals = load_actor_visuals_from_data_rez(data_rez_path)
     if actor_visuals:
         print(f"  {len(actor_visuals)} actor/monster visual keys loaded")
+
+    if not skins_rez_path and not skins_dir:
+        sibling_dir = os.path.dirname(os.path.abspath(worlds_rez_path))
+        candidate_dir = os.path.join(sibling_dir, "SKINS")
+        candidate_rez = os.path.join(sibling_dir, "SKINS.REZ")
+        if os.path.isdir(candidate_dir):
+            skins_dir = candidate_dir
+        elif os.path.isfile(candidate_rez):
+            skins_rez_path = candidate_rez
+
+    skin_paths: List[str] = []
+    if skins_dir and os.path.isdir(skins_dir):
+        for current, _dirs, names in os.walk(skins_dir):
+            for name in names:
+                if name.lower().endswith(".dtx"):
+                    relative = os.path.relpath(os.path.join(current, name), skins_dir)
+                    skin_paths.append("skins\\" + relative.replace("/", "\\"))
+    elif skins_rez_path and os.path.isfile(skins_rez_path):
+        skin_reader = RezReader(skins_rez_path).open()
+        try:
+            skin_paths = [
+                path for path in skin_reader.list_paths()
+                if path.lower().endswith(".dtx")
+            ]
+        finally:
+            skin_reader.close()
+    if skin_paths:
+        print(f"  {len(skin_paths)} skin resources indexed")
 
     object_lto_dump: Optional[Dict[str, Any]] = None
     try:
@@ -821,6 +1073,7 @@ def build_catalog_from_rez(
             actor_visuals=actor_visuals,
             actor_visual_rules=actor_visual_rules,
             object_lto_dump=object_lto_dump,
+            skin_paths=skin_paths,
         )
     finally:
         if reader is not None:
@@ -869,6 +1122,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="optional extracted DATA folder containing ACTOR.TXT/MONSTERS.TXT",
     )
     pbr.add_argument(
+        "--skins-rez",
+        default=None,
+        help=(
+            "optional path to SKINS.REZ for model-variant inference; when "
+            "omitted, a sibling SKINS directory or SKINS.REZ is detected"
+        ),
+    )
+    pbr.add_argument(
+        "--skins-dir",
+        default=None,
+        help="optional extracted SKINS directory for model-variant inference",
+    )
+    pbr.add_argument(
         "--object-lto-dump",
         default=None,
         help=(
@@ -910,12 +1176,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             object_lto_dump_path=args.object_lto_dump,
             object_lto_path=args.object_lto,
             object_lto_helper_path=args.object_lto_helper,
+            skins_rez_path=args.skins_rez,
+            skins_dir=args.skins_dir,
         )
         save_catalog(cat, args.out)
         s = cat["summary"]
         print(f"Wrote {args.out}")
         print(f"  levels:          {s['total_levels']}")
         print(f"  classes:         {s['total_classes']}")
+        print(
+            "  model variants:  "
+            f"{sum(len(rows) for rows in cat.get('model_variants', {}).values())}"
+        )
         if cat.get("object_lto", {}).get("available"):
             print(
                 "  object.lto:      "
@@ -931,6 +1203,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Catalog: {args.path}")
         print(f"  levels:         {s.get('total_levels', '?')}")
         print(f"  classes:        {s.get('total_classes', '?')}")
+        print(
+            "  model variants: "
+            f"{sum(len(rows) for rows in cat.get('model_variants', {}).values())}"
+        )
         object_lto = cat.get("object_lto") or {}
         if object_lto.get("available"):
             print(f"  object.lto:     {object_lto.get('class_count', '?')} classes")

@@ -379,18 +379,28 @@ The editor's transition wizard can apply this kind of transition setup.
 
 A separate LoMM catalog can be generated for experimental conversion-rule design:
 
-```sh
-python catalog.py build-from-rez "C:\Path\To\LoMM\data\WORLDS.REZ" \
-  --out catalog/data/catalog_lomm.json
+```powershell
+python catalog.py build-from-rez `
+  C:\lithtech\mm9_editor\lomm_data\worlds.rez `
+  --object-lto C:\lithtech\mm9_editor\lomm_data\object.lto `
+  --out C:\lithtech\mm9_editor\catalog\data\catalog_lomm.json
 ```
 
 `catalog_lomm.json` mirrors the shape of MM9's `catalog/data/catalog.json` but indexes LoMM levels.
+The builder automatically indexes a sibling `SKINS.REZ` or extracted `SKINS`
+directory and writes model/skin combinations to `model_variants`. Exact DAT
+and `object.lto` associations take precedence. For actor classes whose skin is
+implicit in the engine, conservative same-name variants such as
+`Goblin.dtx`/`GoblinChief.dtx` are included without treating accessory names
+such as `GoblinPole.dtx` as appearances.
 
 For each LoMM-only class entry, it can expose:
 
 - source template level and instance
 - observed `property_names`
 - model filenames used across LoMM levels
+- default class metadata and properties from `object.lto`
+- exact and inferred model skin variants for static glTF/GLB export
 
 ## Music Conversion Notes
 

@@ -116,6 +116,13 @@ class LegacyEdNodeLayoutReport:
 
 
 @dataclass(frozen=True)
+class LegacyEdAnalysisBundle:
+    geometry_scene: geometry_scene.GeometryScene
+    object_scan: LegacyEdObjectScanReport
+    node_layout: LegacyEdNodeLayoutReport
+
+
+@dataclass(frozen=True)
 class _ObjectScanResult:
     records: Tuple[LegacyEdObjectRecord, ...]
     skipped_ranges: List[Dict[str, int]]
@@ -150,16 +157,73 @@ def load_legacy_ed_node_layout_report(path: str) -> LegacyEdNodeLayoutReport:
     return scan_legacy_ed_node_layout(data, source_path=os.path.abspath(path))
 
 
-def scan_legacy_ed_object_records(data: bytes, *, source_path: str = "") -> LegacyEdObjectScanReport:
+def load_legacy_ed_analysis_bundle(path: str) -> LegacyEdAnalysisBundle:
+    """Read and analyze one legacy ED while sharing decompression and scans."""
+    if not os.path.exists(path):
+        raise ValueError(f"legacy ED file was not found: {path}")
+    absolute = os.path.abspath(path)
+    with open(path, "rb") as f:
+        data = f.read()
+    return analyze_legacy_ed_bytes(data, source_path=absolute)
+
+
+def analyze_legacy_ed_bytes(data: bytes, *, source_path: str = "") -> LegacyEdAnalysisBundle:
+    cache: Dict[str, Any] = {}
+    scene = legacy_ed_bytes_to_geometry_scene(
+        data,
+        source_path=source_path,
+        _analysis_cache=cache,
+    )
+    object_scan = scan_legacy_ed_object_records(
+        data,
+        source_path=source_path,
+        _analysis_cache=cache,
+    )
+    node_layout = scan_legacy_ed_node_layout(
+        data,
+        source_path=source_path,
+        _analysis_cache=cache,
+    )
+    return LegacyEdAnalysisBundle(
+        geometry_scene=scene,
+        object_scan=object_scan,
+        node_layout=node_layout,
+    )
+
+
+def _legacy_ed_analysis_scan_data(
+    data: bytes,
+    analysis_cache: Optional[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], bytes]:
+    if analysis_cache is None:
+        wrapper = _try_decompress_full_level_wrapper(data)
+        return wrapper, wrapper["decompressed"] if wrapper is not None else data
+    if "wrapper_ready" not in analysis_cache:
+        wrapper = _try_decompress_full_level_wrapper(data)
+        analysis_cache["wrapper"] = wrapper
+        analysis_cache["scan_data"] = wrapper["decompressed"] if wrapper is not None else data
+        analysis_cache["wrapper_ready"] = True
+    return analysis_cache.get("wrapper"), analysis_cache["scan_data"]
+
+
+def scan_legacy_ed_object_records(
+    data: bytes,
+    *,
+    source_path: str = "",
+    _analysis_cache: Optional[Dict[str, Any]] = None,
+) -> LegacyEdObjectScanReport:
     if len(data) < 4:
         raise LegacyEdParseError("legacy ED file is too short")
     version = _u32(data, 0)
     if version != LEGACY_ED_VERSION:
         raise LegacyEdParseError(f"unsupported legacy ED version {version}; expected {LEGACY_ED_VERSION}")
 
-    wrapper = _try_decompress_full_level_wrapper(data)
-    scan_data = wrapper["decompressed"] if wrapper is not None else data
-    scan = _scan_object_records(scan_data)
+    wrapper, scan_data = _legacy_ed_analysis_scan_data(data, _analysis_cache)
+    scan = _analysis_cache.get("object_scan_result") if _analysis_cache is not None else None
+    if scan is None:
+        scan = _scan_object_records(scan_data)
+        if _analysis_cache is not None:
+            _analysis_cache["object_scan_result"] = scan
     records = scan.records
     return LegacyEdObjectScanReport(
         source_path=os.path.abspath(source_path) if source_path else "",
@@ -176,7 +240,12 @@ def scan_legacy_ed_object_records(data: bytes, *, source_path: str = "") -> Lega
     )
 
 
-def scan_legacy_ed_node_layout(data: bytes, *, source_path: str = "") -> LegacyEdNodeLayoutReport:
+def scan_legacy_ed_node_layout(
+    data: bytes,
+    *,
+    source_path: str = "",
+    _analysis_cache: Optional[Dict[str, Any]] = None,
+) -> LegacyEdNodeLayoutReport:
     """Return an EDUnpacker-style layout audit for legacy ED v1249 data.
 
     The Pascal EDUnpacker project confirms the structured order used by old ED
@@ -191,8 +260,7 @@ def scan_legacy_ed_node_layout(data: bytes, *, source_path: str = "") -> LegacyE
     if version != LEGACY_ED_VERSION:
         raise LegacyEdParseError(f"unsupported legacy ED version {version}; expected {LEGACY_ED_VERSION}")
 
-    wrapper = _try_decompress_full_level_wrapper(data)
-    scan_data = wrapper["decompressed"] if wrapper is not None else data
+    wrapper, scan_data = _legacy_ed_analysis_scan_data(data, _analysis_cache)
     wrapper_name = "zlib_blocked_full_level" if wrapper is not None else ""
     header_end = 0 if wrapper is not None else _uncompressed_ed_header_end(scan_data)
     payload_start = header_end if header_end is not None else 4
@@ -219,7 +287,11 @@ def scan_legacy_ed_node_layout(data: bytes, *, source_path: str = "") -> LegacyE
             blockers=tuple(blockers),
         )
 
-    object_scan = _scan_object_records(scan_data)
+    object_scan = _analysis_cache.get("object_scan_result") if _analysis_cache is not None else None
+    if object_scan is None:
+        object_scan = _scan_object_records(scan_data)
+        if _analysis_cache is not None:
+            _analysis_cache["object_scan_result"] = object_scan
     brush_records = [
         record for record in object_scan.records
         if record.class_name == "Brush"
@@ -317,17 +389,29 @@ def format_legacy_ed_object_scan_report(report: LegacyEdObjectScanReport, *, max
     return "\n".join(lines)
 
 
-def legacy_ed_bytes_to_geometry_scene(data: bytes, *, source_path: str = "") -> geometry_scene.GeometryScene:
+def legacy_ed_bytes_to_geometry_scene(
+    data: bytes,
+    *,
+    source_path: str = "",
+    _analysis_cache: Optional[Dict[str, Any]] = None,
+) -> geometry_scene.GeometryScene:
     if len(data) < 4:
         raise LegacyEdParseError("legacy ED file is too short")
     version = _u32(data, 0)
     if version != LEGACY_ED_VERSION:
         raise LegacyEdParseError(f"unsupported legacy ED version {version}; expected {LEGACY_ED_VERSION}")
 
-    wrapper = _try_decompress_full_level_wrapper(data)
-    scan_data = wrapper["decompressed"] if wrapper is not None else data
-    scan = _scan_brush_records(scan_data)
-    object_scan = _scan_object_records(scan_data)
+    wrapper, scan_data = _legacy_ed_analysis_scan_data(data, _analysis_cache)
+    scan = _analysis_cache.get("brush_scan_result") if _analysis_cache is not None else None
+    if scan is None:
+        scan = _scan_brush_records(scan_data)
+        if _analysis_cache is not None:
+            _analysis_cache["brush_scan_result"] = scan
+    object_scan = _analysis_cache.get("object_scan_result") if _analysis_cache is not None else None
+    if object_scan is None:
+        object_scan = _scan_object_records(scan_data)
+        if _analysis_cache is not None:
+            _analysis_cache["object_scan_result"] = object_scan
     records = scan.records
     material_names: Dict[str, str] = {}
     for record in records:

@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass, field
-from typing import Iterable, List, Sequence, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 from features.dat_editing import legacy_ed
 
 
 Vec3 = Tuple[float, float, float]
 Quat = Tuple[float, float, float, float]
+
+DEFAULT_BRUSH_POINT_WELD_TOLERANCE = 0.01
 
 NODE_NODE = 0
 NODE_BRUSH = 1
@@ -423,6 +425,7 @@ def build_named_group_prefab(
 
 
 def write_brush_record(brush: LegacyEdBrush) -> bytes:
+    brush = normalize_brush_points(brush)
     points = tuple(_finite_vec3(point) for point in brush.points)
     if len(points) > 65535:
         raise ValueError("legacy ED brush point count exceeds uint16 index range")
@@ -435,6 +438,76 @@ def write_brush_record(brush: LegacyEdBrush) -> bytes:
     for surface in brush.surfaces:
         out.extend(write_surface_record(surface, point_count=len(points)))
     return bytes(out)
+
+
+def normalize_brush_points(
+    brush: LegacyEdBrush,
+    *,
+    tolerance: float = DEFAULT_BRUSH_POINT_WELD_TOLERANCE,
+) -> LegacyEdBrush:
+    """Return a DEDit-like brush with coincident points welded and planes rebuilt.
+
+    DEDit rewrites dirty worlds by welding per-brush points within roughly
+    0.01 world units. Processor does not perform that normalization when it is
+    handed a newly generated ED directly, and duplicate coordinates then cause
+    large numbers of ``Unable to generate a plane`` warnings. Keep the first
+    point in source order, remap every face, and recompute its plane from the
+    welded geometry.
+    """
+    source_points = tuple(_finite_vec3(point) for point in brush.points)
+    safe_tolerance = max(0.0, float(tolerance))
+    welded_points, point_remap = _weld_points(source_points, safe_tolerance)
+
+    normalized_surfaces: List[LegacyEdSurface] = []
+    for surface_index, surface in enumerate(brush.surfaces):
+        source_indices = tuple(int(index) for index in surface.vertex_indices)
+        if any(index < 0 or index >= len(source_points) for index in source_indices):
+            raise ValueError(
+                f"legacy ED brush surface {surface_index} references a point outside the brush"
+            )
+        remapped = _collapse_polygon_index_loop(tuple(point_remap[index] for index in source_indices))
+        remapped = _prefer_repeated_polygon_boundary(remapped)
+        if len(remapped) < 3 or len(set(remapped)) < 3:
+            raise ValueError(
+                f"legacy ED brush surface {surface_index} became degenerate after point welding"
+            )
+        normal, distance = _polygon_plane(welded_points, remapped)
+        normalized_surfaces.append(
+            replace(
+                surface,
+                vertex_indices=remapped,
+                plane_normal=normal,
+                plane_dist=distance,
+            )
+        )
+
+    used_indices = {
+        index
+        for surface in normalized_surfaces
+        for index in surface.vertex_indices
+    }
+    if len(used_indices) != len(welded_points):
+        compact_remap: Dict[int, int] = {}
+        compact_points: List[Vec3] = []
+        for old_index, point in enumerate(welded_points):
+            if old_index not in used_indices:
+                continue
+            compact_remap[old_index] = len(compact_points)
+            compact_points.append(point)
+        welded_points = tuple(compact_points)
+        normalized_surfaces = [
+            replace(
+                surface,
+                vertex_indices=tuple(compact_remap[index] for index in surface.vertex_indices),
+            )
+            for surface in normalized_surfaces
+        ]
+
+    return replace(
+        brush,
+        points=tuple(welded_points),
+        surfaces=tuple(normalized_surfaces),
+    )
 
 
 def write_surface_record(surface: LegacyEdSurface, *, point_count: int) -> bytes:
@@ -668,6 +741,109 @@ def prefixed_string(value: str, *, max_bytes: int = 4096) -> bytes:
 def _brush_names(count: int, names: Sequence[str]) -> Tuple[str, ...]:
     result = [str(names[index]) if index < len(names) and names[index] else f"Brush{index}" for index in range(count)]
     return tuple(result)
+
+
+def _weld_points(
+    points: Sequence[Vec3],
+    tolerance: float,
+) -> Tuple[Tuple[Vec3, ...], Tuple[int, ...]]:
+    if tolerance <= 0.0:
+        point_to_index: Dict[Vec3, int] = {}
+        result: List[Vec3] = []
+        remap: List[int] = []
+        for point in points:
+            index = point_to_index.get(point)
+            if index is None:
+                index = len(result)
+                point_to_index[point] = index
+                result.append(point)
+            remap.append(index)
+        return tuple(result), tuple(remap)
+
+    cells: Dict[Tuple[int, int, int], List[int]] = {}
+    result: List[Vec3] = []
+    remap: List[int] = []
+    tolerance_sq = tolerance * tolerance
+    for point in points:
+        cell = tuple(int(math.floor(value / tolerance)) for value in point)
+        matches: List[int] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    matches.extend(cells.get((cell[0] + dx, cell[1] + dy, cell[2] + dz), ()))
+        match = next(
+            (
+                index
+                for index in sorted(matches)
+                if sum((point[axis] - result[index][axis]) ** 2 for axis in range(3))
+                <= tolerance_sq
+            ),
+            None,
+        )
+        if match is None:
+            match = len(result)
+            result.append(point)
+            cells.setdefault(cell, []).append(match)
+        remap.append(match)
+    return tuple(result), tuple(remap)
+
+
+def _collapse_polygon_index_loop(indices: Sequence[int]) -> Tuple[int, ...]:
+    result: List[int] = []
+    for index in indices:
+        if not result or result[-1] != int(index):
+            result.append(int(index))
+    if len(result) > 1 and result[0] == result[-1]:
+        result.pop()
+    return tuple(result)
+
+
+def _prefer_repeated_polygon_boundary(indices: Sequence[int]) -> Tuple[int, ...]:
+    """Match DEDit's cleanup of concatenated compiled-BSP boundary paths.
+
+    Some MM9 DAT faces encode a coarse boundary and a refined boundary in one
+    vertex list. After point welding, the true corner indices occur in both
+    paths while refinement-only residue occurs once. DEDit removes that residue
+    when a dirty ED is saved; retaining it makes Processor reject the brush
+    plane on the first run.
+    """
+    counts: Dict[int, int] = {}
+    for index in indices:
+        counts[int(index)] = counts.get(int(index), 0) + 1
+    repeated = tuple(int(index) for index in indices if counts[int(index)] > 1)
+    if len(repeated) >= 3 and len(set(repeated)) >= 3:
+        return repeated
+    return tuple(int(index) for index in indices)
+
+
+def _polygon_plane(points: Sequence[Vec3], indices: Sequence[int]) -> Tuple[Vec3, float]:
+    first = points[int(indices[0])]
+    for offset in range(1, len(indices) - 1):
+        second = points[int(indices[offset])]
+        third = points[int(indices[offset + 1])]
+        ux, uy, uz = (
+            second[0] - first[0],
+            second[1] - first[1],
+            second[2] - first[2],
+        )
+        vx, vy, vz = (
+            third[0] - first[0],
+            third[1] - first[1],
+            third[2] - first[2],
+        )
+        nx = uy * vz - uz * vy
+        ny = uz * vx - ux * vz
+        nz = ux * vy - uy * vx
+        length = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if length <= 1.0e-7:
+            continue
+        normal = (nx / length, ny / length, nz / length)
+        return normal, (
+            normal[0] * first[0]
+            + normal[1] * first[1]
+            + normal[2] * first[2]
+        )
+    raise ValueError("legacy ED surface has no stable plane after point welding")
 
 
 def _finite_vec3(value: object) -> Vec3:

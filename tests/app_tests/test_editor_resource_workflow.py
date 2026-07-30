@@ -51,6 +51,110 @@ def make_world_bytes(object_type: str = "TemplateClass",
 
 
 class EditorResourceWorkflowTests(unittest.TestCase):
+    def test_dat_to_ed_reserved_stair_command_detects_and_forwards_high_confidence_ids(self):
+        calls = {}
+        prompts = []
+        physics_model = types.SimpleNamespace(name="PhysicsBSP")
+        bsp_world = types.SimpleNamespace(world_models=[physics_model])
+        assemblies = (
+            types.SimpleNamespace(
+                assembly_index=1,
+                confidence="candidate",
+                step_count=2,
+                source_polygon_indices=(10, 11),
+                generated_face_count=12,
+                bounds_min=(0.0, 0.0, 0.0),
+                bounds_max=(16.0, 8.0, 16.0),
+            ),
+            types.SimpleNamespace(
+                assembly_index=3,
+                confidence="high",
+                step_count=7,
+                source_polygon_indices=(30, 31, 32),
+                generated_face_count=24,
+                bounds_min=(32.0, 0.0, 64.0),
+                bounds_max=(96.0, 56.0, 128.0),
+            ),
+        )
+
+        class FakeSimpleDialog:
+            @staticmethod
+            def askstring(title, body, **_kwargs):
+                prompts.append((title, body))
+                return "3"
+
+        class FakeMessagebox:
+            @staticmethod
+            def showinfo(title, body):
+                raise AssertionError(f"unexpected info: {title}: {body}")
+
+            @staticmethod
+            def showerror(title, body):
+                raise AssertionError(f"unexpected error: {title}: {body}")
+
+            @staticmethod
+            def showwarning(title, body):
+                raise AssertionError(f"unexpected warning: {title}: {body}")
+
+        fake_reconstruction = types.SimpleNamespace(
+            physics_shell_candidates=lambda model: (
+                calls.setdefault("candidate_model", model),
+            ),
+            detect_physics_shell_stair_assemblies=lambda model, candidates: (
+                calls.setdefault("detector_input", (model, candidates)),
+                assemblies,
+            )[1],
+        )
+        method = mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat_with_stair_assemblies
+        method_globals = method.__globals__
+        old_simpledialog = method_globals.get("simpledialog")
+        old_messagebox = method_globals.get("messagebox")
+        old_reconstruction = method_globals.get("terrain_reconstruction")
+        try:
+            method_globals["simpledialog"] = FakeSimpleDialog
+            method_globals["messagebox"] = FakeMessagebox
+            method_globals["terrain_reconstruction"] = fake_reconstruction
+            app = object.__new__(mm9_editor_app.EditorApp)
+            app.active = types.SimpleNamespace(get_bsp=lambda: bsp_world)
+            app.root = None
+            app.cmd_generate_dedit_ed_from_dat = lambda **kwargs: calls.setdefault(
+                "generation_kwargs", kwargs
+            )
+            method(app)
+        finally:
+            method_globals["simpledialog"] = old_simpledialog
+            method_globals["messagebox"] = old_messagebox
+            method_globals["terrain_reconstruction"] = old_reconstruction
+
+        self.assertIs(calls["candidate_model"], physics_model)
+        self.assertEqual(
+            calls["generation_kwargs"]["physics_shell_stair_assembly_indices"],
+            (3,),
+        )
+        self.assertIn("1: candidate", prompts[0][1])
+        self.assertIn("[inspection only]", prompts[0][1])
+        self.assertIn("3: high", prompts[0][1])
+        self.assertIn("Eligible IDs: 3", prompts[0][1])
+
+    def test_source_ed_object_class_probe_distinguishes_anskramkeep_and_bathhouse(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        bathhouse = os.path.join(ROOT, "mm9_data", "WORLDS", "BATHHOUSE.ED")
+        if not os.path.exists(anskramkeep) or not os.path.exists(bathhouse):
+            self.skipTest("missing source ED oracle fixture")
+
+        self.assertFalse(
+            mm9_editor_app.EditorApp._source_ed_has_object_class(
+                anskramkeep,
+                "DestructableProp",
+            )
+        )
+        self.assertTrue(
+            mm9_editor_app.EditorApp._source_ed_has_object_class(
+                bathhouse,
+                "DestructableProp",
+            )
+        )
+
     def _dummy_app(self, archives, catalog):
         app = object.__new__(mm9_editor_app.EditorApp)
         app.resources = game_resources.GameResources(archives=archives)
@@ -273,6 +377,12 @@ class EditorResourceWorkflowTests(unittest.TestCase):
         names = mm9_editor_app.EditorApp._default_dat_to_ed_model_names(world)
 
         self.assertEqual(names, ("WorldObject1", "MonsterDoor1"))
+
+    def test_isleofashes_uses_multi_anchor_terrain_support_policy(self):
+        self.assertEqual(
+            mm9_editor_app.DAT_TO_ED_TERRAIN_SUPPORT_SELECTION_MODE_BY_LEVEL["ISLEOFASHES"],
+            "multi_anchor_budget",
+        )
 
     def test_dat_to_ed_command_stages_active_dat_and_writes_report(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -517,6 +627,11 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                 display_name = "ANSKRAMKEEP.DAT"
                 rez_vpath = "WORLDS/ANSKRAMKEEP.DAT"
                 path = ""
+                world = types.SimpleNamespace(objects=[
+                    patcher.WorldObject("DestructableBrush", [
+                        patcher.Property("Name", 0, 0, "Floordoor1"),
+                    ]),
+                ])
 
                 def get_bsp(self):
                     return types.SimpleNamespace(world_models=[
@@ -527,6 +642,8 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                         FakeModel("InvisibleBrush7", polygon_count=6, texture="TEXTURES\\LevelTextures\\Misc\\Invisible.dtx"),
                         FakeModel("Tavernzone", polygon_count=6, texture="TEXTURES\\LevelTextures\\Misc\\greenscreen.dtx"),
                         FakeModel("WorldObject1", polygon_count=12),
+                        FakeModel("InnerDoor", polygon_count=6),
+                        FakeModel("Floordoor1", polygon_count=6),
                     ])
 
                 def source_bytes(self):
@@ -565,7 +682,7 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                     return types.SimpleNamespace(
                         blockers=(),
                         generated_ed_path=generated_ed,
-                        selected_model_names=("WorldObject1",),
+                        selected_model_names=tuple(kwargs["model_names"]),
                         object_count=4,
                         polygon_count=12,
                         include_low_risk_behavior_prop_objects=bool(
@@ -621,20 +738,27 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                     game_data_dir=os.path.join(tmp, "game", "data"),
                 )
 
-                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(app)
+                mm9_editor_app.EditorApp.cmd_generate_dedit_ed_from_dat(
+                    app,
+                    physics_shell_stair_assembly_indices=(3,),
+                )
             finally:
                 method_globals["filedialog"] = old_filedialog
                 method_globals["messagebox"] = old_messagebox
                 method_globals["dat_compiler_strategy"] = old_compiler
 
-            self.assertEqual(staged_calls["model_names"], ("WorldObject1",))
+            self.assertEqual(
+                staged_calls["model_names"],
+                ("WorldObject1", "InnerDoor", "Floordoor1"),
+            )
             self.assertFalse(staged_calls["include_terrain_support_patch"])
             self.assertFalse(staged_calls["include_terrain_support_source_coverage"])
-            self.assertTrue(staged_calls["include_validation_floor"])
-            self.assertFalse(staged_calls["include_physics_shell_patch"])
-            self.assertFalse(staged_calls["include_physics_shell_source_coverage"])
-            self.assertFalse(staged_calls["include_door_objects"])
-            self.assertEqual(staged_calls["door_source_ed_path"], "")
+            self.assertFalse(staged_calls["include_validation_floor"])
+            self.assertTrue(staged_calls["include_physics_shell_patch"])
+            self.assertTrue(staged_calls["include_physics_shell_source_coverage"])
+            self.assertTrue(staged_calls["include_door_objects"])
+            self.assertEqual(staged_calls["door_source_ed_path"], source_ed)
+            self.assertFalse(staged_calls["include_destructable_brush_objects"])
             self.assertTrue(staged_calls["include_airail_objects"])
             self.assertEqual(staged_calls["airail_source_ed_path"], source_ed)
             self.assertTrue(staged_calls["include_sky_objects"])
@@ -665,8 +789,24 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertTrue(staged_calls["include_destructable_prop_objects"])
             self.assertEqual(staged_calls["destructable_prop_source_ed_path"], source_ed)
             self.assertEqual(staged_calls["physics_shell_thickness"], 16.0)
-            self.assertFalse(staged_calls["block_unreconstructed_physics_shell"])
-            self.assertFalse(staged_calls["selection_kwargs"]["include_physics_shell_patch"])
+            self.assertEqual(
+                staged_calls["physics_shell_focus_points"],
+                (mm9_editor_app.DAT_TO_ED_ANSKRAMKEEP_BACK_START_POINT,),
+            )
+            self.assertEqual(staged_calls["physics_shell_focus_radius"], 512.0)
+            self.assertEqual(staged_calls["physics_shell_focus_budget"], 512)
+            self.assertEqual(staged_calls["physics_shell_focus_seed_radius"], 128.0)
+            self.assertEqual(staged_calls["physics_shell_stair_assembly_indices"], (3,))
+            self.assertEqual(
+                staged_calls["output_filename"],
+                "ANSKRAMKEEP_reconstructed_stairs_3.ed",
+            )
+            self.assertTrue(staged_calls["block_unreconstructed_physics_shell"])
+            self.assertTrue(staged_calls["selection_kwargs"]["include_physics_shell_patch"])
+            self.assertEqual(
+                staged_calls["selection_kwargs"]["selected_model_names"],
+                ("WorldObject1", "InnerDoor", "Floordoor1"),
+            )
             self.assertFalse(staged_calls["selection_kwargs"]["include_terrain_support_patch"])
             self.assertTrue(staged_calls["selection_kwargs"]["include_airail_semantics"])
             self.assertTrue(staged_calls["selection_kwargs"]["include_sky_semantics"])

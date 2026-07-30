@@ -14,10 +14,11 @@ from __future__ import annotations
 import math
 import os
 import struct
+import time
 import zlib
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from features.dat_editing import (
     legacy_ed,
@@ -49,6 +50,14 @@ class SurrogateEdModelSummary:
     notes: Tuple[str, ...] = ()
 
 
+_SkyMarkerBrushBundle = Tuple[
+    Tuple[legacy_ed_writer.LegacyEdBrush, ...],
+    Tuple[SurrogateEdModelSummary, ...],
+    Tuple[Tuple[legacy_ed_writer.LegacyEdObjectProperty, ...], ...],
+    Tuple[str, ...],
+]
+
+
 @dataclass(frozen=True)
 class SurrogateEdBuildReport:
     status: str
@@ -73,6 +82,18 @@ class SurrogateEdBuildReport:
     blockers: Tuple[str, ...] = ()
     cautions: Tuple[str, ...] = ()
     notes: Tuple[str, ...] = ()
+    physics_shell_packing_mode: str = "balanced"
+    physics_shell_packing_source_polygon_count: int = 0
+    physics_shell_packing_generated_brush_count: int = 0
+    physics_shell_packing_generated_face_count: int = 0
+    physics_shell_packing_weighted_value: float = 0.0
+    physics_shell_packing_role_weights: Tuple[Tuple[str, float], ...] = ()
+    physics_shell_packing_playable_importance_weight: float = 0.0
+    physics_shell_stair_assembly_indices: Tuple[int, ...] = ()
+    physics_shell_selected_stair_assembly_indices: Tuple[int, ...] = ()
+    physics_shell_rejected_stair_assembly_indices: Tuple[int, ...] = ()
+    physics_shell_protected_void_count: int = 0
+    physics_shell_protected_roles: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -87,6 +108,13 @@ class _ValidationFloorPlacement:
     center: Vec3
     top_y: float
     start_y: Optional[float] = None
+
+
+_TerrainSupportBrushBundle = Tuple[
+    Tuple[legacy_ed_writer.LegacyEdBrush, ...],
+    Tuple[SurrogateEdModelSummary, ...],
+    _ValidationFloorPlacement,
+]
 
 
 @dataclass(frozen=True)
@@ -245,7 +273,7 @@ class _DestructablePropObjectSpec:
 
 
 @dataclass(frozen=True)
-class _DestructableBrushObjectSpec:
+class _DatNativeObjectSpec:
     name: str
     class_name: str
     properties: Tuple[legacy_ed_writer.LegacyEdObjectProperty, ...]
@@ -380,7 +408,6 @@ def build_prefab_surrogate_legacy_ed_bytes_from_dat_bytes(
     )
     if raw_report.status != "raw_surrogate_ed_built":
         return b"", raw_report
-
     brush_count = raw_report.model_count
     object_property_count = brush_count * len(_LEGACY_BRUSH_OBJECT_PROPERTIES)
     generated = legacy_ed_writer.build_direct_root_prefab(
@@ -391,6 +418,7 @@ def build_prefab_surrogate_legacy_ed_bytes_from_dat_bytes(
     status = "prefab_surrogate_ed_built"
     blockers: List[str] = []
     roundtrip_model_count = 0
+    roundtrip_point_count = 0
     roundtrip_polygon_count = 0
     object_count = 0
     try:
@@ -399,6 +427,11 @@ def build_prefab_surrogate_legacy_ed_bytes_from_dat_bytes(
             source_path=os.path.abspath(source_path) if source_path else "surrogate_prefab.ed",
         )
         roundtrip_model_count = int(scene.metadata.get("recovered_brush_count", 0) or 0)
+        roundtrip_point_count = sum(
+            len(getattr(model, "points", ()) or ())
+            for model in getattr(scene, "models", ()) or ()
+            if getattr(model, "faces", ())
+        )
         roundtrip_polygon_count = int(scene.metadata.get("recovered_polygon_count", 0) or 0)
         object_count = int(scene.metadata.get("recovered_object_count", 0) or 0)
     except Exception as exc:
@@ -429,6 +462,7 @@ def build_prefab_surrogate_legacy_ed_bytes_from_dat_bytes(
         raw_report,
         status=status,
         generated_byte_count=len(generated),
+        point_count=roundtrip_point_count or raw_report.point_count,
         object_count=object_count,
         object_property_count=object_property_count if object_count == brush_count else 0,
         roundtrip_model_count=roundtrip_model_count,
@@ -712,6 +746,12 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     data: bytes,
     *,
     source_path: str = "",
+    _preparsed_world: Optional[object] = None,
+    _precomputed_terrain_support_brush_bundle: Optional[_TerrainSupportBrushBundle] = None,
+    _precomputed_physics_shell_consolidation_index: Optional[
+        terrain_reconstruction.PhysicsShellConsolidationIndex
+    ] = None,
+    _physics_shell_analysis_cache: Optional[Dict[str, object]] = None,
     model_names: Sequence[str] = (),
     max_models: Optional[int] = None,
     include_skyboxes: bool = False,
@@ -738,6 +778,13 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     physics_shell_model_name: str = terrain_semantics.PHYSICS_BSP_MODEL,
     physics_shell_name_prefix: str = "PhysicsShell",
     physics_shell_max_polygons: int = 128,
+    physics_shell_packing_mode: str = "balanced",
+    physics_shell_packing_role_weights: Optional[Mapping[str, float]] = None,
+    physics_shell_packing_playable_importance_weight: float = 0.0,
+    physics_shell_protected_bounds: Sequence[Tuple[Vec3, Vec3]] = (),
+    physics_shell_protected_roles: Sequence[str] = ("side_wall",),
+    physics_shell_generated_face_budget: int = 0,
+    physics_shell_stair_assembly_indices: Sequence[int] = (),
     physics_shell_thickness: float = 16.0,
     physics_shell_side_texture: str = "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx",
     physics_shell_source_polygon_indices: Sequence[int] = (),
@@ -754,6 +801,8 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     include_sky_marker_brushes: bool = False,
     include_sky_marker_residue_brushes: bool = False,
     sky_marker_residue_reference_dat_path: str = "",
+    _precomputed_sky_marker_brush_bundle: Optional[_SkyMarkerBrushBundle] = None,
+    _precomputed_sky_marker_residue_brush_bundle: Optional[_SkyMarkerBrushBundle] = None,
     include_sound_objects: bool = False,
     sound_source_ed_path: str = "",
     include_gameplay_trigger_objects: bool = False,
@@ -819,6 +868,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
         model_names=effective_model_names,
         max_models=effective_max_models,
         include_skyboxes=include_skyboxes,
+        parsed_world=_preparsed_world,
     )
     if error_report is not None:
         return b"", error_report
@@ -828,6 +878,15 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     )
     if raw_report.status != "raw_surrogate_ed_built":
         return b"", raw_report
+    door_clearance_bounds = (
+        _source_door_clearance_bounds_from_source_ed(
+            door_source_ed_path,
+            candidate_names=effective_model_names,
+        )
+        if include_door_objects and door_source_ed_path
+        else ()
+    )
+    protected_bounds = tuple(door_clearance_bounds) + tuple(physics_shell_protected_bounds)
     if door_pair_notes:
         raw_report = replace(
             raw_report,
@@ -840,19 +899,25 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     floor_placement: Optional[_ValidationFloorPlacement] = None
     if include_terrain_support_patch:
         try:
-            patch_brushes, patch_summaries, terrain_placement = _terrain_support_patch_brushes_for_brushes(
-                data,
-                brushes,
-                source_model_name=terrain_support_model_name,
-                name_prefix=terrain_support_name_prefix,
-                margin=terrain_support_margin,
-                selection_mode=terrain_support_selection_mode,
-                radius=terrain_support_radius,
-                brush_mode=terrain_support_brush_mode,
-                thickness=terrain_support_thickness,
-                max_polygons=terrain_support_max_polygons,
-                side_texture=terrain_support_side_texture,
-            )
+            if _precomputed_terrain_support_brush_bundle is not None:
+                patch_brushes, patch_summaries, terrain_placement = (
+                    _precomputed_terrain_support_brush_bundle
+                )
+            else:
+                patch_brushes, patch_summaries, terrain_placement = _terrain_support_patch_brushes_for_brushes(
+                    data,
+                    brushes,
+                    parsed_world=_preparsed_world,
+                    source_model_name=terrain_support_model_name,
+                    name_prefix=terrain_support_name_prefix,
+                    margin=terrain_support_margin,
+                    selection_mode=terrain_support_selection_mode,
+                    radius=terrain_support_radius,
+                    brush_mode=terrain_support_brush_mode,
+                    thickness=terrain_support_thickness,
+                    max_polygons=terrain_support_max_polygons,
+                    side_texture=terrain_support_side_texture,
+                )
         except ValueError as exc:
             blockers = tuple(_unique_text(tuple(raw_report.blockers) + (str(exc),)))
             return b"", replace(
@@ -878,11 +943,25 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
 
     if include_physics_shell_patch:
         try:
-            shell_brushes, shell_summaries, shell_placement, shell_notes = _physics_shell_patch_brushes(
+            (
+                shell_brushes,
+                shell_summaries,
+                shell_placement,
+                shell_notes,
+                shell_packing_plan,
+            ) = _physics_shell_patch_brushes(
                 data,
+                parsed_world=_preparsed_world,
+                consolidation_index=_precomputed_physics_shell_consolidation_index,
+                analysis_cache=_physics_shell_analysis_cache,
                 source_model_name=physics_shell_model_name,
                 name_prefix=physics_shell_name_prefix,
                 max_polygons=physics_shell_max_polygons,
+                packing_mode=physics_shell_packing_mode,
+                role_weights=physics_shell_packing_role_weights,
+                playable_importance_weight=physics_shell_packing_playable_importance_weight,
+                generated_face_budget=physics_shell_generated_face_budget,
+                stair_assembly_indices=physics_shell_stair_assembly_indices,
                 thickness=physics_shell_thickness,
                 side_texture=physics_shell_side_texture,
                 source_polygon_indices=physics_shell_source_polygon_indices,
@@ -890,6 +969,9 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
                 focus_radius=physics_shell_focus_radius,
                 focus_budget=physics_shell_focus_budget,
                 focus_seed_radius=physics_shell_focus_seed_radius,
+                door_clearance_bounds=door_clearance_bounds,
+                protected_bounds=protected_bounds,
+                protected_roles=physics_shell_protected_roles,
             )
         except ValueError as exc:
             blockers = tuple(_unique_text(tuple(raw_report.blockers) + (str(exc),)))
@@ -902,8 +984,14 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             )
         brushes = tuple(brushes) + tuple(shell_brushes)
         brush_node_properties.extend(() for _brush in shell_brushes)
-        for shell in shell_brushes:
-            raw_bytes += legacy_ed_writer.write_brush_record(shell)
+        shell_serialization_started = time.monotonic()
+        raw_bytes += b"".join(
+            legacy_ed_writer.write_brush_record(shell) for shell in shell_brushes
+        )
+        if _physics_shell_analysis_cache is not None:
+            _physics_shell_analysis_cache.setdefault("emission_timings_seconds", {})[
+                "physics_shell_serialization"
+            ] = time.monotonic() - shell_serialization_started
         raw_report = replace(
             raw_report,
             model_count=raw_report.model_count + len(shell_summaries),
@@ -911,6 +999,48 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             polygon_count=raw_report.polygon_count + sum(item.polygon_count for item in shell_summaries),
             generated_byte_count=len(raw_bytes),
             model_summaries=tuple(raw_report.model_summaries) + tuple(shell_summaries),
+            physics_shell_packing_mode=(
+                str(physics_shell_packing_mode or "balanced").strip().lower().replace("-", "_")
+            ),
+            physics_shell_packing_source_polygon_count=(
+                shell_packing_plan.source_polygon_count if shell_packing_plan is not None else 0
+            ),
+            physics_shell_packing_generated_brush_count=(
+                shell_packing_plan.generated_brush_count if shell_packing_plan is not None else 0
+            ),
+            physics_shell_packing_generated_face_count=(
+                shell_packing_plan.generated_face_count if shell_packing_plan is not None else 0
+            ),
+            physics_shell_packing_weighted_value=(
+                shell_packing_plan.weighted_value if shell_packing_plan is not None else 0.0
+            ),
+            physics_shell_packing_role_weights=(
+                terrain_reconstruction.normalized_physics_shell_role_weights(
+                    physics_shell_packing_role_weights
+                )
+                if shell_packing_plan is not None
+                else ()
+            ),
+            physics_shell_packing_playable_importance_weight=(
+                max(0.0, float(physics_shell_packing_playable_importance_weight))
+                if shell_packing_plan is not None
+                else 0.0
+            ),
+            physics_shell_stair_assembly_indices=tuple(
+                sorted({int(index) for index in physics_shell_stair_assembly_indices})
+            ),
+            physics_shell_selected_stair_assembly_indices=tuple(
+                (_physics_shell_analysis_cache or {}).get(
+                    "selected_stair_assembly_indices", ()
+                )
+            ),
+            physics_shell_rejected_stair_assembly_indices=tuple(
+                (_physics_shell_analysis_cache or {}).get(
+                    "rejected_stair_assembly_indices", ()
+                )
+            ),
+            physics_shell_protected_void_count=len(tuple(physics_shell_protected_bounds)),
+            physics_shell_protected_roles=tuple(str(role) for role in physics_shell_protected_roles),
             notes=tuple(_unique_text(tuple(raw_report.notes) + tuple(shell_notes))),
         )
         if shell_placement is not None and floor_placement is None:
@@ -918,9 +1048,14 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
 
     if include_sky_marker_brushes:
         try:
-            sky_marker_brushes, sky_marker_summaries, sky_marker_node_properties, sky_marker_notes = (
-                _sky_marker_brushes_from_source_ed(sky_source_ed_path)
-            )
+            if _precomputed_sky_marker_brush_bundle is not None:
+                sky_marker_brushes, sky_marker_summaries, sky_marker_node_properties, sky_marker_notes = (
+                    _precomputed_sky_marker_brush_bundle
+                )
+            else:
+                sky_marker_brushes, sky_marker_summaries, sky_marker_node_properties, sky_marker_notes = (
+                    _sky_marker_brushes_from_source_ed(sky_source_ed_path)
+                )
         except ValueError as exc:
             blockers = tuple(_unique_text(tuple(raw_report.blockers) + (str(exc),)))
             return b"", replace(
@@ -946,12 +1081,17 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
 
     if include_sky_marker_residue_brushes:
         try:
-            sky_marker_residue_brushes, sky_marker_residue_summaries, sky_marker_residue_node_properties, sky_marker_residue_notes = (
-                _sky_marker_residue_brushes_from_source_ed(
-                    sky_source_ed_path,
-                    reference_dat_path=sky_marker_residue_reference_dat_path,
+            if _precomputed_sky_marker_residue_brush_bundle is not None:
+                sky_marker_residue_brushes, sky_marker_residue_summaries, sky_marker_residue_node_properties, sky_marker_residue_notes = (
+                    _precomputed_sky_marker_residue_brush_bundle
                 )
-            )
+            else:
+                sky_marker_residue_brushes, sky_marker_residue_summaries, sky_marker_residue_node_properties, sky_marker_residue_notes = (
+                    _sky_marker_residue_brushes_from_source_ed(
+                        sky_source_ed_path,
+                        reference_dat_path=sky_marker_residue_reference_dat_path,
+                    )
+                )
         except ValueError as exc:
             blockers = tuple(_unique_text(tuple(raw_report.blockers) + (str(exc),)))
             return b"", replace(
@@ -981,6 +1121,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             helper_brushes, helper_summaries, collision_helper_objects, helper_notes = (
                 _collision_helper_assets_from_dat_bytes(
                     data,
+                    parsed_world=_preparsed_world,
                     source_ed_path=collision_helper_source_ed_path,
                     selected_model_names=raw_report.selected_model_names,
                     include_brushes=include_collision_helper_brushes,
@@ -1015,6 +1156,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             trigger_brushes, trigger_summaries, trigger_helper_objects, trigger_notes = (
                 _trigger_helper_assets_from_dat_bytes(
                     data,
+                    parsed_world=_preparsed_world,
                     source_ed_path=trigger_helper_source_ed_path,
                     selected_model_names=raw_report.selected_model_names,
                     include_brushes=include_trigger_helper_brushes,
@@ -1089,6 +1231,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     if include_airail_objects:
         airail_objects, airail_notes = _airail_object_specs_from_dat_bytes(
             data,
+            parsed_world=_preparsed_world,
             source_ed_path=airail_source_ed_path,
         )
         raw_report = replace(
@@ -1099,6 +1242,10 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     sky_objects: Tuple[_SkyObjectSpec, ...] = ()
     if include_sky_objects:
         sky_objects, sky_notes = _sky_object_specs_from_source_ed(sky_source_ed_path)
+        if not sky_objects:
+            dat_sky_objects, dat_sky_notes = _sky_object_specs_from_dat_bytes(data)
+            sky_objects = dat_sky_objects
+            sky_notes = tuple(sky_notes) + tuple(dat_sky_notes)
         raw_report = replace(
             raw_report,
             notes=tuple(_unique_text(tuple(raw_report.notes) + tuple(sky_notes))),
@@ -1107,6 +1254,10 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     sound_objects: Tuple[_SoundObjectSpec, ...] = ()
     if include_sound_objects:
         sound_objects, sound_notes = _sound_object_specs_from_source_ed(sound_source_ed_path)
+        if not sound_objects:
+            dat_sound_objects, dat_sound_notes = _sound_object_specs_from_dat_bytes(data)
+            sound_objects = dat_sound_objects
+            sound_notes = tuple(sound_notes) + tuple(dat_sound_notes)
         raw_report = replace(
             raw_report,
             notes=tuple(_unique_text(tuple(raw_report.notes) + tuple(sound_notes))),
@@ -1212,7 +1363,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             notes=tuple(_unique_text(tuple(raw_report.notes) + tuple(destructable_prop_notes))),
         )
 
-    destructable_brush_objects: Tuple[_DestructableBrushObjectSpec, ...] = ()
+    destructable_brush_objects: Tuple[_DatNativeObjectSpec, ...] = ()
     if include_destructable_brush_objects:
         destructable_brush_objects, destructable_brush_notes = _destructable_brush_object_specs_from_dat_bytes(
             data,
@@ -1269,6 +1420,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
         for index, summary in enumerate(written_summaries)
     )
     brush_source_model_names = tuple(summary.name for summary in written_summaries)
+    node_hierarchy_started = time.monotonic()
     node_hierarchy = _full_world_skeleton_node_hierarchy(
         brush_names,
         group_name=group_name,
@@ -1296,14 +1448,27 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
         collision_helper_objects=collision_helper_objects,
         trigger_helper_objects=trigger_helper_objects,
     )
+    if _physics_shell_analysis_cache is not None:
+        _physics_shell_analysis_cache.setdefault("emission_timings_seconds", {})[
+            "node_hierarchy"
+        ] = time.monotonic() - node_hierarchy_started
     try:
+        wrapper_started = time.monotonic()
         generated, wrapper_metadata = wrap_raw_surrogate_legacy_ed_bytes(
             raw_bytes,
             brush_count=raw_report.model_count,
-            infostring=_infer_full_level_infostring(data) if infostring is None else infostring,
+            infostring=(
+                _infer_full_level_infostring(data, parsed_world=_preparsed_world)
+                if infostring is None
+                else infostring
+            ),
             block_size=block_size,
             inner_suffix=node_hierarchy,
         )
+        if _physics_shell_analysis_cache is not None:
+            _physics_shell_analysis_cache.setdefault("emission_timings_seconds", {})[
+                "wrapper_compression"
+            ] = time.monotonic() - wrapper_started
     except ValueError as exc:
         blockers = tuple(_unique_text(tuple(raw_report.blockers) + (str(exc),)))
         return b"", replace(
@@ -1317,6 +1482,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     status = "full_world_skeleton_surrogate_ed_built"
     blockers: List[str] = []
     roundtrip_model_count = 0
+    roundtrip_point_count = 0
     roundtrip_polygon_count = 0
     roundtrip_object_count = 0
     roundtrip_object_property_count = 0
@@ -1326,6 +1492,11 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             source_path=os.path.abspath(source_path) if source_path else "surrogate_full_world_skeleton.ed",
         )
         roundtrip_model_count = int(scene.metadata.get("recovered_brush_count", 0) or 0)
+        roundtrip_point_count = sum(
+            len(getattr(model, "points", ()) or ())
+            for model in getattr(scene, "models", ()) or ()
+            if getattr(model, "faces", ())
+        )
         roundtrip_polygon_count = int(scene.metadata.get("recovered_polygon_count", 0) or 0)
         roundtrip_object_count = int(scene.metadata.get("recovered_object_count", 0) or 0)
         roundtrip_object_property_count = int(scene.metadata.get("recovered_object_property_count", 0) or 0)
@@ -1374,7 +1545,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     if include_sky_objects:
         notes += (
             f"Generated sky object records: {len(sky_objects)}.",
-            "Sky object records are copied from the source ED oracle.",
+            "Sky object records prefer the source ED oracle and fall back to DAT object records; SkyMarker Brush shells remain disabled.",
         )
     if include_sky_marker_brushes:
         notes += (
@@ -1389,7 +1560,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     if include_sound_objects:
         notes += (
             f"Generated AmbientSound object records: {len(sound_objects)}.",
-            "AmbientSound object records are copied from the source ED oracle; SoundOnly helper Brush volumes are not emitted.",
+            "AmbientSound object records prefer the source ED oracle and fall back to DAT object records; SoundOnly helper Brush volumes are not emitted.",
         )
     if include_gameplay_trigger_objects:
         notes += (
@@ -1471,7 +1642,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             )
         else:
             notes += (
-                "Collision helper Brush records were intentionally skipped; only source ED object nodes are emitted.",
+                "Collision helper Brush records were intentionally skipped; source ED or DAT-native helper object nodes are emitted.",
             )
     if include_trigger_helper_objects:
         notes += (f"Generated trigger helper object records: {len(trigger_helper_objects)}.",)
@@ -1481,7 +1652,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             )
         else:
             notes += (
-                "Trigger helper Brush records were intentionally skipped; only source ED PortalZone object nodes are emitted.",
+                "Trigger helper Brush records were intentionally skipped; source ED or DAT-native PortalZone object nodes are emitted.",
             )
     if include_validation_floor:
         notes += (
@@ -1504,6 +1675,7 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
         raw_report,
         status=status,
         generated_byte_count=len(generated),
+        point_count=roundtrip_point_count or raw_report.point_count,
         decompressed_byte_count=int(wrapper_metadata["decompressed_byte_count"]),
         wrapper_kind="zlib_blocked_full_world_skeleton",
         wrapper_block_count=int(wrapper_metadata["block_count"]),
@@ -1564,6 +1736,13 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
     dat_path: str,
     output_path: str,
     *,
+    _preloaded_dat_bytes: Optional[bytes] = None,
+    _preparsed_world: Optional[object] = None,
+    _precomputed_terrain_support_brush_bundle: Optional[_TerrainSupportBrushBundle] = None,
+    _precomputed_physics_shell_consolidation_index: Optional[
+        terrain_reconstruction.PhysicsShellConsolidationIndex
+    ] = None,
+    _physics_shell_analysis_cache: Optional[Dict[str, object]] = None,
     model_names: Sequence[str] = (),
     max_models: Optional[int] = None,
     include_skyboxes: bool = False,
@@ -1590,6 +1769,13 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
     physics_shell_model_name: str = terrain_semantics.PHYSICS_BSP_MODEL,
     physics_shell_name_prefix: str = "PhysicsShell",
     physics_shell_max_polygons: int = 128,
+    physics_shell_packing_mode: str = "balanced",
+    physics_shell_packing_role_weights: Optional[Mapping[str, float]] = None,
+    physics_shell_packing_playable_importance_weight: float = 0.0,
+    physics_shell_protected_bounds: Sequence[Tuple[Vec3, Vec3]] = (),
+    physics_shell_protected_roles: Sequence[str] = ("side_wall",),
+    physics_shell_generated_face_budget: int = 0,
+    physics_shell_stair_assembly_indices: Sequence[int] = (),
     physics_shell_thickness: float = 16.0,
     physics_shell_side_texture: str = "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx",
     physics_shell_source_polygon_indices: Sequence[int] = (),
@@ -1606,6 +1792,8 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
     include_sky_marker_brushes: bool = False,
     include_sky_marker_residue_brushes: bool = False,
     sky_marker_residue_reference_dat_path: str = "",
+    _precomputed_sky_marker_brush_bundle: Optional[_SkyMarkerBrushBundle] = None,
+    _precomputed_sky_marker_residue_brush_bundle: Optional[_SkyMarkerBrushBundle] = None,
     include_sound_objects: bool = False,
     sound_source_ed_path: str = "",
     include_gameplay_trigger_objects: bool = False,
@@ -1639,20 +1827,29 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
     """Write a full-world skeleton surrogate legacy ED file."""
     absolute_dat = os.path.abspath(dat_path)
     absolute_output = os.path.abspath(output_path)
-    try:
-        with open(absolute_dat, "rb") as f:
-            data = f.read()
-    except OSError as exc:
-        return SurrogateEdBuildReport(
-            status="dat_read_failed",
-            source_dat_path=absolute_dat,
-            output_path=absolute_output,
-            blockers=(str(exc),),
-        )
+    if _preloaded_dat_bytes is None:
+        try:
+            with open(absolute_dat, "rb") as f:
+                data = f.read()
+        except OSError as exc:
+            return SurrogateEdBuildReport(
+                status="dat_read_failed",
+                source_dat_path=absolute_dat,
+                output_path=absolute_output,
+                blockers=(str(exc),),
+            )
+    else:
+        data = _preloaded_dat_bytes
 
     generated, report = build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
         data,
         source_path=absolute_dat,
+        _preparsed_world=_preparsed_world,
+        _precomputed_terrain_support_brush_bundle=_precomputed_terrain_support_brush_bundle,
+        _precomputed_physics_shell_consolidation_index=(
+            _precomputed_physics_shell_consolidation_index
+        ),
+        _physics_shell_analysis_cache=_physics_shell_analysis_cache,
         model_names=model_names,
         max_models=max_models,
         include_skyboxes=include_skyboxes,
@@ -1679,6 +1876,13 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
         physics_shell_model_name=physics_shell_model_name,
         physics_shell_name_prefix=physics_shell_name_prefix,
         physics_shell_max_polygons=physics_shell_max_polygons,
+        physics_shell_packing_mode=physics_shell_packing_mode,
+        physics_shell_packing_role_weights=physics_shell_packing_role_weights,
+        physics_shell_packing_playable_importance_weight=physics_shell_packing_playable_importance_weight,
+        physics_shell_protected_bounds=physics_shell_protected_bounds,
+        physics_shell_protected_roles=physics_shell_protected_roles,
+        physics_shell_generated_face_budget=physics_shell_generated_face_budget,
+        physics_shell_stair_assembly_indices=physics_shell_stair_assembly_indices,
         physics_shell_thickness=physics_shell_thickness,
         physics_shell_side_texture=physics_shell_side_texture,
         physics_shell_source_polygon_indices=physics_shell_source_polygon_indices,
@@ -1695,6 +1899,8 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
         include_sky_marker_brushes=include_sky_marker_brushes,
         include_sky_marker_residue_brushes=include_sky_marker_residue_brushes,
         sky_marker_residue_reference_dat_path=sky_marker_residue_reference_dat_path,
+        _precomputed_sky_marker_brush_bundle=_precomputed_sky_marker_brush_bundle,
+        _precomputed_sky_marker_residue_brush_bundle=_precomputed_sky_marker_residue_brush_bundle,
         include_sound_objects=include_sound_objects,
         sound_source_ed_path=sound_source_ed_path,
         include_gameplay_trigger_objects=include_gameplay_trigger_objects,
@@ -1728,8 +1934,13 @@ def write_full_world_skeleton_surrogate_legacy_ed_from_dat(
     if report.status != "full_world_skeleton_surrogate_ed_built":
         return replace(report, output_path=absolute_output)
     os.makedirs(os.path.dirname(absolute_output) or ".", exist_ok=True)
+    disk_write_started = time.monotonic()
     with open(absolute_output, "wb") as f:
         f.write(generated)
+    if _physics_shell_analysis_cache is not None:
+        _physics_shell_analysis_cache.setdefault("emission_timings_seconds", {})[
+            "disk_write"
+        ] = time.monotonic() - disk_write_started
     return replace(report, output_path=absolute_output)
 
 
@@ -1852,18 +2063,21 @@ def _parse_selected_models_from_dat_bytes(
     model_names: Sequence[str],
     max_models: Optional[int],
     include_skyboxes: bool,
+    parsed_world: Optional[object] = None,
 ) -> Tuple[str, List[object], Optional[SurrogateEdBuildReport]]:
     absolute = os.path.abspath(source_path) if source_path else ""
-    try:
-        from core import bsp
+    parsed = parsed_world
+    if parsed is None:
+        try:
+            from core import bsp
 
-        parsed = bsp.parse(data)
-    except Exception as exc:
-        return absolute, [], SurrogateEdBuildReport(
-            status="dat_parse_failed",
-            source_dat_path=absolute,
-            blockers=(f"DAT parse failed: {exc}",),
-        )
+            parsed = bsp.parse(data)
+        except Exception as exc:
+            return absolute, [], SurrogateEdBuildReport(
+                status="dat_parse_failed",
+                source_dat_path=absolute,
+                blockers=(f"DAT parse failed: {exc}",),
+            )
 
     selected = _select_models(
         parsed.world_models,
@@ -2117,7 +2331,7 @@ def _full_world_skeleton_node_hierarchy(
     treasure_chest_objects: Sequence[_TreasureChestObjectSpec] = (),
     prop_damager_objects: Sequence[_PropDamagerObjectSpec] = (),
     destructable_prop_objects: Sequence[_DestructablePropObjectSpec] = (),
-    destructable_brush_objects: Sequence[_DestructableBrushObjectSpec] = (),
+    destructable_brush_objects: Sequence[_DatNativeObjectSpec] = (),
     collision_helper_objects: Sequence[_CollisionHelperObjectSpec] = (),
     trigger_helper_objects: Sequence[_TriggerHelperObjectSpec] = (),
 ) -> bytes:
@@ -3055,13 +3269,16 @@ def _airail_object_specs_from_dat_bytes(
     data: bytes,
     *,
     source_ed_path: str = "",
+    parsed_world: Optional[object] = None,
 ) -> Tuple[Tuple[_AirailObjectSpec, ...], Tuple[str, ...]]:
-    try:
-        from core import bsp
+    parsed = parsed_world
+    if parsed is None:
+        try:
+            from core import bsp
 
-        parsed = bsp.parse(data)
-    except Exception as exc:
-        return (), (f"AIRail object generation skipped because DAT parse failed: {exc}",)
+            parsed = bsp.parse(data)
+        except Exception as exc:
+            return (), (f"AIRail object generation skipped because DAT parse failed: {exc}",)
 
     source_specs, source_notes = _airail_object_specs_from_source_ed(source_ed_path)
     specs: List[_AirailObjectSpec] = []
@@ -3140,9 +3357,9 @@ def _sky_object_specs_from_source_ed(
 ) -> Tuple[Tuple[_SkyObjectSpec, ...], Tuple[str, ...]]:
     source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
     if not source_ed:
-        return (), ("Sky source ED oracle was not supplied; sky object nodes will be skipped.",)
+        return (), ("Sky source ED oracle was not supplied; DAT-native sky object fallback will be attempted.",)
     if not os.path.exists(source_ed):
-        return (), (f"Sky source ED oracle was not found: {source_ed}",)
+        return (), (f"Sky source ED oracle was not found: {source_ed}; DAT-native sky object fallback will be attempted.",)
     try:
         scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed)
     except Exception as exc:
@@ -3169,6 +3386,27 @@ def _sky_object_specs_from_source_ed(
     )
 
 
+def _sky_object_specs_from_dat_bytes(
+    data: bytes,
+) -> Tuple[Tuple[_SkyObjectSpec, ...], Tuple[str, ...]]:
+    dat_specs, notes = dat_native_object_specs_from_dat_bytes(
+        data,
+        class_names=tuple(sorted(_SKY_OBJECT_CLASSES)),
+    )
+    specs = tuple(
+        _SkyObjectSpec(
+            name=item.name,
+            class_name=item.class_name,
+            properties=item.properties,
+            source_kind="dat_object",
+        )
+        for item in dat_specs
+    )
+    return specs, tuple(_unique_text(tuple(notes) + (
+        f"Sky DAT object fallback loaded {len(specs)} sky object record(s).",
+    )))
+
+
 _SOUND_OBJECT_CLASSES = {"AmbientSound"}
 
 
@@ -3177,9 +3415,9 @@ def _sound_object_specs_from_source_ed(
 ) -> Tuple[Tuple[_SoundObjectSpec, ...], Tuple[str, ...]]:
     source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
     if not source_ed:
-        return (), ("Sound source ED oracle was not supplied; AmbientSound object nodes will be skipped.",)
+        return (), ("Sound source ED oracle was not supplied; DAT-native AmbientSound fallback will be attempted.",)
     if not os.path.exists(source_ed):
-        return (), (f"Sound source ED oracle was not found: {source_ed}",)
+        return (), (f"Sound source ED oracle was not found: {source_ed}; DAT-native AmbientSound fallback will be attempted.",)
     try:
         scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed)
     except Exception as exc:
@@ -3200,6 +3438,27 @@ def _sound_object_specs_from_source_ed(
     return tuple(specs), (
         f"Sound source ED oracle loaded {len(specs)} AmbientSound object record(s).",
     )
+
+
+def _sound_object_specs_from_dat_bytes(
+    data: bytes,
+) -> Tuple[Tuple[_SoundObjectSpec, ...], Tuple[str, ...]]:
+    dat_specs, notes = dat_native_object_specs_from_dat_bytes(
+        data,
+        class_names=tuple(sorted(_SOUND_OBJECT_CLASSES)),
+    )
+    specs = tuple(
+        _SoundObjectSpec(
+            name=item.name,
+            class_name=item.class_name,
+            properties=item.properties,
+            source_kind="dat_object",
+        )
+        for item in dat_specs
+    )
+    return specs, tuple(_unique_text(tuple(notes) + (
+        f"AmbientSound DAT object fallback loaded {len(specs)} object record(s).",
+    )))
 
 
 _GAMEPLAY_TRIGGER_OBJECT_CLASSES = {"Trigger", "ExitTrigger", "PortalTrigger"}
@@ -3534,50 +3793,109 @@ def _destructable_brush_object_specs_from_dat_bytes(
     data: bytes,
     *,
     selected_model_names: Sequence[str] = (),
-) -> Tuple[Tuple[_DestructableBrushObjectSpec, ...], Tuple[str, ...]]:
+) -> Tuple[Tuple[_DatNativeObjectSpec, ...], Tuple[str, ...]]:
+    return _dat_native_object_specs_from_dat_bytes(
+        data,
+        class_names=("DestructableBrush",),
+        selected_model_names=selected_model_names,
+        source_model_name_from_name=True,
+        note_label="DestructableBrush",
+    )
+
+
+def dat_native_object_specs_from_dat_bytes(
+    data: bytes,
+    *,
+    class_names: Sequence[str] = (),
+    selected_model_names: Sequence[str] = (),
+) -> Tuple[Tuple[_DatNativeObjectSpec, ...], Tuple[str, ...]]:
+    """Return class-filtered DAT object specs and conversion notes.
+
+    Callers must explicitly select classes; an empty class filter accepts all
+    DAT object classes for inventory/probe use but does not enable generation.
+    """
+    return _dat_native_object_specs_from_dat_bytes(
+        data,
+        class_names=class_names,
+        selected_model_names=selected_model_names,
+        source_model_name_from_name=False,
+        note_label="DAT-native",
+    )
+
+
+def _dat_native_object_specs_from_dat_bytes(
+    data: bytes,
+    *,
+    class_names: Sequence[str] = (),
+    selected_model_names: Sequence[str] = (),
+    source_model_name_from_name: bool = False,
+    note_label: str = "DAT-native",
+) -> Tuple[Tuple[_DatNativeObjectSpec, ...], Tuple[str, ...]]:
+    """Convert DAT object records into ED-writer properties without a source ED.
+
+    The DAT object parser exposes the same property name/type/flags/value data
+    that the legacy ED writer needs.  Keeping this conversion class-agnostic
+    lets future object classes share the DestructableBrush path while retaining
+    an explicit opt-in at the caller.
+    """
     try:
         from mm9_patcher import mm9_patch as patcher
 
         header = patcher.Header.parse(data)
         objects, _object_end = patcher.parse_objects(data, header.obj_pos)
     except Exception as exc:
-        return (), (f"DestructableBrush DAT object scan failed: {exc}",)
+        return (), (f"{note_label} DAT object scan failed: {exc}",)
 
+    wanted_classes = {
+        str(name or "").strip().lower()
+        for name in class_names
+        if str(name or "").strip()
+    }
     wanted = {str(name or "").lower() for name in selected_model_names if str(name or "")}
-    specs: List[_DestructableBrushObjectSpec] = []
-    death_trigger_count = 0
+    specs: List[_DatNativeObjectSpec] = []
+    trigger_target_count = 0
     skipped_unselected = 0
+    skipped_class = 0
     for obj in objects:
-        if str(getattr(obj, "type_str", "") or "") != "DestructableBrush":
+        class_name = str(getattr(obj, "type_str", "") or "")
+        if wanted_classes and class_name.lower() not in wanted_classes:
+            skipped_class += 1
             continue
-        name = str(obj.get("Name", "") or f"DestructableBrush{len(specs)}")
+        name = str(obj.get("Name", "") or f"{class_name or 'DatNativeObject'}{len(specs)}")
         if wanted and name.lower() not in wanted:
             skipped_unselected += 1
             continue
-        if str(obj.get("DeathTriggerTarget", "") or "").strip():
-            death_trigger_count += 1
-        specs.append(_DestructableBrushObjectSpec(
+        if any(
+            str(obj.get(property_name, "") or "").strip()
+            for property_name in ("DeathTriggerTarget", "DamageTriggerTarget")
+        ):
+            trigger_target_count += 1
+        specs.append(_DatNativeObjectSpec(
             name=name,
-            class_name="DestructableBrush",
+            class_name=class_name,
             properties=_writer_object_properties_from_dat_object(obj.props),
-            source_model_name=name,
+            source_model_name=name if source_model_name_from_name else "",
             source_kind="dat_object",
         ))
 
-    matched = {item.source_model_name.lower() for item in specs if item.source_model_name}
+    matched = {item.name.lower() for item in specs if item.name}
     missing = sorted(name for name in wanted if name not in matched)
     notes = [
-        f"DestructableBrush DAT object records loaded {len(specs)} selected DestructableBrush object record(s); {death_trigger_count} death trigger target reference(s).",
+        f"{note_label} DAT object records loaded {len(specs)} selected object record(s); {trigger_target_count} damage/death trigger target reference(s).",
     ]
     if skipped_unselected:
         notes.append(
-            f"DestructableBrush DAT object scan skipped {skipped_unselected} unselected record(s)."
+            f"{note_label} DAT object scan skipped {skipped_unselected} unselected record(s)."
+        )
+    if skipped_class:
+        notes.append(
+            f"{note_label} DAT object scan skipped {skipped_class} record(s) outside the requested class filter."
         )
     if missing:
         preview = ", ".join(missing[:8])
         suffix = "" if len(missing) <= 8 else f", +{len(missing) - 8} more"
         notes.append(
-            "Selected DAT model names without matching DestructableBrush object records: "
+            f"Selected DAT model names without matching {note_label} object records: "
             f"{preview}{suffix}."
         )
     return tuple(specs), tuple(_unique_text(notes))
@@ -3833,18 +4151,21 @@ def _collision_helper_assets_from_dat_bytes(
     source_ed_path: str = "",
     selected_model_names: Sequence[str] = (),
     include_brushes: bool = True,
+    parsed_world: Optional[object] = None,
 ) -> Tuple[
     Tuple[legacy_ed_writer.LegacyEdBrush, ...],
     Tuple[SurrogateEdModelSummary, ...],
     Tuple[_CollisionHelperObjectSpec, ...],
     Tuple[str, ...],
 ]:
-    try:
-        from core import bsp
+    parsed = parsed_world
+    if parsed is None:
+        try:
+            from core import bsp
 
-        parsed = bsp.parse(data)
-    except Exception as exc:
-        return (), (), (), (f"Collision helper generation skipped because DAT parse failed: {exc}",)
+            parsed = bsp.parse(data)
+        except Exception as exc:
+            return (), (), (), (f"Collision helper generation skipped because DAT parse failed: {exc}",)
 
     selected_lookup = {str(name or "").lower() for name in selected_model_names if str(name or "")}
     helper_models: List[object] = []
@@ -3861,10 +4182,16 @@ def _collision_helper_assets_from_dat_bytes(
         source_ed_path,
         candidate_names=candidate_names,
     )
+    dat_specs, dat_notes = _dat_native_helper_object_specs_by_name(
+        data,
+        class_names=("InvisibleBrush", "PerceptionBrush", "Ladder", "WorldObject"),
+        candidate_names=candidate_names,
+    )
     brushes: List[legacy_ed_writer.LegacyEdBrush] = []
     summaries: List[SurrogateEdModelSummary] = []
     object_specs: List[_CollisionHelperObjectSpec] = []
     oracle_match_count = 0
+    dat_match_count = 0
     for model in helper_models:
         name = str(getattr(model, "name", "") or f"CollisionHelper{len(summaries)}")
         if include_brushes:
@@ -3883,23 +4210,39 @@ def _collision_helper_assets_from_dat_bytes(
         if source_spec is not None:
             object_specs.append(replace(source_spec, source_model_name=name))
             oracle_match_count += 1
+            continue
+        dat_spec = dat_specs.get(name.lower())
+        if dat_spec is not None:
+            expected_class = _collision_helper_target_class_name(name)
+            if not expected_class or dat_spec.class_name == expected_class:
+                object_specs.append(_CollisionHelperObjectSpec(
+                    name=dat_spec.name,
+                    class_name=dat_spec.class_name,
+                    properties=dat_spec.properties,
+                    source_model_name=name,
+                    source_kind="dat_object",
+                ))
+                dat_match_count += 1
 
     notes = list(source_notes)
+    notes.extend(dat_notes)
     notes.append(
         f"Collision helper generation found {len(helper_models)} DAT collision helper model(s); "
-        f"emitted Brush records={len(brushes)}; source ED object matches={oracle_match_count}."
+        f"emitted Brush records={len(brushes)}; source ED object matches={oracle_match_count}; "
+        f"DAT object matches={dat_match_count}."
     )
     if helper_models and not include_brushes:
         notes.append(
             "Collision helper Brush records skipped by request; helper output is limited to source ED object nodes."
         )
-    if helper_models and oracle_match_count < len(helper_models) and include_brushes:
+    matched_object_count = oracle_match_count + dat_match_count
+    if helper_models and matched_object_count < len(helper_models) and include_brushes:
         notes.append(
-            "Collision helper models without a source ED object match emit Brush geometry only; helper object nodes are skipped."
+            "Collision helper models without a source ED or DAT object match emit Brush geometry only; helper object nodes are skipped."
         )
-    elif helper_models and oracle_match_count < len(helper_models):
+    elif helper_models and matched_object_count < len(helper_models):
         notes.append(
-            "Collision helper models without a source ED object match are skipped while helper Brush output is disabled."
+            "Collision helper models without a source ED or DAT object match are skipped while helper Brush output is disabled."
         )
     return tuple(brushes), tuple(summaries), tuple(object_specs), tuple(_unique_text(notes))
 
@@ -3911,9 +4254,9 @@ def _collision_helper_object_specs_from_source_ed(
 ) -> Tuple[Dict[str, _CollisionHelperObjectSpec], Tuple[str, ...]]:
     source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
     if not source_ed:
-        return {}, ("Collision helper source ED oracle was not supplied; helper object nodes will be skipped.",)
+        return {}, ("Collision helper source ED oracle was not supplied; DAT-native helper object fallback will be attempted.",)
     if not os.path.exists(source_ed):
-        return {}, (f"Collision helper source ED oracle was not found: {source_ed}",)
+        return {}, (f"Collision helper source ED oracle was not found: {source_ed}; DAT-native helper object fallback will be attempted.",)
     try:
         scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed)
     except Exception as exc:
@@ -3943,24 +4286,41 @@ def _collision_helper_object_specs_from_source_ed(
     )
 
 
+def _dat_native_helper_object_specs_by_name(
+    data: bytes,
+    *,
+    class_names: Sequence[str],
+    candidate_names: Sequence[str] = (),
+) -> Tuple[Dict[str, _DatNativeObjectSpec], Tuple[str, ...]]:
+    specs, notes = dat_native_object_specs_from_dat_bytes(
+        data,
+        class_names=class_names,
+        selected_model_names=candidate_names,
+    )
+    return {item.name.lower(): item for item in specs}, notes
+
+
 def _trigger_helper_assets_from_dat_bytes(
     data: bytes,
     *,
     source_ed_path: str = "",
     selected_model_names: Sequence[str] = (),
     include_brushes: bool = True,
+    parsed_world: Optional[object] = None,
 ) -> Tuple[
     Tuple[legacy_ed_writer.LegacyEdBrush, ...],
     Tuple[SurrogateEdModelSummary, ...],
     Tuple[_TriggerHelperObjectSpec, ...],
     Tuple[str, ...],
 ]:
-    try:
-        from core import bsp
+    parsed = parsed_world
+    if parsed is None:
+        try:
+            from core import bsp
 
-        parsed = bsp.parse(data)
-    except Exception as exc:
-        return (), (), (), (f"Trigger helper generation skipped because DAT parse failed: {exc}",)
+            parsed = bsp.parse(data)
+        except Exception as exc:
+            return (), (), (), (f"Trigger helper generation skipped because DAT parse failed: {exc}",)
 
     selected_lookup = {str(name or "").lower() for name in selected_model_names if str(name or "")}
     helper_models: List[object] = []
@@ -3977,10 +4337,16 @@ def _trigger_helper_assets_from_dat_bytes(
         source_ed_path,
         candidate_names=candidate_names,
     )
+    dat_specs, dat_notes = _dat_native_helper_object_specs_by_name(
+        data,
+        class_names=("PortalZone",),
+        candidate_names=candidate_names,
+    )
     brushes: List[legacy_ed_writer.LegacyEdBrush] = []
     summaries: List[SurrogateEdModelSummary] = []
     object_specs: List[_TriggerHelperObjectSpec] = []
     oracle_match_count = 0
+    dat_match_count = 0
     for model in helper_models:
         name = str(getattr(model, "name", "") or f"TriggerHelper{len(summaries)}")
         if include_brushes:
@@ -3999,23 +4365,37 @@ def _trigger_helper_assets_from_dat_bytes(
         if source_spec is not None:
             object_specs.append(replace(source_spec, source_model_name=name))
             oracle_match_count += 1
+            continue
+        dat_spec = dat_specs.get(name.lower())
+        if dat_spec is not None and dat_spec.class_name == "PortalZone":
+            object_specs.append(_TriggerHelperObjectSpec(
+                name=dat_spec.name,
+                class_name=dat_spec.class_name,
+                properties=dat_spec.properties,
+                source_model_name=name,
+                source_kind="dat_object",
+            ))
+            dat_match_count += 1
 
     notes = list(source_notes)
+    notes.extend(dat_notes)
     notes.append(
         f"Trigger helper generation found {len(helper_models)} DAT GreenScreen helper model(s); "
-        f"emitted Brush records={len(brushes)}; source ED object matches={oracle_match_count}."
+        f"emitted Brush records={len(brushes)}; source ED object matches={oracle_match_count}; "
+        f"DAT object matches={dat_match_count}."
     )
     if helper_models and not include_brushes:
         notes.append(
             "Trigger helper Brush records skipped by request; helper output is limited to source ED PortalZone object nodes."
         )
-    if helper_models and oracle_match_count < len(helper_models) and include_brushes:
+    matched_object_count = oracle_match_count + dat_match_count
+    if helper_models and matched_object_count < len(helper_models) and include_brushes:
         notes.append(
-            "Trigger helper models without a source ED object match emit Brush geometry only; helper object nodes are skipped."
+            "Trigger helper models without a source ED or DAT object match emit Brush geometry only; helper object nodes are skipped."
         )
-    elif helper_models and oracle_match_count < len(helper_models):
+    elif helper_models and matched_object_count < len(helper_models):
         notes.append(
-            "Trigger helper models without a source ED object match are skipped while helper Brush output is disabled."
+            "Trigger helper models without a source ED or DAT object match are skipped while helper Brush output is disabled."
         )
     return tuple(brushes), tuple(summaries), tuple(object_specs), tuple(_unique_text(notes))
 
@@ -4027,9 +4407,9 @@ def _trigger_helper_object_specs_from_source_ed(
 ) -> Tuple[Dict[str, _TriggerHelperObjectSpec], Tuple[str, ...]]:
     source_ed = os.path.abspath(source_ed_path) if source_ed_path else ""
     if not source_ed:
-        return {}, ("Trigger helper source ED oracle was not supplied; helper object nodes will be skipped.",)
+        return {}, ("Trigger helper source ED oracle was not supplied; DAT-native PortalZone fallback will be attempted.",)
     if not os.path.exists(source_ed):
-        return {}, (f"Trigger helper source ED oracle was not found: {source_ed}",)
+        return {}, (f"Trigger helper source ED oracle was not found: {source_ed}; DAT-native PortalZone fallback will be attempted.",)
     try:
         scan = legacy_ed.load_legacy_ed_object_scan_report(source_ed)
     except Exception as exc:
@@ -4247,6 +4627,7 @@ def _terrain_support_patch_brushes_for_brushes(
     data: bytes,
     anchor_brushes: Sequence[legacy_ed_writer.LegacyEdBrush],
     *,
+    parsed_world: Optional[object] = None,
     source_model_name: str,
     name_prefix: str,
     margin: float,
@@ -4260,12 +4641,14 @@ def _terrain_support_patch_brushes_for_brushes(
     anchor_points = [point for brush in anchor_brushes for point in brush.points]
     if not anchor_points:
         raise ValueError("terrain support patch requires at least one anchor brush")
-    try:
-        from core import bsp
+    parsed = parsed_world
+    if parsed is None:
+        try:
+            from core import bsp
 
-        parsed = bsp.parse(data)
-    except Exception as exc:
-        raise ValueError(f"terrain support source DAT parse failed: {exc}") from exc
+            parsed = bsp.parse(data)
+        except Exception as exc:
+            raise ValueError(f"terrain support source DAT parse failed: {exc}") from exc
 
     terrain_name = str(source_model_name or terrain_semantics.DEFAULT_TERRAIN_MODEL)
     terrain = terrain_semantics.model_by_name(
@@ -4326,12 +4709,85 @@ def _terrain_support_patch_brushes_for_brushes(
     return tuple(patch_brushes), tuple(patch_summaries), placement
 
 
+def _source_door_clearance_bounds_from_source_ed(
+    source_ed_path: str,
+    *,
+    candidate_names: Sequence[str],
+    margin: float = 8.0,
+    approach_depth: float = 96.0,
+) -> Tuple[Tuple[Vec3, Vec3], ...]:
+    """Return source Door bounds plus a short approach corridor.
+
+    Door leaf Brushes are usually thin along their local opening normal.  A
+    consolidated shell can seal the doorway without touching the leaf itself,
+    so extend the clearance along that thinner horizontal axis.
+    """
+    if not source_ed_path:
+        return ()
+    try:
+        door_specs, _notes = _door_object_specs_from_source_ed(
+            source_ed_path,
+            candidate_names=candidate_names,
+        )
+    except Exception:
+        return ()
+    safe_margin = max(0.0, float(margin))
+    safe_approach_depth = max(safe_margin, float(approach_depth))
+    bounds: List[Tuple[Vec3, Vec3]] = []
+    for item in door_specs:
+        child = item.child_brush
+        points = tuple(getattr(child, "points", ()) or ()) if child is not None else ()
+        if not points:
+            continue
+        finite_points = tuple(_finite_vec3(point) for point in points)
+        raw_mins = tuple(min(point[axis] for point in finite_points) for axis in range(3))
+        raw_maxs = tuple(max(point[axis] for point in finite_points) for axis in range(3))
+        x_extent = raw_maxs[0] - raw_mins[0]
+        z_extent = raw_maxs[2] - raw_mins[2]
+        normal_axis = 0 if x_extent < z_extent else 2
+        margins = [safe_margin, safe_margin, safe_margin]
+        if min(x_extent, z_extent) <= max(8.0, max(x_extent, z_extent) * 0.5):
+            margins[normal_axis] = safe_approach_depth
+        mins = tuple(raw_mins[axis] - margins[axis] for axis in range(3))
+        maxs = tuple(raw_maxs[axis] + margins[axis] for axis in range(3))
+        bounds.append((mins, maxs))  # type: ignore[arg-type]
+    return tuple(bounds)
+
+
+def _physics_shell_group_intersects_clearance_bounds(
+    points: Sequence[Vec3],
+    clearance_bounds: Sequence[Tuple[Vec3, Vec3]],
+) -> bool:
+    if not points or not clearance_bounds:
+        return False
+    group_min = tuple(min(point[axis] for point in points) for axis in range(3))
+    group_max = tuple(max(point[axis] for point in points) for axis in range(3))
+    for bounds_min, bounds_max in clearance_bounds:
+        if all(
+            group_max[axis] >= bounds_min[axis] - 1.0e-5
+            and group_min[axis] <= bounds_max[axis] + 1.0e-5
+            for axis in range(3)
+        ):
+            return True
+    return False
+
+
 def _physics_shell_patch_brushes(
     data: bytes,
     *,
+    parsed_world: Optional[object] = None,
+    consolidation_index: Optional[
+        terrain_reconstruction.PhysicsShellConsolidationIndex
+    ] = None,
+    analysis_cache: Optional[Dict[str, object]] = None,
     source_model_name: str,
     name_prefix: str,
     max_polygons: int,
+    packing_mode: str = "balanced",
+    role_weights: Optional[Mapping[str, float]] = None,
+    playable_importance_weight: float = 0.0,
+    generated_face_budget: int = 0,
+    stair_assembly_indices: Sequence[int] = (),
     thickness: float,
     side_texture: str,
     source_polygon_indices: Sequence[int] = (),
@@ -4339,18 +4795,27 @@ def _physics_shell_patch_brushes(
     focus_radius: float = 0.0,
     focus_budget: int = 0,
     focus_seed_radius: float = 0.0,
+    door_clearance_bounds: Sequence[Tuple[Vec3, Vec3]] = (),
+    protected_bounds: Sequence[Tuple[Vec3, Vec3]] = (),
+    protected_roles: Sequence[str] = ("side_wall",),
 ) -> Tuple[
     Tuple[legacy_ed_writer.LegacyEdBrush, ...],
     Tuple[SurrogateEdModelSummary, ...],
     Optional[_ValidationFloorPlacement],
     Tuple[str, ...],
+    Optional[terrain_reconstruction.PhysicsShellPackingPlan],
 ]:
-    try:
-        from core import bsp
+    helper_started = time.monotonic()
+    group_planning_seconds = 0.0
+    brush_construction_seconds = 0.0
+    parsed = parsed_world
+    if parsed is None:
+        try:
+            from core import bsp
 
-        parsed = bsp.parse(data)
-    except Exception as exc:
-        raise ValueError(f"PhysicsBSP shell source DAT parse failed: {exc}") from exc
+            parsed = bsp.parse(data)
+        except Exception as exc:
+            raise ValueError(f"PhysicsBSP shell source DAT parse failed: {exc}") from exc
 
     source_name = str(source_model_name or terrain_semantics.PHYSICS_BSP_MODEL)
     model = terrain_semantics.model_by_name(
@@ -4361,7 +4826,21 @@ def _physics_shell_patch_brushes(
         raise ValueError(f"PhysicsBSP shell source model was not found: {source_name}")
 
     polygons = tuple(getattr(model, "polygons", ()) or ())
-    all_candidates = terrain_reconstruction.physics_shell_candidates(model)
+    cached_candidates = (
+        analysis_cache.get("candidates") if analysis_cache is not None else None
+    )
+    all_candidates = (
+        cached_candidates
+        if isinstance(cached_candidates, tuple)
+        else terrain_reconstruction.physics_shell_candidates(model)
+    )
+    consolidation_index = (
+        consolidation_index
+        or terrain_reconstruction.build_physics_shell_consolidation_index(
+            model,
+            all_candidates,
+        )
+    )
     invalid_polygon_count = max(0, len(polygons) - len(all_candidates))
     candidates = all_candidates
     requested_indices = tuple(sorted({int(index) for index in source_polygon_indices}))
@@ -4375,6 +4854,12 @@ def _physics_shell_patch_brushes(
     if not candidates:
         raise ValueError(f"PhysicsBSP shell patch found no writable polygons in {source_name}")
 
+    packing_mode_key = str(packing_mode or "balanced").strip().lower().replace("-", "_")
+    if packing_mode_key not in {"balanced", "cost_aware"}:
+        raise ValueError(
+            f"unsupported PhysicsBSP shell packing mode: {packing_mode}; expected balanced or cost_aware"
+        )
+    safe_generated_face_budget = max(0, int(generated_face_budget))
     limit = max(1, int(max_polygons))
     prefix = _safe_legacy_name_component(name_prefix) or "PhysicsShell"
     side_texture_name = str(side_texture or "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx")
@@ -4382,45 +4867,61 @@ def _physics_shell_patch_brushes(
     brushes: List[legacy_ed_writer.LegacyEdBrush] = []
     summaries: List[SurrogateEdModelSummary] = []
     skipped_slab_count = 0
+    skipped_door_clearance_count = 0
+    skipped_protected_void_count = 0
     floor_candidates: List[Tuple[float, Vec3, float]] = []
     generated_role_counts: Dict[str, int] = defaultdict(int)
+    selection_reasons: Dict[int, str] = {}
 
-    focus_selection = terrain_reconstruction.focused_balanced_physics_shell_candidates(
-        candidates,
-        limit,
-        focus_points=focus_points,
-        focus_radius=focus_radius,
-        focus_budget=focus_budget,
-        focus_seed_radius=focus_seed_radius,
+    cached_balanced_groups = (
+        analysis_cache.get("balanced_group_plan")
+        if packing_mode_key == "balanced"
+        and not stair_assembly_indices
+        and analysis_cache is not None
+        and int(analysis_cache.get("balanced_group_plan_source_polygon_count", -1)) == limit
+        else None
     )
+    if isinstance(cached_balanced_groups, tuple):
+        focus_selection = terrain_reconstruction.PhysicsShellFocusedSelection(selected=())
+    else:
+        focus_selection = terrain_reconstruction.focused_balanced_physics_shell_candidates(
+            candidates,
+            limit,
+            focus_points=focus_points,
+            focus_radius=focus_radius,
+            focus_budget=focus_budget,
+            focus_seed_radius=focus_seed_radius,
+        )
     primary_candidates = focus_selection.selected
     attempted_indices = set()
+    generated_source_polygon_count = 0
+    consolidated_group_count = 0
+    reused_balanced_group_plan = False
+    packing_plan: Optional[terrain_reconstruction.PhysicsShellPackingPlan] = None
+    emitted_groups: List[terrain_reconstruction.PhysicsShellCandidateGroup] = []
+    selected_stair_assembly_indices: List[int] = []
+    rejected_stair_assembly_indices: List[int] = []
 
-    def add_candidate_slabs(ordered_candidates: Sequence[terrain_reconstruction.PhysicsShellCandidate]) -> None:
-        nonlocal skipped_slab_count
-        for candidate in ordered_candidates:
-            if len(brushes) >= limit:
-                break
-            attempted_indices.add(candidate.polygon_index)
-            brush_summary = _physics_shell_polygon_slab_brush(
-                model,
-                candidate.polygon,
-                candidate.points,
-                polygon_index=candidate.polygon_index,
-                name=(
-                    f"{prefix}_{_physics_shell_role_name_component(candidate.role)}_"
-                    f"{candidate.polygon_index:04d}"
-                ),
-                thickness=safe_thickness,
-                side_texture=side_texture_name,
-            )
-            if brush_summary is None:
-                skipped_slab_count += 1
-                continue
-            brush, summary = brush_summary
+    def add_candidate_groups(
+        groups: Sequence[terrain_reconstruction.PhysicsShellCandidateGroup],
+        *,
+        atomic: bool = False,
+    ) -> bool:
+        nonlocal skipped_slab_count, skipped_door_clearance_count, skipped_protected_void_count, generated_source_polygon_count, consolidated_group_count, brush_construction_seconds
+        staged = []
+
+        def commit_group(record: object) -> None:
+            nonlocal generated_source_polygon_count, consolidated_group_count
+            group, candidate, source_indices, brush, summary = record  # type: ignore[misc]
+            attempted_indices.update(source_indices)
+            for source_index in source_indices:
+                selection_reasons[int(source_index)] = "selected_for_shell_emission"
             brushes.append(brush)
             summaries.append(summary)
-            generated_role_counts[str(candidate.role)] += 1
+            emitted_groups.append(group)
+            generated_source_polygon_count += len(group.candidates)
+            consolidated_group_count += int(len(group.candidates) > 1)
+            generated_role_counts[str(candidate.role)] += len(group.candidates)
             if brush.surfaces:
                 normal = brush.surfaces[0].plane_normal
                 if normal[1] > 0.45:
@@ -4431,13 +4932,215 @@ def _physics_shell_patch_brushes(
                     )
                     floor_candidates.append((candidate.area, center, center[1]))
 
-    add_candidate_slabs(primary_candidates)
-    if len(brushes) < limit:
-        fallback_candidates = terrain_reconstruction.balanced_physics_shell_candidates(
-            tuple(candidate for candidate in candidates if candidate.polygon_index not in attempted_indices),
-            len(candidates),
+        for group in groups:
+            source_indices = tuple(item.polygon_index for item in group.candidates)
+            if any(index in attempted_indices for index in source_indices):
+                if atomic:
+                    return False
+                continue
+            if generated_source_polygon_count + len(group.candidates) > limit:
+                return False if atomic else True
+            candidate = group.candidates[0]
+            if terrain_reconstruction.physics_shell_group_intersects_bounds(
+                group,
+                protected_bounds,
+                roles=protected_roles,
+            ):
+                if atomic:
+                    return False
+                attempted_indices.update(source_indices)
+                if _physics_shell_group_intersects_clearance_bounds(
+                    group.points,
+                    door_clearance_bounds,
+                ):
+                    skipped_door_clearance_count += 1
+                    reason = "selected_door_clearance"
+                else:
+                    skipped_protected_void_count += 1
+                    reason = "selected_protected_void"
+                for source_index in source_indices:
+                    selection_reasons[int(source_index)] = reason
+                continue
+            # ``p`` separates provenance indices; the writer later appends its
+            # own ``_<brush ordinal>`` suffix, which must not look like another
+            # source polygon index to coverage diagnostics.
+            source_index_token = "p".join(f"{index:04d}" for index in source_indices)
+            brush_started = time.monotonic()
+            brush_summary = _physics_shell_polygon_slab_brush(
+                model,
+                candidate.polygon,
+                group.points,
+                polygon_index=candidate.polygon_index,
+                name=(
+                    f"{prefix}_{_physics_shell_role_name_component(candidate.role)}_"
+                    f"{source_index_token}"
+                ),
+                thickness=safe_thickness,
+                side_texture=side_texture_name,
+            )
+            brush_construction_seconds += time.monotonic() - brush_started
+            if brush_summary is None:
+                if atomic:
+                    return False
+                skipped_slab_count += 1
+                attempted_indices.update(source_indices)
+                continue
+            brush, summary = brush_summary
+            record = (group, candidate, source_indices, brush, summary)
+            if atomic:
+                staged.append(record)
+            else:
+                commit_group(record)
+        if atomic:
+            source_cost = sum(len(group.candidates) for group in groups)
+            face_cost = sum(len(record[3].surfaces) for record in staged)
+            current_face_count = sum(len(brush.surfaces) for brush in brushes)
+            if generated_source_polygon_count + source_cost > limit:
+                return False
+            if (
+                safe_generated_face_budget
+                and current_face_count + face_cost > safe_generated_face_budget
+            ):
+                return False
+            for record in staged:
+                commit_group(record)
+        return True
+
+    def add_candidate_slabs(
+        ordered_candidates: Sequence[terrain_reconstruction.PhysicsShellCandidate],
+    ) -> None:
+        nonlocal group_planning_seconds
+        group_planning_started = time.monotonic()
+        groups = terrain_reconstruction.consolidated_physics_shell_candidate_groups(
+            model,
+            ordered_candidates,
+            consolidation_index=consolidation_index,
         )
-        add_candidate_slabs(fallback_candidates)
+        group_planning_seconds += time.monotonic() - group_planning_started
+        add_candidate_groups(groups)
+
+    requested_stair_indices = tuple(sorted({int(index) for index in stair_assembly_indices}))
+    if requested_stair_indices:
+        detected_stairs = terrain_reconstruction.detect_physics_shell_stair_assemblies(
+            model,
+            candidates,
+            consolidation_index=consolidation_index,
+        )
+        stairs_by_index = {item.assembly_index: item for item in detected_stairs}
+        candidates_by_index = {
+            int(candidate.polygon_index): candidate for candidate in candidates
+        }
+        for assembly_index in requested_stair_indices:
+            assembly = stairs_by_index.get(assembly_index)
+            if assembly is None:
+                rejected_stair_assembly_indices.append(assembly_index)
+                continue
+            assembly_candidates = tuple(
+                candidates_by_index[index]
+                for index in assembly.source_polygon_indices
+                if index in candidates_by_index
+            )
+            assembly_groups = terrain_reconstruction.consolidated_physics_shell_candidate_groups(
+                model,
+                assembly_candidates,
+                consolidation_index=consolidation_index,
+            )
+            if (
+                len(assembly_candidates) != len(assembly.source_polygon_indices)
+                or not assembly_groups
+                or not add_candidate_groups(assembly_groups, atomic=True)
+            ):
+                attempted_indices.update(assembly.source_polygon_indices)
+                for source_index in assembly.source_polygon_indices:
+                    selection_reasons.setdefault(
+                        int(source_index),
+                        "rejected_stair_assembly",
+                    )
+                rejected_stair_assembly_indices.append(assembly_index)
+                continue
+            selected_stair_assembly_indices.append(assembly_index)
+
+    if packing_mode_key == "cost_aware":
+        remaining_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.polygon_index not in attempted_indices
+        )
+        remaining_source_limit = max(0, limit - generated_source_polygon_count)
+        current_face_count = sum(len(brush.surfaces) for brush in brushes)
+        remaining_face_budget = (
+            max(0, safe_generated_face_budget - current_face_count)
+            if safe_generated_face_budget
+            else 0
+        )
+        packing_plan = terrain_reconstruction.build_physics_shell_packing_plan(
+            model,
+            remaining_candidates,
+            source_polygon_limit=remaining_source_limit,
+            generated_face_budget=remaining_face_budget,
+            consolidation_index=consolidation_index,
+            protected_bounds=protected_bounds,
+            protected_roles=protected_roles,
+            role_weights=role_weights,
+            playable_importance_points=tuple(focus_points),
+            playable_importance_radius=focus_radius,
+            playable_importance_weight=playable_importance_weight,
+        )
+        candidate_by_index = {
+            int(candidate.polygon_index): candidate for candidate in candidates
+        }
+        for protected_index in packing_plan.protected_polygon_indices:
+            protected_candidate = candidate_by_index.get(int(protected_index))
+            selection_reasons[int(protected_index)] = (
+                "selected_door_clearance"
+                if protected_candidate is not None
+                and _physics_shell_group_intersects_clearance_bounds(
+                    protected_candidate.points,
+                    door_clearance_bounds,
+                )
+                else "selected_protected_void"
+            )
+        add_candidate_groups(packing_plan.groups)
+    else:
+        if isinstance(cached_balanced_groups, tuple):
+            add_candidate_groups(cached_balanced_groups)
+            reused_balanced_group_plan = True
+        else:
+            add_candidate_slabs(primary_candidates)
+        if generated_source_polygon_count < limit:
+            fallback_candidates = terrain_reconstruction.balanced_physics_shell_candidates(
+                tuple(candidate for candidate in candidates if candidate.polygon_index not in attempted_indices),
+                len(candidates),
+            )
+            add_candidate_slabs(fallback_candidates)
+
+    if requested_stair_indices:
+        normalized_weights = dict(
+            terrain_reconstruction.normalized_physics_shell_role_weights(role_weights)
+        )
+        selected_candidates = tuple(
+            candidate
+            for group in emitted_groups
+            for candidate in group.candidates
+        )
+        packing_plan = terrain_reconstruction.PhysicsShellPackingPlan(
+            groups=tuple(emitted_groups),
+            source_polygon_count=len(selected_candidates),
+            generated_brush_count=len(emitted_groups),
+            generated_face_count=sum(len(brush.surfaces) for brush in brushes),
+            recovered_source_area=sum(float(candidate.area) for candidate in selected_candidates),
+            weighted_value=sum(
+                float(candidate.area)
+                * normalized_weights.get(str(candidate.role), 0.25)
+                for candidate in selected_candidates
+            ),
+            role_counts=tuple(sorted(generated_role_counts.items())),
+            protected_polygon_indices=tuple(sorted(
+                index
+                for index, reason in selection_reasons.items()
+                if reason in {"selected_door_clearance", "selected_protected_void"}
+            )),
+        )
 
     if not brushes:
         raise ValueError(
@@ -4451,6 +5154,8 @@ def _physics_shell_patch_brushes(
 
     notes = [
         f"PhysicsBSP shell patch emitted {len(brushes)}/{len(candidates)} writable {source_name} polygon slab brush(es).",
+        f"PhysicsBSP shell consolidation represented {generated_source_polygon_count} source polygon(s) in "
+        f"{len(brushes)} brush(es), including {consolidated_group_count} coplanar/overlap group merge(s).",
         "PhysicsBSP shell connected balanced selector generated roles: "
         + ", ".join(
             f"{role}={generated_role_counts.get(role, 0)}"
@@ -4459,6 +5164,74 @@ def _physics_shell_patch_brushes(
         + ".",
         f"PhysicsBSP shell polygon budget: {limit}; slab thickness: {safe_thickness:g}.",
     ]
+    if reused_balanced_group_plan:
+        notes.append(
+            "PhysicsBSP shell reused the final balanced consolidated-group plan from polygon-budget preflight."
+        )
+    if requested_stair_indices:
+        notes.append(
+            "PhysicsBSP stair assembly reservation requested: "
+            + ", ".join(str(index) for index in requested_stair_indices) + "."
+        )
+        if selected_stair_assembly_indices:
+            notes.append(
+                "Atomically reserved stair assembly candidate(s): "
+                + ", ".join(str(index) for index in selected_stair_assembly_indices) + "."
+            )
+        if rejected_stair_assembly_indices:
+            notes.append(
+                "Rejected stair assembly candidate(s) because the complete assembly was unavailable, protected, non-writable, or over budget: "
+                + ", ".join(str(index) for index in rejected_stair_assembly_indices) + "."
+            )
+    if packing_mode_key == "cost_aware" and packing_plan is not None:
+        notes.append(
+            "PhysicsBSP shell cost-aware packing: "
+            f"source={packing_plan.source_polygon_count}, brushes={packing_plan.generated_brush_count}, "
+            f"faces={packing_plan.generated_face_count}, weighted_value={packing_plan.weighted_value:g}."
+        )
+
+        normalized_role_weights = terrain_reconstruction.normalized_physics_shell_role_weights(role_weights)
+        notes.append(
+            "PhysicsBSP shell cost-aware role weights: "
+            + ", ".join(f"{role}={weight:g}" for role, weight in normalized_role_weights)
+            + "."
+        )
+        if max(0.0, float(playable_importance_weight)) > 0.0 and focus_points:
+            notes.append(
+                "PhysicsBSP shell cost-aware playable-importance bias: "
+                f"weight={max(0.0, float(playable_importance_weight)):g}, "
+                f"anchors={len(tuple(focus_points))}, radius={max(0.0, float(focus_radius)):g}."
+            )
+        if packing_plan.protected_polygon_indices:
+            notes.append(
+                "PhysicsBSP shell cost-aware packing protected source polygon(s): "
+                + ", ".join(str(index) for index in packing_plan.protected_polygon_indices)
+                + "."
+            )
+        if safe_generated_face_budget:
+            notes.append(
+                f"PhysicsBSP shell generated-face budget: {safe_generated_face_budget}."
+            )
+    if analysis_cache is not None:
+        analysis_cache["candidates"] = all_candidates
+        analysis_cache["consolidation_index"] = consolidation_index
+        analysis_cache["selection_reasons"] = dict(selection_reasons)
+        analysis_cache["selected_stair_assembly_indices"] = tuple(
+            selected_stair_assembly_indices
+        )
+        analysis_cache["rejected_stair_assembly_indices"] = tuple(
+            rejected_stair_assembly_indices
+        )
+        total_seconds = time.monotonic() - helper_started
+        analysis_cache.setdefault("emission_timings_seconds", {}).update({
+            "physics_shell_setup": max(
+                0.0,
+                total_seconds - group_planning_seconds - brush_construction_seconds,
+            ),
+            "physics_shell_group_planning": group_planning_seconds,
+            "physics_shell_brush_construction": brush_construction_seconds,
+            "physics_shell_total": total_seconds,
+        })
     if requested_indices:
         notes.append(
             "PhysicsBSP shell patch is restricted to requested source polygon indices: "
@@ -4484,18 +5257,27 @@ def _physics_shell_patch_brushes(
                 "PhysicsBSP shell focused selector found no nearby connected source polygons; "
                 "used the normal balanced selector."
             )
-    if len(brushes) >= limit and len(candidates) > limit:
+    if generated_source_polygon_count >= limit and len(candidates) > limit:
         notes.append(
-            f"PhysicsBSP shell patch stopped at the polygon budget; {len(candidates) - len(brushes)} candidate polygon(s) remain ungenerated."
+            f"PhysicsBSP shell patch stopped at the source polygon budget; "
+            f"{len(candidates) - generated_source_polygon_count} candidate polygon(s) remain ungenerated."
         )
     if invalid_polygon_count or skipped_slab_count:
         notes.append(
             f"PhysicsBSP shell patch skipped invalid={invalid_polygon_count}, non-closed={skipped_slab_count} polygon(s)."
         )
+    if skipped_door_clearance_count:
+        notes.append(
+            f"PhysicsBSP shell patch skipped {skipped_door_clearance_count} side-wall group(s) intersecting source Door clearance bounds."
+        )
+    if skipped_protected_void_count:
+        notes.append(
+            f"PhysicsBSP shell patch skipped {skipped_protected_void_count} group(s) intersecting explicit protected void bounds."
+        )
     if placement is not None:
         notes.append("Default StartPoint support candidate is the broadest upward-facing generated PhysicsBSP shell face.")
 
-    return tuple(brushes), tuple(summaries), placement, tuple(notes)
+    return tuple(brushes), tuple(summaries), placement, tuple(notes), packing_plan
 
 
 def _physics_shell_role_name_component(role: object) -> str:
@@ -4980,10 +5762,11 @@ def _model_to_legacy_brush(
         color_rgb=tuple(_brush_color(model_index)),  # type: ignore[arg-type]
         name=name,
     )
+    brush = legacy_ed_writer.normalize_brush_points(brush)
     summary = SurrogateEdModelSummary(
         name=name,
         status="written",
-        point_count=len(points),
+        point_count=len(brush.points),
         polygon_count=len(written_polygons),
         skipped_polygon_count=skipped,
         texture_count=len(getattr(model, "texture_names", []) or []),
@@ -5015,11 +5798,20 @@ def _helper_texture_flags(texture_name: object) -> int:
     return 0
 
 
-def _infer_full_level_infostring(data: bytes) -> str:
-    try:
-        from core import bsp
+def _infer_full_level_infostring(
+    data: bytes,
+    *,
+    parsed_world: Optional[object] = None,
+) -> str:
+    parsed = parsed_world
+    if parsed is None:
+        try:
+            from core import bsp
 
-        parsed = bsp.parse(data)
+            parsed = bsp.parse(data)
+        except Exception:
+            parsed = None
+    try:
         grid = float(getattr(parsed, "lightmap_grid_size", 0.0) or 0.0)
     except Exception:
         grid = 64.0

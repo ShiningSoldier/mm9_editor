@@ -195,6 +195,64 @@ class BuilderTest(unittest.TestCase):
         self.assertIn(r"models\wolf_from_dat.abc", entry["filenames"])
         self.assertEqual(entry["object_lto"]["parent"], "BaseClass")
 
+    def test_object_lto_models_and_skins_are_separated_into_variants(self):
+        object_lto_dump = _normalized_object_lto_dump({
+            "Torch": _object_lto_class(
+                "Torch",
+                properties=[
+                    _object_lto_prop("Filename", 0, r"models\props\torch.abc"),
+                    _object_lto_prop("Skin", 0, r"skins\props\torch.dtx"),
+                    _object_lto_prop("Skin2", 0, r"skins\props\flame.dtx"),
+                ],
+            ),
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog = build_catalog(tmpdir, object_lto_dump=object_lto_dump)
+
+        entry = catalog["classes"]["Torch"]
+        self.assertEqual(entry["filenames"], [r"models\props\torch.abc"])
+        self.assertEqual(
+            entry["skins"],
+            [r"skins\props\flame.dtx", r"skins\props\torch.dtx"],
+        )
+        self.assertEqual(entry["accessory_skins"], [r"skins\props\flame.dtx"])
+        variant = catalog["model_variants"][r"models\props\torch.abc"][0]
+        self.assertEqual(variant["name"], "Torch")
+        self.assertEqual(
+            variant["skins"],
+            [r"skins\props\torch.dtx", r"skins\props\flame.dtx"],
+        )
+        self.assertEqual(variant["source_keys"], ["object.lto:Torch"])
+
+    def test_skin_inventory_infers_conservative_lomm_actor_variants(self):
+        object_lto_dump = _normalized_object_lto_dump({
+            "Goblin": _object_lto_class(
+                "Goblin",
+                properties=[
+                    _object_lto_prop("Filename", 0, r"models\Goblin.abc"),
+                ],
+            ),
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog = build_catalog(
+                tmpdir,
+                object_lto_dump=object_lto_dump,
+                skin_paths=[
+                    r"SKINS\GOBLIN.DTX",
+                    r"SKINS\GOBLINCHIEF.DTX",
+                    r"SKINS\GOBLINPOLE.DTX",
+                ],
+            )
+
+        variants = catalog["model_variants"][r"models\goblin.abc"]
+        self.assertEqual([row["name"] for row in variants], ["Goblin", "Goblin Chief"])
+        self.assertEqual(
+            [row["skins"] for row in variants],
+            [[r"skins\goblin.dtx"], [r"skins\goblinchief.dtx"]],
+        )
+
     def test_hidden_or_no_runtime_object_lto_classes_are_not_added_when_unobserved(self):
         object_lto_dump = _normalized_object_lto_dump({
             "HiddenOnly": _object_lto_class("HiddenOnly", hidden=True),

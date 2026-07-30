@@ -250,6 +250,30 @@ class TerrainReconstructionTests(unittest.TestCase):
         self.assertEqual([candidate.role for candidate in candidates], ["floor", "ceiling", "side_wall", "helper/special"])
         self.assertEqual([candidate.generated_face_count for candidate in candidates], [6, 6, 6, 6])
 
+        batches = terrain_reconstruction.physics_shell_role_index_batches(
+            model,
+            max_indices_per_batch=2,
+        )
+        self.assertEqual(
+            [(batch.role, batch.batch_index, batch.polygon_indices) for batch in batches],
+            [
+                ("floor", 0, (0,)),
+                ("ceiling", 0, (1,)),
+                ("side_wall", 0, (2,)),
+                ("helper/special", 0, (3,)),
+            ],
+        )
+        self.assertEqual([batch.generated_face_count for batch in batches], [6, 6, 6, 6])
+        face_limited = terrain_reconstruction.physics_shell_role_index_batches(
+            model,
+            max_indices_per_batch=32,
+            max_generated_faces_per_batch=6,
+        )
+        self.assertTrue(face_limited)
+        self.assertTrue(all(batch.generated_face_count <= 6 for batch in face_limited))
+        with self.assertRaises(ValueError):
+            terrain_reconstruction.physics_shell_role_index_batches(model, max_indices_per_batch=0)
+
     def test_physics_shell_quality_filter_simplifies_or_rejects_warning_prone_slabs(self):
         model = types.SimpleNamespace(
             points=(
@@ -324,6 +348,331 @@ class TerrainReconstructionTests(unittest.TestCase):
             ),
             3,
         )
+
+    def test_physics_shell_consolidation_merges_adjacent_coplanar_triangles(self):
+        def candidate(index, indices, points):
+            return terrain_reconstruction.PhysicsShellCandidate(
+                polygon_index=index,
+                polygon=types.SimpleNamespace(vertex_indices=indices),
+                indices=indices,
+                points=points,
+                area=0.5,
+                role="floor",
+                generated_face_count=5,
+            )
+
+        candidates = (
+            candidate(10, (0, 1, 2), ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 1.0))),
+            candidate(11, (0, 2, 3), ((0.0, 0.0, 0.0), (1.0, 0.0, 1.0), (0.0, 0.0, 1.0))),
+        )
+
+        groups = terrain_reconstruction.consolidated_physics_shell_candidate_groups(None, candidates)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual([item.polygon_index for item in groups[0].candidates], [10, 11])
+        self.assertEqual(len(groups[0].points), 4)
+        self.assertEqual(groups[0].generated_face_count, 6)
+
+    def test_physics_shell_consolidation_grows_a_convex_four_triangle_group(self):
+        points = (
+            (0.0, 0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            (2.0, 0.0, 2.0),
+            (0.0, 0.0, 2.0),
+            (1.0, 0.0, 1.0),
+        )
+        triangles = ((0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4))
+        candidates = tuple(
+            terrain_reconstruction.PhysicsShellCandidate(
+                polygon_index=index,
+                polygon=types.SimpleNamespace(vertex_indices=indices),
+                indices=indices,
+                points=tuple(points[item] for item in indices),
+                area=1.0,
+                role="floor",
+                generated_face_count=5,
+            )
+            for index, indices in enumerate(triangles)
+        )
+
+        groups = terrain_reconstruction.consolidated_physics_shell_candidate_groups(None, candidates)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0].candidates), 4)
+        self.assertEqual(len(groups[0].points), 4)
+        self.assertEqual(groups[0].generated_face_count, 6)
+
+    def test_cost_aware_consolidation_grows_an_exact_convex_eight_triangle_group(self):
+        outer = (
+            (3.0, 0.0, 0.0),
+            (2.0, 0.0, 2.0),
+            (0.0, 0.0, 3.0),
+            (-2.0, 0.0, 2.0),
+            (-3.0, 0.0, 0.0),
+            (-2.0, 0.0, -2.0),
+            (0.0, 0.0, -3.0),
+            (2.0, 0.0, -2.0),
+        )
+        points = outer + ((0.0, 0.0, 0.0),)
+        triangles = tuple(
+            (index, (index + 1) % len(outer), len(outer))
+            for index in range(len(outer))
+        )
+        candidates = tuple(
+            terrain_reconstruction.PhysicsShellCandidate(
+                polygon_index=index,
+                polygon=types.SimpleNamespace(vertex_indices=indices),
+                indices=indices,
+                points=tuple(points[item] for item in indices),
+                area=terrain_reconstruction.polygon_area(
+                    tuple(points[item] for item in indices)
+                ),
+                role="floor",
+                generated_face_count=5,
+            )
+            for index, indices in enumerate(triangles)
+        )
+
+        plan = terrain_reconstruction.build_physics_shell_packing_plan(
+            None,
+            candidates,
+            source_polygon_limit=len(candidates),
+        )
+
+        self.assertEqual(plan.source_polygon_count, len(candidates))
+        self.assertEqual(plan.generated_brush_count, 1)
+        self.assertEqual(plan.generated_face_count, len(outer) + 2)
+        self.assertEqual(len(plan.groups[0].points), len(outer))
+
+    def test_cost_aware_consolidation_does_not_fill_a_large_concave_gap(self):
+        # A fan triangulates a concave pentagon.  The convex hull would fill
+        # the inward notch, so only safe groups up to four source triangles
+        # may be consolidated.
+        outer = (
+            (0.0, 0.0, 0.0),
+            (4.0, 0.0, 0.0),
+            (4.0, 0.0, 4.0),
+            (2.0, 0.0, 2.0),
+            (0.0, 0.0, 4.0),
+        )
+        points = outer + ((2.0, 0.0, 1.0),)
+        triangles = tuple(
+            (index, (index + 1) % len(outer), len(outer))
+            for index in range(len(outer))
+        )
+        candidates = tuple(
+            terrain_reconstruction.PhysicsShellCandidate(
+                polygon_index=index + 30,
+                polygon=types.SimpleNamespace(vertex_indices=indices),
+                indices=indices,
+                points=tuple(points[item] for item in indices),
+                area=terrain_reconstruction.polygon_area(
+                    tuple(points[item] for item in indices)
+                ),
+                role="floor",
+                generated_face_count=5,
+            )
+            for index, indices in enumerate(triangles)
+        )
+
+        plan = terrain_reconstruction.build_physics_shell_packing_plan(
+            None,
+            candidates,
+            source_polygon_limit=5,
+        )
+
+        self.assertEqual(plan.source_polygon_count, 5)
+        self.assertGreater(plan.generated_brush_count, 1)
+        self.assertLessEqual(max(len(group.candidates) for group in plan.groups), 4)
+
+    def test_physics_shell_consolidation_rejects_concave_pair(self):
+        first = terrain_reconstruction.PhysicsShellCandidate(
+            10, types.SimpleNamespace(vertex_indices=(0, 1, 2)), (0, 1, 2),
+            ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            1.0, "floor", 5,
+        )
+        second = terrain_reconstruction.PhysicsShellCandidate(
+            11, types.SimpleNamespace(vertex_indices=(0, 1, 3)), (0, 1, 3),
+            ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (3.0, 0.0, 3.0)),
+            1.5, "floor", 5,
+        )
+
+        groups = terrain_reconstruction.consolidated_physics_shell_candidate_groups(None, (first, second))
+
+        self.assertEqual(len(groups), 2)
+
+    def test_physics_shell_packing_plan_reuses_regions_and_respects_face_budget(self):
+        candidates = (
+            terrain_reconstruction.PhysicsShellCandidate(
+                10,
+                types.SimpleNamespace(vertex_indices=(0, 1, 2)),
+                (0, 1, 2),
+                ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 0.0, 2.0)),
+                2.0,
+                "floor",
+                5,
+            ),
+            terrain_reconstruction.PhysicsShellCandidate(
+                11,
+                types.SimpleNamespace(vertex_indices=(0, 2, 3)),
+                (0, 2, 3),
+                ((0.0, 0.0, 0.0), (2.0, 0.0, 2.0), (0.0, 0.0, 2.0)),
+                2.0,
+                "floor",
+                5,
+            ),
+            terrain_reconstruction.PhysicsShellCandidate(
+                20,
+                types.SimpleNamespace(vertex_indices=(4, 5, 6)),
+                (4, 5, 6),
+                ((10.0, 0.0, 0.0), (10.0, 20.0, 0.0), (10.0, 0.0, 20.0)),
+                200.0,
+                "side_wall",
+                5,
+            ),
+        )
+
+        index = terrain_reconstruction.build_physics_shell_consolidation_index(
+            None,
+            candidates,
+        )
+        self.assertEqual(
+            terrain_reconstruction.consolidated_physics_shell_candidate_groups(
+                None,
+                candidates,
+            ),
+            terrain_reconstruction.consolidated_physics_shell_candidate_groups(
+                None,
+                candidates,
+                consolidation_index=index,
+            ),
+        )
+
+        tight = terrain_reconstruction.build_physics_shell_packing_plan(
+            None,
+            candidates,
+            source_polygon_limit=3,
+            generated_face_budget=6,
+            consolidation_index=index,
+        )
+        self.assertEqual(tight.source_polygon_count, 1)
+        self.assertEqual(tight.generated_brush_count, 1)
+        self.assertEqual(tight.generated_face_count, 5)
+        self.assertEqual(tight.role_counts, (("side_wall", 1),))
+        self.assertEqual(tight.groups[0].candidates[0].polygon_index, 20)
+
+        roomy = terrain_reconstruction.build_physics_shell_packing_plan(
+            None,
+            candidates,
+            source_polygon_limit=3,
+            generated_face_budget=11,
+            consolidation_index=index,
+        )
+        self.assertEqual(roomy.source_polygon_count, 3)
+        self.assertEqual(roomy.generated_brush_count, 2)
+        self.assertEqual(roomy.generated_face_count, 11)
+        self.assertEqual(dict(roomy.role_counts), {"floor": 2, "side_wall": 1})
+
+        protected = terrain_reconstruction.build_physics_shell_packing_plan(
+            None,
+            candidates,
+            source_polygon_limit=3,
+            protected_bounds=(((9.0, -1.0, -1.0), (11.0, 21.0, 21.0)),),
+            consolidation_index=index,
+        )
+        self.assertEqual(protected.source_polygon_count, 2)
+        self.assertEqual(protected.protected_polygon_indices, (20,))
+
+    def test_cost_aware_packing_accepts_role_and_playable_importance_overrides(self):
+        def candidate(index, role, center):
+            x, z = center
+            points = (
+                (x, 0.0, z),
+                (x + 2.0, 0.0, z),
+                (x, 0.0, z + 2.0),
+            )
+            indices = (index * 3, index * 3 + 1, index * 3 + 2)
+            return terrain_reconstruction.PhysicsShellCandidate(
+                index,
+                types.SimpleNamespace(vertex_indices=indices),
+                indices,
+                points,
+                2.0,
+                role,
+                5,
+            )
+
+        candidates = (
+            candidate(1, "side_wall", (0.0, 0.0)),
+            candidate(2, "floor", (20.0, 20.0)),
+            candidate(3, "floor", (100.0, 100.0)),
+        )
+        role_override = terrain_reconstruction.build_physics_shell_packing_plan(
+            None,
+            candidates,
+            source_polygon_limit=1,
+            generated_face_budget=5,
+            role_weights={"side_wall": 1.0, "floor": 20.0},
+        )
+        self.assertEqual(role_override.groups[0].candidates[0].polygon_index, 2)
+
+        playable_override = terrain_reconstruction.build_physics_shell_packing_plan(
+            None,
+            candidates[1:],
+            source_polygon_limit=1,
+            generated_face_budget=5,
+            playable_importance_points=((20.0, 0.0, 20.0),),
+            playable_importance_radius=16.0,
+            playable_importance_weight=10.0,
+        )
+        self.assertEqual(playable_override.groups[0].candidates[0].polygon_index, 2)
+        self.assertEqual(
+            dict(terrain_reconstruction.normalized_physics_shell_role_weights({"floor": 20.0}))["floor"],
+            20.0,
+        )
+
+    def test_packing_comparison_uses_common_budgets_and_reports_value_gain(self):
+        def candidate(index, role, x, area):
+            points = ((x, 0.0, 0.0), (x + 2.0, 0.0, 0.0), (x, 0.0, 2.0))
+            indices = (index * 3, index * 3 + 1, index * 3 + 2)
+            return terrain_reconstruction.PhysicsShellCandidate(
+                index,
+                types.SimpleNamespace(vertex_indices=indices),
+                indices,
+                points,
+                area,
+                role,
+                5,
+            )
+
+        candidates = (
+            candidate(1, "side_wall", 0.0, 20.0),
+            candidate(2, "floor", 20.0, 10.0),
+            candidate(3, "floor", 40.0, 9.0),
+        )
+        comparison = terrain_reconstruction.compare_physics_shell_packing_plans(
+            None,
+            candidates,
+            source_polygon_limit=1,
+            generated_face_budget=5,
+            role_weights={"side_wall": 1.0, "floor": 10.0},
+        )
+
+        self.assertEqual(comparison.balanced.source_polygon_count, 1)
+        self.assertEqual(comparison.cost_aware.source_polygon_count, 1)
+        self.assertLessEqual(comparison.balanced.generated_face_count, 5)
+        self.assertLessEqual(comparison.cost_aware.generated_face_count, 5)
+        self.assertEqual(
+            comparison.balanced.groups[0].candidates[0].polygon_index,
+            1,
+        )
+        self.assertEqual(
+            comparison.cost_aware.groups[0].candidates[0].polygon_index,
+            2,
+        )
+        self.assertGreater(comparison.weighted_value_delta, 0.0)
+        self.assertEqual(comparison.preferred_validation_mode, "cost_aware")
+        self.assertTrue(comparison.protected_sets_match)
 
     def test_balanced_physics_shell_selection_prefers_connected_structural_neighborhood(self):
         def candidate(
@@ -404,6 +753,117 @@ class TerrainReconstructionTests(unittest.TestCase):
         self.assertEqual(selection.focus_selected_count, 3)
         self.assertEqual([item.polygon_index for item in selection.selected], [10, 11, 12])
 
+    def test_detects_connected_tread_riser_stair_assembly(self):
+        def tread(index, x, y):
+            indices = (index * 3, index * 3 + 1, index * 3 + 2)
+            return terrain_reconstruction.PhysicsShellCandidate(
+                index,
+                types.SimpleNamespace(vertex_indices=indices),
+                indices,
+                ((x, y, 0.0), (x + 4.0, y, 0.0), (x + 4.0, y, 8.0), (x, y, 8.0)),
+                32.0,
+                "floor",
+                6,
+            )
+
+        def riser(index, x, low_y, high_y):
+            indices = (index * 3, index * 3 + 1, index * 3 + 2)
+            return terrain_reconstruction.PhysicsShellCandidate(
+                index,
+                types.SimpleNamespace(vertex_indices=indices),
+                indices,
+                ((x, low_y, 0.0), (x, high_y, 0.0), (x, high_y, 8.0), (x, low_y, 8.0)),
+                64.0,
+                "side_wall",
+                6,
+            )
+
+        candidates = (
+            tread(1, 0.0, 0.0),
+            tread(2, 4.0, 8.0),
+            tread(3, 8.0, 16.0),
+            tread(4, 12.0, 24.0),
+            riser(10, 4.0, 0.0, 8.0),
+            riser(11, 8.0, 8.0, 16.0),
+            riser(12, 12.0, 16.0, 24.0),
+        )
+
+        assemblies = terrain_reconstruction.detect_physics_shell_stair_assemblies(
+            None,
+            candidates,
+        )
+
+        self.assertEqual(len(assemblies), 1)
+        assembly = assemblies[0]
+        self.assertEqual(assembly.tread_polygon_indices, (1, 2, 3, 4))
+        self.assertEqual(assembly.riser_polygon_indices, (10, 11, 12))
+        self.assertEqual(assembly.elevation_levels, (0.0, 8.0, 16.0, 24.0))
+        self.assertEqual(assembly.step_count, 3)
+        self.assertEqual(assembly.confidence, "high")
+        diagnostics = tuple(
+            compiler_strategy.PhysicsShellSourcePolygonDiagnostic(
+                source_polygon_index=index,
+                role=("floor" if index < 10 else "side_wall"),
+                status="emitted_ed",
+                reason="emitted_shell_brush_provenance",
+                generated_brush_names=(f"PhysicsShell_{index}",),
+                compiled_match_count=1,
+            )
+            for index in assembly.source_polygon_indices
+        )
+        report = compiler_strategy.PhysicsShellSourceCoverageReport(
+            status="physics_shell_source_coverage_has_gaps",
+            source_dat_path="source.dat",
+            generated_ed_path="generated.ed",
+            compiled_dat_path="compiled.dat",
+            source_polygon_diagnostics=diagnostics,
+            stair_assemblies=assemblies,
+        )
+        manifest = compiler_strategy._physics_shell_source_coverage_manifest(report)
+        assembly_manifest = manifest["stair_assemblies"][0]
+        self.assertTrue(assembly_manifest["emission_complete"])
+        self.assertTrue(assembly_manifest["compiled_retention_complete"])
+        self.assertEqual(
+            assembly_manifest["compiled_retained_polygon_count"],
+            len(assembly.source_polygon_indices),
+        )
+        self.assertIn(
+            "stair assemblies: count=1",
+            compiler_strategy.format_physics_shell_source_coverage_report(report),
+        )
+
+    def test_stair_detector_rejects_two_level_curb_and_large_rise(self):
+        def floor(index, x, y):
+            indices = (index * 3, index * 3 + 1, index * 3 + 2)
+            return terrain_reconstruction.PhysicsShellCandidate(
+                index,
+                types.SimpleNamespace(vertex_indices=indices),
+                indices,
+                ((x, y, 0.0), (x + 4.0, y, 0.0), (x, y, 4.0)),
+                8.0,
+                "floor",
+                5,
+            )
+
+        self.assertEqual(
+            terrain_reconstruction.detect_physics_shell_stair_assemblies(
+                None,
+                (floor(1, 0.0, 0.0), floor(2, 4.0, 8.0)),
+            ),
+            (),
+        )
+        self.assertEqual(
+            terrain_reconstruction.detect_physics_shell_stair_assemblies(
+                None,
+                (
+                    floor(1, 0.0, 0.0),
+                    floor(2, 4.0, 48.0),
+                    floor(3, 8.0, 96.0),
+                ),
+            ),
+            (),
+        )
+
     def test_anskramkeep_startpoint_focus_reserves_connected_stairwell_neighborhood(self):
         from core import bsp
         from features.dat_editing import terrain_semantics
@@ -434,6 +894,34 @@ class TerrainReconstructionTests(unittest.TestCase):
              for role in ("floor", "ceiling", "side_wall")},
             {"floor": 52, "ceiling": 59, "side_wall": 239},
         )
+
+    def test_anskramkeep_stair_detector_finds_high_confidence_assemblies(self):
+        from core import bsp
+        from features.dat_editing import terrain_semantics
+
+        path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        if not os.path.exists(path):
+            self.skipTest(f"missing test level: {path}")
+        with open(path, "rb") as f:
+            parsed = bsp.parse(f.read())
+        physics = terrain_semantics.model_by_name(parsed.world_models, "PhysicsBSP")
+        candidates = terrain_reconstruction.physics_shell_candidates(physics)
+        index = terrain_reconstruction.build_physics_shell_consolidation_index(
+            physics,
+            candidates,
+        )
+
+        assemblies = terrain_reconstruction.detect_physics_shell_stair_assemblies(
+            physics,
+            candidates,
+            consolidation_index=index,
+        )
+
+        high_confidence = [item for item in assemblies if item.confidence == "high"]
+        self.assertGreaterEqual(len(assemblies), 10)
+        self.assertGreaterEqual(len(high_confidence), 4)
+        self.assertTrue(any(item.step_count >= 12 for item in high_confidence))
+        self.assertTrue(all(item.tread_polygon_indices for item in assemblies))
 
     def test_builds_terrain_coverage_items_with_texture_filtering(self):
         terrain = types.SimpleNamespace(
@@ -667,6 +1155,33 @@ class TerrainReconstructionTests(unittest.TestCase):
         self.assertEqual(
             terrain_reconstruction.normalize_terrain_support_selection_mode("budgeted-connected-radius"),
             "connected_budget",
+        )
+        self.assertEqual([item.polygon_index for item in selected], [0, 1])
+
+    def test_multi_anchor_terrain_support_spreads_budget_across_components(self):
+        terrain = types.SimpleNamespace(
+            points=(
+                (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 0.0, 10.0), (0.0, 0.0, 10.0),
+                (100.0, 0.0, 0.0), (110.0, 0.0, 0.0), (110.0, 0.0, 10.0), (100.0, 0.0, 10.0),
+            ),
+            polygons=(
+                types.SimpleNamespace(vertex_indices=(0, 3, 2, 1)),
+                types.SimpleNamespace(vertex_indices=(4, 7, 6, 5)),
+            ),
+        )
+        items = terrain_reconstruction.terrain_support_items(terrain)
+        selected = terrain_reconstruction.select_terrain_support_items(
+            items,
+            anchor_points=((5.0, 0.0, 5.0), (105.0, 0.0, 5.0)),
+            margin=0.0,
+            selection_mode="multi-anchor-budget",
+            radius=32.0,
+            max_items=2,
+        )
+
+        self.assertEqual(
+            terrain_reconstruction.normalize_terrain_support_selection_mode("multi-anchor-budget"),
+            "multi_anchor_budget",
         )
         self.assertEqual([item.polygon_index for item in selected], [0, 1])
 

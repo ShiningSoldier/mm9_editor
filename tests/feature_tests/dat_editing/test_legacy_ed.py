@@ -1,6 +1,7 @@
 import os
 import struct
 import unittest
+from unittest import mock
 
 from tests._path import ROOT  # noqa: F401
 
@@ -36,6 +37,27 @@ def _sample_ed_bytes() -> bytes:
 
 
 class LegacyEdTests(unittest.TestCase):
+    def test_combined_analysis_shares_wrapper_and_object_scan(self):
+        data = _sample_ed_bytes()
+        original_decompress = legacy_ed._try_decompress_full_level_wrapper
+        original_object_scan = legacy_ed._scan_object_records
+        with mock.patch.object(
+            legacy_ed,
+            "_try_decompress_full_level_wrapper",
+            wraps=original_decompress,
+        ) as decompress_mock, mock.patch.object(
+            legacy_ed,
+            "_scan_object_records",
+            wraps=original_object_scan,
+        ) as object_scan_mock:
+            analysis = legacy_ed.analyze_legacy_ed_bytes(data, source_path="fixture.ed")
+
+        self.assertEqual(decompress_mock.call_count, 1)
+        self.assertEqual(object_scan_mock.call_count, 1)
+        self.assertEqual(analysis.geometry_scene.metadata["recovered_brush_count"], 1)
+        self.assertEqual(analysis.object_scan.object_count, 0)
+        self.assertEqual(analysis.node_layout.version, legacy_ed.LEGACY_ED_VERSION)
+
     def test_legacy_ed_bytes_to_geometry_scene_recovers_brush_record(self):
         scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(_sample_ed_bytes(), source_path="fixture.ed")
 

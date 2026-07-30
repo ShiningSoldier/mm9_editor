@@ -65,6 +65,7 @@ catalog/             catalog builder, actor visual table parsing, catalog data
 features/doors/      physical-door matching, cloning, validation, BSP writing
 features/prefabs/    prefab inspection, static import planning, validation
 features/presets/    preset persistence
+features/model_conversion/  static ABC/DTX export to glTF, GLB, OBJ, and PNG
 conversion/          LoMM-to-MM9 conversion tools and config
 view3d/              existing OpenGL preview package
 mm9_patcher/         DAT/RUDE patcher tools, kept stable until core refactors settle
@@ -96,6 +97,7 @@ Import/refactor rules:
 | `features/presets/manager.py` | User preset persistence. |
 | `features/doors/` | Physical-door matching, clone planning, validation, and BSP writing. |
 | `features/prefabs/` | Converted prefab inspection, static BSP import planning, and save-plan validation. |
+| `features/model_conversion/` | Static LOD0 ABC export to glTF/GLB or OBJ, DTX-to-PNG conversion, explicit piece skins, and catalog-driven material variants. See `docs/model_conversion.md`. |
 | `tests/` | Test package grouped by area: `tests/app_tests/`, `tests/catalog_tests/`, `tests/core_tests/`, `tests/feature_tests/doors/`, `tests/feature_tests/prefabs/`, and `tests/view3d_tests/`. Shared test path setup lives in `tests/_path.py`; folder names avoid shadowing production packages during `unittest discover`. |
 
 

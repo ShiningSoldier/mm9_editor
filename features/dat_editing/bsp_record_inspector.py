@@ -311,9 +311,11 @@ class _Cursor:
 def inspect_dat(
     dat_bytes: bytes,
     model_names: Sequence[str] = DEFAULT_MODEL_NAMES,
+    *,
+    parsed_world: Optional[object] = None,
 ) -> Dict[str, BspRecordInspection]:
     """Return compiled BSP record summaries for selected world-model names."""
-    world = bsp.parse(dat_bytes)
+    world = parsed_world if parsed_world is not None else bsp.parse(dat_bytes)
     return {
         str(name): _inspect_model(dat_bytes, world, str(name))
         for name in model_names

@@ -6,14 +6,281 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from tests._path import ROOT  # noqa: F401
 
 from core import bsp
-from features.dat_editing import compiler_strategy, legacy_ed, terrain_semantics
+from features.dat_editing import (
+    compiler_strategy,
+    legacy_ed,
+    legacy_ed_writer,
+    surrogate_ed,
+    terrain_reconstruction,
+    terrain_semantics,
+)
+
+
+RUN_SLOW_DAT_TO_ED_TESTS = os.environ.get("MM9_RUN_SLOW_DAT_TO_ED_TESTS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+slow_dat_to_ed_test = unittest.skipUnless(
+    RUN_SLOW_DAT_TO_ED_TESTS,
+    "slow real-level DAT-to-ED regression; set MM9_RUN_SLOW_DAT_TO_ED_TESTS=1 to run",
+)
 
 
 class CompilerStrategyTests(unittest.TestCase):
+    def test_compiled_validation_reuses_compiled_dat_world_and_reports_timings(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            acceptance = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="CompiledValidationReuseProbe",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="compiled_validation_reuse.ed",
+            )
+            self.assertEqual(acceptance.status, "ready_for_manual_full_world_skeleton_test")
+
+            original_parse = bsp.parse
+            with mock.patch.object(bsp, "parse", wraps=original_parse) as parse_mock:
+                report = compiler_strategy.build_full_world_skeleton_compiled_validation_report(
+                    generated_ed_path=acceptance.generated_ed_path,
+                    compiled_dat_path=bootcamp,
+                    helper_reference_dat_path=bootcamp,
+                )
+
+        self.assertEqual(parse_mock.call_count, 1)
+        self.assertIsNotNone(report.dat)
+        self.assertEqual(report.dat.status, "loaded")
+        self.assertIsNotNone(report.helper_leakage)
+        self.assertEqual(report.helper_leakage.status, "helper_leakage_clear")
+        timings = dict(report.stage_timings_seconds)
+        self.assertEqual(
+            set(timings),
+            {
+                "generated_ed_object_scan",
+                "compiled_dat_parse_summary_floor",
+                "helper_leakage",
+                "processor_logs",
+                "total",
+            },
+        )
+        self.assertGreaterEqual(timings["total"], timings["compiled_dat_parse_summary_floor"])
+        text = compiler_strategy.format_full_world_skeleton_compiled_validation_report(report)
+        self.assertIn("timing total:", text)
+
+    def test_full_world_skeleton_acceptance_reuses_physics_consolidation_preflight(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        original_builder = terrain_reconstruction.build_physics_shell_consolidation_index
+        original_candidates = terrain_reconstruction.physics_shell_candidates
+        original_analysis_loader = legacy_ed.load_legacy_ed_analysis_bundle
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            terrain_reconstruction,
+            "build_physics_shell_consolidation_index",
+            wraps=original_builder,
+        ) as consolidation_mock, mock.patch.object(
+            terrain_reconstruction,
+            "physics_shell_candidates",
+            wraps=original_candidates,
+        ) as candidates_mock, mock.patch.object(
+            legacy_ed,
+            "load_legacy_ed_analysis_bundle",
+            wraps=original_analysis_loader,
+        ) as analysis_loader_mock:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="PhysicsConsolidationReuseProbe",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="physics_consolidation_reuse.ed",
+                include_physics_shell_patch=True,
+                include_physics_shell_source_coverage=True,
+                physics_shell_max_polygons=8,
+                max_processor_polygons=256,
+            )
+
+        self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+        self.assertEqual(consolidation_mock.call_count, 1)
+        self.assertEqual(candidates_mock.call_count, 1)
+        self.assertEqual(analysis_loader_mock.call_count, 1)
+        self.assertGreater(report.model_count, 1)
+        self.assertTrue(any("reused the final balanced consolidated-group plan" in note for note in report.notes))
+        timings = dict(report.stage_timings_seconds)
+        self.assertIn("ed_emission.physics_shell_setup", timings)
+        self.assertIn("ed_emission.physics_shell_brush_construction", timings)
+        self.assertIn("ed_emission.physics_shell_serialization", timings)
+        self.assertIn("ed_emission.node_hierarchy", timings)
+        self.assertIn("ed_emission.wrapper_compression", timings)
+        self.assertIn("ed_emission.disk_write", timings)
+
+    def test_full_world_skeleton_acceptance_reuses_terrain_support_preflight_bundle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        original_builder = surrogate_ed._terrain_support_patch_brushes_for_brushes
+        original_parse = bsp.parse
+        original_analysis_loader = legacy_ed.load_legacy_ed_analysis_bundle
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            surrogate_ed,
+            "_terrain_support_patch_brushes_for_brushes",
+            wraps=original_builder,
+        ) as terrain_builder_mock, mock.patch.object(
+            bsp,
+            "parse",
+            wraps=original_parse,
+        ) as parse_mock, mock.patch.object(
+            legacy_ed,
+            "load_legacy_ed_analysis_bundle",
+            wraps=original_analysis_loader,
+        ) as analysis_loader_mock:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="TerrainPreflightReuseProbe",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="terrain_preflight_reuse.ed",
+                include_terrain_support_patch=True,
+                include_terrain_cutout_coverage=True,
+                include_terrain_support_source_coverage=True,
+                terrain_support_max_polygons=8,
+            )
+
+        self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+        self.assertEqual(terrain_builder_mock.call_count, 1)
+        self.assertEqual(parse_mock.call_count, 1)
+        self.assertEqual(analysis_loader_mock.call_count, 1)
+        self.assertGreater(report.model_count, 1)
+
+    def test_full_world_skeleton_acceptance_reuses_source_dat_parse(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        original_parse = bsp.parse
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bsp,
+            "parse",
+            wraps=original_parse,
+        ) as parse_mock:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="ParsedWorldReuseProbe",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="parsed_world_reuse.ed",
+            )
+
+        self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+        self.assertEqual(parse_mock.call_count, 1)
+        timings = dict(report.stage_timings_seconds)
+        self.assertEqual(
+            set(timings),
+            {
+                "source_parse_selection_preflight",
+                "terrain_cutout_coverage",
+                "ed_emission",
+                "ed_emission.node_hierarchy",
+                "ed_emission.wrapper_compression",
+                "ed_emission.disk_write",
+                "generated_ed_analysis",
+                "terrain_source_coverage",
+                "physics_source_coverage",
+                "roundtrip_validation",
+                "manual_plan_and_report",
+                "total",
+            },
+        )
+        self.assertGreaterEqual(timings["total"], timings["ed_emission"])
+        manifest = compiler_strategy.build_full_world_skeleton_acceptance_manifest(report)
+        self.assertEqual(set(manifest["timings_seconds"]), set(timings))
+        text = compiler_strategy.format_full_world_skeleton_acceptance_report(report)
+        self.assertIn("timing total:", text)
+
+    def test_sky_marker_preflight_measures_emission_builder_cost(self):
+        def surface(indices):
+            return legacy_ed_writer.LegacyEdSurface(
+                vertex_indices=indices,
+                plane_normal=(0.0, 1.0, 0.0),
+                plane_dist=0.0,
+            )
+
+        full_brushes = (
+            legacy_ed_writer.LegacyEdBrush(
+                points=((0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)),
+                surfaces=(surface((0, 1, 2)), surface((0, 2, 3))),
+            ),
+            legacy_ed_writer.LegacyEdBrush(
+                points=((2, 0, 0), (3, 0, 0), (2, 0, 1)),
+                surfaces=(surface((0, 1, 2)),),
+            ),
+        )
+        residue_brushes = (
+            legacy_ed_writer.LegacyEdBrush(
+                points=((4, 0, 0), (5, 0, 0), (4, 0, 1)),
+                surfaces=(surface((0, 1, 2)),),
+            ),
+        )
+
+        class FakeSurrogate:
+            @staticmethod
+            def _sky_marker_brushes_from_source_ed(_source_ed_path):
+                return full_brushes, (), (), ("full builder note",)
+
+            @staticmethod
+            def _sky_marker_residue_brushes_from_source_ed(
+                _source_ed_path,
+                *,
+                reference_dat_path,
+            ):
+                self.assertEqual(reference_dat_path, "reference.dat")
+                return residue_brushes, (), (), ("residue builder note",)
+
+        brush_count, polygon_count, point_count, notes, full_bundle, residue_bundle = (
+            compiler_strategy._preflight_sky_marker_brush_cost(
+                surrogate_module=FakeSurrogate,
+                source_ed_path="source.ed",
+                include_sky_marker_brushes=True,
+                include_sky_marker_residue_brushes=True,
+                residue_reference_dat_path="reference.dat",
+            )
+        )
+
+        self.assertEqual((brush_count, polygon_count, point_count), (3, 4, 10))
+        self.assertEqual(full_bundle[0], full_brushes)
+        self.assertEqual(residue_bundle[0], residue_brushes)
+        self.assertTrue(any("SkyMarker preflight measured 2" in note for note in notes))
+        self.assertTrue(any("SkyMarker residue preflight measured 1" in note for note in notes))
+
+        report = compiler_strategy.FullWorldSkeletonAcceptanceReport(
+            status="ready",
+            source_dat_path="source.dat",
+            preflight_generated_brush_count=3,
+            preflight_generated_polygon_count=4,
+            preflight_extra_brush_count=3,
+            preflight_extra_polygon_count=4,
+            preflight_sky_marker_brush_count=brush_count,
+            preflight_sky_marker_polygon_count=polygon_count,
+            preflight_sky_marker_point_count=point_count,
+        )
+        text = compiler_strategy.format_full_world_skeleton_acceptance_report(report)
+        manifest = compiler_strategy.build_full_world_skeleton_acceptance_manifest(report)
+        self.assertIn("preflight SkyMarker cost: brushes=3, polygons=4, points=10", text)
+        self.assertEqual(manifest["generation"]["preflight_sky_marker_brush_count"], 3)
+        self.assertEqual(manifest["generation"]["preflight_sky_marker_polygon_count"], 4)
+        self.assertEqual(manifest["generation"]["preflight_sky_marker_point_count"], 10)
+
     @staticmethod
     def _compiled_helper_world(entries):
         models = []
@@ -79,6 +346,44 @@ class CompilerStrategyTests(unittest.TestCase):
         self.assertEqual(by_id["lta_reader"].status, "partial")
         self.assertEqual(by_id["lithtech_pcworldpacker"].status, "missing")
         self.assertEqual(by_id["ltworldconverter"].status, "missing")
+
+    def test_dat_native_object_comparison_matches_anskramkeep_source_oracle(self):
+        dat_path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed_path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+
+        report = compiler_strategy.build_dat_native_object_comparison_report(
+            dat_path,
+            source_ed_path=source_ed_path,
+            generated_ed_path=source_ed_path,
+            class_names=("Door", "RotatingDoor", "Barrel", "DestructableBrush"),
+        )
+
+        self.assertEqual(report.status, "match")
+        self.assertEqual(report.dat_object_count, 1251)
+        by_class = {item.class_name: item for item in report.classes}
+        self.assertEqual(by_class["Door"].dat_count, 31)
+        self.assertEqual(by_class["RotatingDoor"].matched_name_count, 66)
+        self.assertEqual(by_class["Barrel"].property_mismatch_count, 0)
+        self.assertEqual(by_class["DestructableBrush"].status, "match")
+        manifest = compiler_strategy.build_dat_native_object_comparison_manifest(report)
+        self.assertEqual(manifest["kind"], "mm9_dat_native_object_comparison")
+        self.assertEqual(manifest["summary"]["source_object_count"], 4204)
+        self.assertIn("DAT-native object reconstruction comparison", compiler_strategy.format_dat_native_object_comparison_report(report))
+
+    def test_dat_native_object_comparison_flags_missing_generated_classes(self):
+        dat_path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed_path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+
+        report = compiler_strategy.build_dat_native_object_comparison_report(
+            dat_path,
+            source_ed_path=source_ed_path,
+            generated_ed_path=os.path.join(ROOT, "_missing_generated_anskramkeep.ed"),
+            class_names=("Door",),
+        )
+
+        self.assertEqual(report.status, "differences_found")
+        self.assertEqual(report.classes[0].generated_count, 0)
+        self.assertEqual(len(report.classes[0].generated_missing_names), 31)
 
     def test_full_v66_candidate_requires_all_derived_systems(self):
         compatible = compiler_strategy.evaluate_candidate(
@@ -998,7 +1303,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertEqual(report.group_name, "GeneratedUpperStaticCluster")
             self.assertEqual(report.selected_model_names, tuple(models))
             self.assertEqual(report.model_count, 9)
-            self.assertEqual(report.point_count, 333)
+            self.assertEqual(report.point_count, 312)
             self.assertEqual(report.polygon_count, 216)
             self.assertEqual(report.object_count, 12)
             self.assertEqual(report.object_property_count, 314)
@@ -1434,6 +1739,7 @@ class CompilerStrategyTests(unittest.TestCase):
         self.assertIn("aiRail_helpers=230", text)
         self.assertIn("candidate: AITrk", text)
 
+    @slow_dat_to_ed_test
     def test_sky_helper_reconstruction_report_identifies_bootcamp_sources(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -1468,6 +1774,7 @@ class CompilerStrategyTests(unittest.TestCase):
         self.assertIn("sky_marker_faces=156", text)
         self.assertIn("SkyPointer=1", text)
 
+    @slow_dat_to_ed_test
     def test_sky_marker_compiled_residue_report_identifies_bootcamp_target(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -1665,6 +1972,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertEqual(manifest["generation"]["sky_source_ed_path"], os.path.abspath(source_ed))
             self.assertEqual(manifest["generation"]["generated_object_class_counts"]["TOD_Sky"], 1)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_report_can_emit_door_objects(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -1717,6 +2025,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertEqual(manifest["generation"]["door_behavior_context"], "sparse_context_warning")
             self.assertEqual(manifest["generation"]["generated_object_class_counts"]["RotatingDoor"], 2)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_report_marks_door_source_support_context(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -2111,6 +2420,7 @@ class CompilerStrategyTests(unittest.TestCase):
             )
             self.assertEqual(manifest["generation"]["generated_object_class_counts"]["CandleProp"], 29)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_report_can_emit_brazier_objects(self):
         terrors = os.path.join(ROOT, "mm9_data", "WORLDS", "1000TERRORS.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "1000TERRORS.ED")
@@ -2319,6 +2629,7 @@ class CompilerStrategyTests(unittest.TestCase):
             )
             self.assertEqual(manifest["generation"]["generated_object_class_counts"]["DestructableProp"], 21)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_report_can_copy_sky_marker_brushes(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -2337,6 +2648,8 @@ class CompilerStrategyTests(unittest.TestCase):
                 include_sky_objects=True,
                 sky_source_ed_path=source_ed,
                 include_sky_marker_brushes=True,
+                max_processor_brushes=24,
+                max_processor_polygons=162,
                 max_models=512,
                 max_model_points=16384,
                 max_model_polygons=16384,
@@ -2352,6 +2665,11 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertEqual(report.model_count, 24)
             self.assertEqual(report.point_count, 228)
             self.assertEqual(report.polygon_count, 162)
+            self.assertEqual(report.preflight_sky_marker_brush_count, 23)
+            self.assertEqual(report.preflight_sky_marker_polygon_count, 156)
+            self.assertEqual(report.preflight_sky_marker_point_count, 220)
+            self.assertEqual(report.preflight_generated_brush_count, 24)
+            self.assertEqual(report.preflight_generated_polygon_count, 162)
             self.assertEqual(report.object_count, 30)
             self.assertEqual(report.object_property_count, 780)
             self.assertTrue(any("copied 23 Brush record(s) with 156 SkyMarker face(s)" in item for item in report.notes))
@@ -2367,6 +2685,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertTrue(manifest["generation"]["include_sky_marker_brushes"])
             self.assertEqual(manifest["generation"]["generated_object_class_counts"]["Brush"], 24)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_report_can_emit_sky_marker_residue_brushes(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -2386,6 +2705,8 @@ class CompilerStrategyTests(unittest.TestCase):
                 sky_source_ed_path=source_ed,
                 include_sky_marker_residue_brushes=True,
                 sky_marker_residue_reference_dat_path=bootcamp,
+                max_processor_brushes=24,
+                max_processor_polygons=33,
                 max_models=512,
                 max_model_points=16384,
                 max_model_polygons=16384,
@@ -2401,8 +2722,13 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertEqual(report.generated_object_class_counts["Brush"], 24)
             self.assertEqual(report.generated_object_class_counts["SkyPointer"], 1)
             self.assertEqual(report.model_count, 24)
-            self.assertEqual(report.point_count, 228)
+            self.assertEqual(report.point_count, 126)
             self.assertEqual(report.polygon_count, 33)
+            self.assertEqual(report.preflight_sky_marker_brush_count, 23)
+            self.assertEqual(report.preflight_sky_marker_polygon_count, 27)
+            self.assertEqual(report.preflight_sky_marker_point_count, 118)
+            self.assertEqual(report.preflight_generated_brush_count, 24)
+            self.assertEqual(report.preflight_generated_polygon_count, 33)
             self.assertEqual(report.object_count, 30)
             self.assertEqual(report.object_property_count, 780)
             self.assertTrue(any("23 diagnostic Brush record(s) with 27 matched SkyMarker face(s)" in item for item in report.notes))
@@ -2425,6 +2751,7 @@ class CompilerStrategyTests(unittest.TestCase):
             )
             self.assertEqual(manifest["generation"]["generated_object_class_counts"]["Brush"], 24)
 
+    @slow_dat_to_ed_test
     def test_sky_marker_residue_compile_audit_report_clears_matching_reference(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -2668,6 +2995,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertFalse(manifest["generation"]["include_trigger_helper_brushes"])
             self.assertEqual(manifest["generation"]["generated_object_class_counts"]["PortalZone"], 2)
 
+    @slow_dat_to_ed_test
     def test_collision_helper_reconstruction_report_identifies_anskramkeep_sources(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
@@ -2703,6 +3031,7 @@ class CompilerStrategyTests(unittest.TestCase):
         self.assertIn("InvisibleBrush=8", text)
         self.assertIn("PerceptionBrush=12", text)
 
+    @slow_dat_to_ed_test
     def test_trigger_helper_reconstruction_report_identifies_bootcamp_sources(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -2735,6 +3064,104 @@ class CompilerStrategyTests(unittest.TestCase):
         self.assertIn("trigger_helpers=2", text)
         self.assertIn("matched_objects=2", text)
         self.assertIn("PortalZone=2", text)
+
+    def test_helper_reconstruction_reports_use_dat_object_fallback_without_source_oracle(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(anskramkeep) or not os.path.exists(bootcamp):
+            self.skipTest("missing helper DAT fixture")
+
+        collision = compiler_strategy.build_collision_helper_reconstruction_report(
+            source_dat_path=anskramkeep,
+        )
+        trigger = compiler_strategy.build_trigger_helper_reconstruction_report(
+            source_dat_path=bootcamp,
+        )
+
+        self.assertEqual(collision.status, "collision_helper_reconstruction_report_built")
+        self.assertEqual(collision.source_object_count, 26)
+        self.assertEqual(collision.matched_object_count, 26)
+        self.assertEqual(collision.source_helper_brush_count, 0)
+        self.assertTrue(any("DAT-native collision helper object fallback" in item for item in collision.notes))
+        self.assertEqual(trigger.status, "trigger_helper_reconstruction_report_built")
+        self.assertEqual(trigger.source_object_count, 2)
+        self.assertEqual(trigger.matched_object_count, 2)
+        self.assertEqual(trigger.source_helper_brush_count, 0)
+        self.assertTrue(any("DAT-native PortalZone fallback" in item for item in trigger.notes))
+
+    @slow_dat_to_ed_test
+    def test_dat_to_ed_regression_matrix_covers_shipped_levels(self):
+        worlds_dir = os.path.join(ROOT, "mm9_data", "WORLDS")
+        report = compiler_strategy.build_dat_to_ed_regression_matrix_report(
+            worlds_dir,
+            levels=("BOOTCAMP", "ANSKRAMKEEP", "DRAGONSTADIUM"),
+        )
+
+        self.assertEqual(report.status, "matrix_built")
+        self.assertEqual(report.ready_count, 2)
+        self.assertEqual(report.inventory_only_count, 1)
+        by_stem = {item.stem: item for item in report.entries}
+        self.assertEqual(by_stem["BOOTCAMP"].dat_native_status, "match")
+        self.assertEqual(by_stem["ANSKRAMKEEP"].collision_helper_status, "collision_helper_reconstruction_report_built")
+        self.assertEqual(by_stem["DRAGONSTADIUM"].dat_native_status, "inventory_only")
+        self.assertGreater(by_stem["BOOTCAMP"].helper_model_counts["aiRail"], 0)
+        manifest = compiler_strategy.build_dat_to_ed_regression_matrix_manifest(report)
+        self.assertEqual(manifest["kind"], "mm9_dat_to_ed_regression_matrix")
+        self.assertIn("DAT to ED regression matrix", compiler_strategy.format_dat_to_ed_regression_matrix_report(report))
+
+    @slow_dat_to_ed_test
+    @unittest.expectedFailure
+    def test_isleofashes_terrain_support_stage_is_processor_budget_ready(self):
+        isle = os.path.join(ROOT, "mm9_data", "WORLDS", "ISLEOFASHES.DAT")
+        if not os.path.exists(isle):
+            self.skipTest(f"missing test level: {isle}")
+        with open(isle, "rb") as f:
+            world = bsp.parse(f.read())
+        models = terrain_semantics.default_dat_to_ed_model_names(world)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=isle,
+                model_names=models,
+                group_name="ISLEOFASHES_TerrainSupport",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="ISLEOFASHES_terrain_support_reconstructed.ed",
+                include_terrain_support_patch=True,
+                terrain_support_name_prefix="ISLEOFASHES_TerrainSupport",
+                terrain_support_selection_mode="multi_anchor_budget",
+                terrain_support_radius=4096.0,
+                terrain_support_brush_mode="single_polygon",
+                terrain_support_thickness=128.0,
+                terrain_support_max_polygons=max(1, 1500 - len(models)),
+                include_terrain_support_source_coverage=True,
+                terrain_support_source_coverage_sample_grid=1,
+                terrain_support_source_coverage_max_gaps=128,
+                include_airail_objects=True,
+                include_sky_objects=True,
+                include_sound_objects=True,
+                include_collision_helper_objects=True,
+                include_collision_helper_brushes=False,
+                include_trigger_helper_objects=True,
+                include_trigger_helper_brushes=False,
+                max_processor_brushes=1500,
+                max_processor_polygons=12000,
+                max_models=512,
+                max_model_points=16384,
+                max_model_polygons=16384,
+                max_total_points=65536,
+                max_total_polygons=65536,
+            )
+
+        self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+        self.assertEqual(report.model_count, 1500)
+        self.assertLessEqual(report.polygon_count, 12000)
+        self.assertIsNotNone(report.terrain_support_source_coverage)
+        self.assertEqual(
+            report.terrain_support_source_coverage.status,
+            "terrain_support_source_coverage_has_gaps",
+        )
+        self.assertGreater(report.terrain_support_source_coverage.missing_sample_count, 0)
+        self.assertTrue(any("Terrain support patches" in item for item in report.cautions))
 
     def test_gameplay_trigger_reconstruction_report_identifies_anskramkeep_sources(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
@@ -3116,6 +3543,303 @@ class CompilerStrategyTests(unittest.TestCase):
             (("PhysicsBSP", 4470), ("VisBSP", 4470)),
         )
 
+    def test_physics_shell_subset_plan_partitions_roles_and_records_processor_pressure(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "processor.log")
+            subset_log_path = os.path.join(tmp, "floor_000.log")
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "Processing ANSKRAMKEEP_subset.ed\n"
+                    "Found 7 problem brushes\n"
+                    "** Unable to generate a plane (0)\n"
+                    "** Unable to generate a plane (0)\n"
+                )
+            with open(subset_log_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "Processing ANSKRAMKEEP_floor_000.ed\n"
+                    "Number of input polies: 24\n"
+                    "Number of output polies: 24\n"
+                    "Done in 0.01 minutes\n"
+                )
+            report = compiler_strategy.build_physics_shell_subset_plan(
+                source_dat_path=anskramkeep,
+                work_dir=os.path.join(tmp, "plan"),
+                max_indices_per_batch=512,
+                processor_log_path=log_path,
+                processor_log_paths={("floor", 0): subset_log_path},
+            )
+            manifest = compiler_strategy.build_physics_shell_subset_plan_manifest(report)
+            manifest_path = compiler_strategy.write_physics_shell_subset_plan_manifest(
+                report,
+                os.path.join(tmp, "plan.json"),
+            )
+
+        self.assertEqual(report.status, "physics_shell_subset_plan_built")
+        self.assertEqual(report.processor_log_status, "loaded")
+        self.assertEqual(report.processor_problem_brush_count, 7)
+        self.assertEqual(report.processor_warning_count, 2)
+        self.assertGreater(report.source_polygon_count, 0)
+        self.assertGreater(report.valid_candidate_count, 0)
+        self.assertTrue(report.entries)
+        floor_entries = [entry for entry in report.entries if entry.role == "floor" and entry.batch_index == 0]
+        self.assertTrue(floor_entries)
+        self.assertEqual(floor_entries[0].validation_status, "passed")
+        self.assertEqual(floor_entries[0].processor_warning_count, 0)
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["entries"][0]["validation_status"], report.entries[0].validation_status)
+        self.assertEqual(manifest["kind"], "mm9_physics_shell_subset_plan")
+        self.assertEqual(manifest["batch_size"], 512)
+        self.assertTrue(os.path.isabs(manifest_path))
+        self.assertIn("PhysicsBSP shell subset plan", compiler_strategy.format_physics_shell_subset_plan(report))
+
+    def test_physics_shell_packing_experiment_generates_paired_manifests(self):
+        comparison = terrain_reconstruction.PhysicsShellPackingComparison(
+            balanced=terrain_reconstruction.PhysicsShellPackingPlan(
+                source_polygon_count=8,
+                generated_brush_count=6,
+                generated_face_count=40,
+            ),
+            cost_aware=terrain_reconstruction.PhysicsShellPackingPlan(
+                source_polygon_count=8,
+                generated_brush_count=4,
+                generated_face_count=28,
+            ),
+            candidate_count=32,
+            source_polygon_limit=8,
+            generated_face_budget=64,
+            preferred_validation_mode="cost_aware",
+            generated_brush_delta=-2,
+            generated_face_delta=-12,
+        )
+
+        def fake_acceptance(**kwargs):
+            mode = kwargs["physics_shell_packing_mode"]
+            return compiler_strategy.FullWorldSkeletonAcceptanceReport(
+                status="ready_for_manual_full_world_skeleton_test",
+                source_dat_path=kwargs["source_dat_path"],
+                generated_ed_path=os.path.join(
+                    kwargs["work_dir"],
+                    kwargs["output_filename"],
+                ),
+                work_dir=kwargs["work_dir"],
+                group_name=kwargs["group_name"],
+                include_physics_shell_patch=True,
+                physics_shell_packing_mode=mode,
+                physics_shell_packing_source_polygon_count=8,
+                physics_shell_packing_generated_brush_count=(6 if mode == "balanced" else 4),
+                physics_shell_packing_generated_face_count=(40 if mode == "balanced" else 28),
+                physics_shell_packing_comparison=(
+                    comparison if mode == "cost_aware" else None
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            compiler_strategy,
+            "build_full_world_skeleton_acceptance_report",
+            side_effect=fake_acceptance,
+        ) as acceptance_mock:
+            report = compiler_strategy.build_physics_shell_packing_experiment(
+                source_dat_path=os.path.join(tmp, "source.dat"),
+                model_names=("MonsterDoor1",),
+                work_dir=os.path.join(tmp, "experiment"),
+                output_stem="Anskram Keep",
+                acceptance_options={"physics_shell_max_polygons": 8},
+            )
+            with open(report.experiment_manifest_path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            balanced_manifest_exists = os.path.exists(report.balanced_manifest_path)
+            cost_aware_manifest_exists = os.path.exists(report.cost_aware_manifest_path)
+
+        self.assertEqual(report.status, "physics_shell_packing_experiment_ready")
+        self.assertEqual(report.output_stem, "Anskram_Keep")
+        self.assertEqual(acceptance_mock.call_count, 2)
+        calls_by_mode = {
+            item.kwargs["physics_shell_packing_mode"]: item.kwargs
+            for item in acceptance_mock.call_args_list
+        }
+        self.assertFalse(calls_by_mode["balanced"]["include_physics_shell_packing_comparison"])
+        self.assertTrue(calls_by_mode["cost_aware"]["include_physics_shell_packing_comparison"])
+        self.assertEqual(
+            calls_by_mode["balanced"]["physics_shell_max_polygons"],
+            calls_by_mode["cost_aware"]["physics_shell_max_polygons"],
+        )
+        self.assertEqual(manifest["kind"], "mm9_physics_shell_packing_experiment")
+        self.assertEqual(manifest["comparison"]["preferred_validation_mode"], "cost_aware")
+        self.assertEqual(manifest["runs"]["balanced"]["processor_status"], "not_run")
+        self.assertTrue(balanced_manifest_exists)
+        self.assertTrue(cost_aware_manifest_exists)
+        self.assertIn(
+            "PhysicsBSP shell packing experiment",
+            compiler_strategy.format_physics_shell_packing_experiment(report),
+        )
+
+    def test_packing_experiment_validation_ingests_paired_logs_and_updates_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            experiment_manifest = os.path.join(tmp, "probe_comparison.json")
+            with open(experiment_manifest, "w", encoding="utf-8") as handle:
+                json.dump({"kind": "mm9_physics_shell_packing_experiment"}, handle)
+            balanced_ed = os.path.join(tmp, "balanced.ed")
+            cost_ed = os.path.join(tmp, "cost_aware.ed")
+            balanced_dat = os.path.join(tmp, "balanced.dat")
+            cost_dat = os.path.join(tmp, "cost_aware.dat")
+            balanced_log = os.path.join(tmp, "balanced.log")
+            cost_log = os.path.join(tmp, "cost_aware.log")
+            for path in (balanced_dat, cost_dat, balanced_log, cost_log):
+                with open(path, "wb") as handle:
+                    handle.write(b"fixture")
+            acceptance = lambda mode, ed: compiler_strategy.FullWorldSkeletonAcceptanceReport(
+                status="ready_for_manual_full_world_skeleton_test",
+                source_dat_path=os.path.join(tmp, "source.dat"),
+                generated_ed_path=ed,
+                work_dir=tmp,
+                physics_shell_packing_mode=mode,
+            )
+            experiment = compiler_strategy.PhysicsShellPackingExperimentReport(
+                status="physics_shell_packing_experiment_ready",
+                source_dat_path=os.path.join(tmp, "source.dat"),
+                work_dir=tmp,
+                output_stem="probe",
+                balanced=acceptance("balanced", balanced_ed),
+                cost_aware=acceptance("cost_aware", cost_ed),
+                comparison=terrain_reconstruction.PhysicsShellPackingComparison(
+                    preferred_validation_mode="cost_aware"
+                ),
+                experiment_manifest_path=experiment_manifest,
+            )
+
+            def fake_compiled_validation(**kwargs):
+                cost_mode = kwargs["compiled_dat_path"] == cost_dat
+                manual = compiler_strategy.BlackBoxCompilerManualValidation(
+                    status="passed",
+                    fresh_load=True,
+                    visuals_ok=True,
+                    collision_ok=True,
+                )
+                return compiler_strategy.FullWorldSkeletonCompiledValidationReport(
+                    status="validated_in_game",
+                    generated_ed_path=kwargs["generated_ed_path"],
+                    compiled_dat_path=kwargs["compiled_dat_path"],
+                    dat=compiler_strategy.DatOutputSemanticSummary(
+                        path=kwargs["compiled_dat_path"],
+                        status="loaded",
+                        physics_bsp_present=True,
+                        physics_polygon_count=(120 if cost_mode else 100),
+                    ),
+                    processor_logs=(compiler_strategy.BlackBoxProcessorLogSummary(
+                        path=kwargs["processor_log_paths"][0],
+                        status="loaded",
+                        problem_brush_count=(1 if cost_mode else 3),
+                        warning_counts={"warning": 1 if cost_mode else 2},
+                    ),),
+                    manual_validation=manual,
+                )
+
+            def fake_source_coverage(**kwargs):
+                cost_mode = kwargs["compiled_dat_path"] == cost_dat
+                return compiler_strategy.PhysicsShellSourceCoverageReport(
+                    status="physics_shell_source_coverage_built",
+                    source_dat_path=kwargs["source_dat_path"],
+                    generated_ed_path=kwargs["generated_ed_path"],
+                    compiled_dat_path=kwargs["compiled_dat_path"],
+                    generated_source_polygon_count=2,
+                    compiled_matched_source_polygon_count=(2 if cost_mode else 1),
+                    compiled_unmatched_source_polygon_count=(0 if cost_mode else 1),
+                    source_polygon_diagnostics=(
+                        compiler_strategy.PhysicsShellSourcePolygonDiagnostic(
+                            source_polygon_index=1,
+                            role="floor",
+                            status="generated_compiled_match",
+                            reason="selected_for_shell_emission",
+                            area=10.0,
+                            generated_brush_names=("PhysicsShell_floor_0001",),
+                            compiled_match_count=1,
+                        ),
+                        compiler_strategy.PhysicsShellSourcePolygonDiagnostic(
+                            source_polygon_index=2,
+                            role="side_wall",
+                            status=(
+                                "generated_compiled_match"
+                                if cost_mode
+                                else "generated_compiled_missing"
+                            ),
+                            reason="selected_for_shell_emission",
+                            area=20.0,
+                            generated_brush_names=("PhysicsShell_side_wall_0002",),
+                            compiled_match_count=(1 if cost_mode else 0),
+                        ),
+                    ),
+                )
+
+            with mock.patch.object(
+                compiler_strategy,
+                "build_full_world_skeleton_compiled_validation_report",
+                side_effect=fake_compiled_validation,
+            ) as validation_mock, mock.patch.object(
+                compiler_strategy,
+                "build_physics_shell_source_coverage_report",
+                side_effect=fake_source_coverage,
+            ) as coverage_mock:
+                report = compiler_strategy.validate_physics_shell_packing_experiment(
+                    experiment,
+                    balanced_compiled_dat_path=balanced_dat,
+                    cost_aware_compiled_dat_path=cost_dat,
+                    balanced_processor_log_path=balanced_log,
+                    cost_aware_processor_log_path=cost_log,
+                )
+            with open(report.validation_manifest_path, "r", encoding="utf-8") as handle:
+                validation_manifest = json.load(handle)
+            with open(experiment_manifest, "r", encoding="utf-8") as handle:
+                updated_experiment_manifest = json.load(handle)
+
+        self.assertEqual(validation_mock.call_count, 2)
+        self.assertEqual(coverage_mock.call_count, 2)
+        self.assertEqual(report.status, "physics_shell_packing_validated_in_game")
+        self.assertEqual(report.recommended_mode, "cost_aware")
+        self.assertTrue(report.manual_comparison_complete)
+        self.assertEqual(validation_manifest["deltas"]["problem_brush_count"], -2)
+        self.assertEqual(validation_manifest["deltas"]["physics_polygon_count"], 20)
+        self.assertEqual(validation_manifest["deltas"]["retained_source_polygon_count"], 1)
+        self.assertEqual(validation_manifest["deltas"]["retained_source_area"], 20.0)
+        self.assertEqual(updated_experiment_manifest["validation"]["recommended_mode"], "cost_aware")
+        self.assertIn(
+            "PhysicsBSP shell packing experiment validation",
+            compiler_strategy.format_physics_shell_packing_experiment_validation(report),
+        )
+
+    def test_packing_experiment_validation_waits_for_both_compiled_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            experiment_manifest = os.path.join(tmp, "probe_comparison.json")
+            experiment = compiler_strategy.PhysicsShellPackingExperimentReport(
+                status="physics_shell_packing_experiment_ready",
+                source_dat_path=os.path.join(tmp, "source.dat"),
+                work_dir=tmp,
+                output_stem="probe",
+                balanced=compiler_strategy.FullWorldSkeletonAcceptanceReport(
+                    status="ready_for_manual_full_world_skeleton_test",
+                    source_dat_path=os.path.join(tmp, "source.dat"),
+                    generated_ed_path=os.path.join(tmp, "balanced.ed"),
+                ),
+                cost_aware=compiler_strategy.FullWorldSkeletonAcceptanceReport(
+                    status="ready_for_manual_full_world_skeleton_test",
+                    source_dat_path=os.path.join(tmp, "source.dat"),
+                    generated_ed_path=os.path.join(tmp, "cost_aware.ed"),
+                ),
+                experiment_manifest_path=experiment_manifest,
+            )
+            report = compiler_strategy.validate_physics_shell_packing_experiment(experiment)
+            validation_manifest_exists = os.path.exists(report.validation_manifest_path)
+
+        self.assertEqual(report.status, "awaiting_processor_outputs")
+        self.assertIn("balanced", report.blockers[0])
+        self.assertIn("cost_aware", report.blockers[0])
+        self.assertTrue(validation_manifest_exists)
+
+    @slow_dat_to_ed_test
+    @unittest.expectedFailure
     def test_anskramkeep_physics_shell_retest_report_compares_logs_and_manual_status(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
         if not os.path.exists(anskramkeep):
@@ -3196,6 +3920,65 @@ class CompilerStrategyTests(unittest.TestCase):
             [[0.0, -104.0, 16.0]],
         )
 
+    @slow_dat_to_ed_test
+    def test_anskramkeep_focused_shell_keeps_source_door_hierarchy(self):
+        dat_path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(dat_path):
+            self.skipTest(f"missing test level: {dat_path}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        with open(dat_path, "rb") as f:
+            parsed = bsp.parse(f.read())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=dat_path,
+                model_names=terrain_semantics.default_dat_to_ed_model_names(parsed),
+                group_name="ANSKRAMKEEP_FocusedDoorRegression",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="ANSKRAMKEEP_focused_door_regression.ed",
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="ANSKRAMKEEP_PhysicsShell",
+                physics_shell_max_polygons=64,
+                physics_shell_thickness=16.0,
+                physics_shell_focus_points=(compiler_strategy.ANSKRAMKEEP_BACK_START_POINT,),
+                physics_shell_focus_radius=512.0,
+                physics_shell_focus_budget=64,
+                physics_shell_focus_seed_radius=128.0,
+                include_door_objects=True,
+                door_source_ed_path=source_ed,
+                include_physics_shell_source_coverage=True,
+                block_unreconstructed_physics_shell=True,
+                max_processor_brushes=1500,
+                max_processor_polygons=12000,
+                max_models=512,
+                max_total_points=65536,
+                max_total_polygons=65536,
+            )
+
+            self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+            self.assertFalse(report.include_validation_floor)
+            self.assertGreater(report.generated_object_class_counts.get("Brush", 0), 100)
+            self.assertEqual(report.generated_object_class_counts.get("Door"), 31)
+            self.assertEqual(report.generated_object_class_counts.get("RotatingDoor"), 66)
+            scan = legacy_ed.load_legacy_ed_object_scan_report(report.generated_ed_path)
+            self.assertEqual(scan.class_counts.get("Door"), 31)
+            self.assertEqual(scan.class_counts.get("RotatingDoor"), 66)
+            layout = legacy_ed.load_legacy_ed_node_layout_report(report.generated_ed_path)
+            self.assertFalse(any("ValidationFloor" in name for name in layout.brush_names))
+            scene = legacy_ed.load_legacy_ed_geometry_scene(report.generated_ed_path)
+            self.assertTrue(all(
+                len(model.points) == len(set(model.points))
+                for model in scene.mesh_models()
+            ))
+            self.assertTrue(any(
+                "copied source child Brush records for 93/97" in item
+                for item in report.notes
+            ))
+            self.assertTrue(any("focused selector" in item for item in report.notes))
+
     def test_full_world_skeleton_acceptance_report_generates_multi_cluster_world(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         if not os.path.exists(bootcamp):
@@ -3239,7 +4022,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertTrue(report.include_validation_floor)
             self.assertEqual(report.selected_model_names, tuple(models))
             self.assertEqual(report.model_count, 22)
-            self.assertEqual(report.point_count, 830)
+            self.assertEqual(report.point_count, 724)
             self.assertEqual(report.polygon_count, 498)
             self.assertEqual(report.object_count, 25)
             self.assertEqual(report.object_property_count, 678)
@@ -3297,7 +4080,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertFalse(report.include_validation_floor)
             self.assertEqual(report.selected_model_names, tuple(models))
             self.assertEqual(report.model_count, 22)
-            self.assertEqual(report.point_count, 3402)
+            self.assertEqual(report.point_count, 3218)
             self.assertEqual(report.polygon_count, 4572)
             self.assertEqual(report.object_count, 25)
             self.assertEqual(report.object_property_count, 678)
@@ -3362,7 +4145,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertTrue(report.include_terrain_support_patch)
             self.assertEqual(report.selected_model_names, tuple(models))
             self.assertEqual(report.model_count, 68)
-            self.assertEqual(report.point_count, 1104)
+            self.assertEqual(report.point_count, 998)
             self.assertEqual(report.polygon_count, 727)
             self.assertEqual(report.object_count, 71)
             self.assertEqual(report.object_property_count, 1966)
@@ -3484,6 +4267,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertIn("full_world_skeleton_static_shell_unreconstructed", text)
             self.assertIn("PhysicsBSP", text)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_report_generates_budgeted_physics_shell_patch(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         if not os.path.exists(bootcamp):
@@ -3501,6 +4285,7 @@ class CompilerStrategyTests(unittest.TestCase):
                 physics_shell_max_polygons=4,
                 physics_shell_thickness=16.0,
                 include_physics_shell_source_coverage=True,
+                compiled_dat_path=bootcamp,
                 block_unreconstructed_physics_shell=True,
                 max_processor_brushes=16,
                 max_processor_polygons=128,
@@ -3512,7 +4297,8 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
             self.assertTrue(report.include_physics_shell_patch)
             self.assertEqual(report.model_count, 5)
-            self.assertEqual(report.point_count, 156)
+            # Per-Brush normalization welds shared slab coordinates.
+            self.assertEqual(report.point_count, 124)
             self.assertEqual(report.polygon_count, 88)
             self.assertEqual(report.object_count, 8)
             self.assertEqual(report.object_property_count, 202)
@@ -3527,6 +4313,24 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertEqual(report.physics_shell_source_coverage.source_polygon_count, 8540)
             self.assertEqual(report.physics_shell_source_coverage.generated_source_polygon_count, 4)
             self.assertEqual(report.physics_shell_source_coverage.uncovered_source_polygon_count, 8536)
+            self.assertGreaterEqual(
+                report.physics_shell_source_coverage.compiled_matched_source_polygon_count,
+                4,
+            )
+            self.assertGreaterEqual(
+                dict(report.physics_shell_source_coverage.loss_class_counts).get(
+                    "survived_compilation", 0
+                ),
+                4,
+            )
+            self.assertEqual(
+                report.physics_shell_source_coverage.compiled_unmatched_source_polygon_count,
+                0,
+            )
+            self.assertEqual(
+                dict(report.physics_shell_source_coverage.diagnostic_status_counts)["emitted_ed"],
+                4,
+            )
             by_role = {
                 item.role: item
                 for item in report.physics_shell_source_coverage.role_summaries
@@ -3539,8 +4343,25 @@ class CompilerStrategyTests(unittest.TestCase):
             with open(report.physics_shell_source_coverage_manifest_path, "r", encoding="utf-8") as f:
                 coverage_manifest = json.load(f)
             self.assertEqual(coverage_manifest["kind"], "mm9_physics_shell_source_coverage")
-            self.assertEqual(coverage_manifest["schema_version"], 2)
+            self.assertEqual(coverage_manifest["schema_version"], 7)
+            self.assertGreaterEqual(
+                coverage_manifest["loss_class_counts"].get("survived_compilation", 0),
+                4,
+            )
             self.assertEqual(coverage_manifest["generated_source_polygon_count"], 4)
+            self.assertEqual(
+                sum(coverage_manifest["diagnostic_status_counts"].values()),
+                coverage_manifest["source_polygon_count"],
+            )
+            self.assertEqual(
+                len(coverage_manifest["source_polygon_diagnostics"]),
+                coverage_manifest["source_polygon_count"],
+            )
+            self.assertTrue(all(
+                item.get("loss_class") == "survived_compilation"
+                for item in coverage_manifest["source_polygon_diagnostics"]
+                if item["status"] == "emitted_ed"
+            ))
             attributions = coverage_manifest["generated_brush_attributions"]
             self.assertEqual(len(attributions), 4)
             self.assertEqual(
@@ -3587,6 +4408,7 @@ class CompilerStrategyTests(unittest.TestCase):
                 "PhysicsShellProbe_side_wall_0012",
                 "PhysicsShellProbe_helper_special_0013",
                 "PhysicsShellProbe_0014",
+                "PhysicsShellProbe_floor_0016p0017_4",
                 "Unrelated_0015",
             ),
             "PhysicsShellProbe",
@@ -3598,9 +4420,80 @@ class CompilerStrategyTests(unittest.TestCase):
                 ("PhysicsShellProbe_side_wall_0012", 12),
                 ("PhysicsShellProbe_helper_special_0013", 13),
                 ("PhysicsShellProbe_0014", 14),
+                ("PhysicsShellProbe_floor_0016p0017_4", 16),
+                ("PhysicsShellProbe_floor_0016p0017_4", 17),
             ),
         )
 
+    @slow_dat_to_ed_test
+    def test_physics_shell_coverage_builds_ranked_playable_hotspots(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        with open(bootcamp, "rb") as f:
+            parsed = bsp.parse(f.read())
+        physics_model = terrain_semantics.model_by_name(parsed.world_models, "PhysicsBSP")
+        if physics_model is None or not physics_model.polygons:
+            self.skipTest("missing PhysicsBSP probe polygon")
+        polygon = physics_model.polygons[0]
+        points = tuple(physics_model.points[index] for index in polygon.vertex_indices)
+        anchor = tuple(sum(point[axis] for point in points) / len(points) for axis in range(3))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            acceptance = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="GeneratedPhysicsShellHotspotProbe",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="physics_shell_hotspot_probe.ed",
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="PhysicsShellHotspotProbe",
+                physics_shell_max_polygons=4,
+                block_unreconstructed_physics_shell=True,
+                max_processor_brushes=16,
+                max_processor_polygons=128,
+                max_models=8,
+                max_total_points=512,
+                max_total_polygons=512,
+            )
+            subset_plan = compiler_strategy.build_physics_shell_subset_plan(
+                source_dat_path=bootcamp,
+                max_indices_per_batch=4096,
+                max_generated_faces_per_batch=4096,
+            )
+            report = compiler_strategy.build_physics_shell_source_coverage_report(
+                source_dat_path=bootcamp,
+                generated_ed_path=acceptance.generated_ed_path,
+                physics_model_name="PhysicsBSP",
+                generated_shell_name_prefix="PhysicsShellHotspotProbe",
+                source_polygon_budget=4,
+                hotspot_anchor_points=(("ProbeAnchor", "test", anchor),),
+                hotspot_radius=256.0,
+                subset_plan=subset_plan,
+            )
+            manifest = compiler_strategy._physics_shell_source_coverage_manifest(report)
+            text = compiler_strategy.format_physics_shell_source_coverage_report(report)
+
+        self.assertEqual(report.status, "physics_shell_source_coverage_has_gaps")
+        self.assertTrue(report.coverage_hotspots)
+        hotspot = report.coverage_hotspots[0]
+        self.assertEqual(hotspot.name, "ProbeAnchor")
+        self.assertEqual(hotspot.anchor_kind, "test")
+        self.assertGreater(hotspot.source_polygon_count, 0)
+        self.assertEqual(sum(dict(hotspot.status_counts).values()), hotspot.source_polygon_count)
+        self.assertEqual(report.subset_plan_status, "physics_shell_subset_plan_built")
+        self.assertGreater(dict(report.subset_validation_status_counts).get("not_run", 0), 0)
+        self.assertIn("coverage_hotspots", manifest)
+        self.assertIn("loss_class_counts", manifest)
+        self.assertGreater(
+            dict(report.loss_class_counts).get("compiled_match_not_checked", 0),
+            0,
+        )
+        self.assertIn("loss classes:", text)
+        self.assertIn("hotspot ProbeAnchor", text)
+
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_can_probe_requested_physics_shell_polygons(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         if not os.path.exists(bootcamp):
@@ -3642,6 +4535,129 @@ class CompilerStrategyTests(unittest.TestCase):
                 for item in report.notes
             ))
 
+    @slow_dat_to_ed_test
+    def test_full_world_skeleton_acceptance_supports_opt_in_cost_aware_shell_packing(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="GeneratedCostAwarePhysicsShell",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="physics_shell_cost_aware.ed",
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="PhysicsShellCostAware",
+                physics_shell_max_polygons=8,
+                physics_shell_packing_mode="cost_aware",
+                include_physics_shell_packing_comparison=True,
+                block_unreconstructed_physics_shell=True,
+                max_processor_brushes=16,
+                max_processor_polygons=128,
+                max_models=8,
+                max_total_points=512,
+                max_total_polygons=512,
+            )
+
+            self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+            self.assertEqual(report.physics_shell_packing_mode, "cost_aware")
+            self.assertGreater(report.physics_shell_packing_source_polygon_count, 0)
+            self.assertGreater(report.physics_shell_packing_generated_brush_count, 0)
+            self.assertGreater(report.physics_shell_packing_generated_face_count, 0)
+            self.assertTrue(any("cost-aware packing" in item for item in report.notes))
+            self.assertIsNotNone(report.physics_shell_packing_comparison)
+            manifest = compiler_strategy.build_full_world_skeleton_acceptance_manifest(report)
+            self.assertEqual(
+                manifest["generation"]["physics_shell_packing_mode"],
+                "cost_aware",
+            )
+            comparison = manifest["generation"]["physics_shell_packing_comparison"]
+            self.assertIn(comparison["preferred_validation_mode"], {"balanced", "cost_aware", "equivalent"})
+            self.assertIn("selected_source_polygon_indices", comparison["balanced"])
+            self.assertIn("selected_source_polygon_indices", comparison["cost_aware"])
+
+    @slow_dat_to_ed_test
+    def test_cost_aware_shell_packing_records_role_and_playable_bias_inputs(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="GeneratedCostAwareTuning",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="physics_shell_cost_aware_tuning.ed",
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="PhysicsShellCostAwareTuning",
+                physics_shell_max_polygons=8,
+                physics_shell_packing_mode="cost_aware",
+                physics_shell_packing_role_weights={"side_wall": 2.0, "floor": 3.0},
+                physics_shell_packing_playable_importance_weight=1.25,
+                physics_shell_focus_points=((0.0, 0.0, 0.0),),
+                physics_shell_focus_radius=1024.0,
+                block_unreconstructed_physics_shell=True,
+                max_processor_brushes=16,
+                max_processor_polygons=128,
+                max_models=8,
+                max_total_points=512,
+                max_total_polygons=512,
+            )
+
+            self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+            self.assertEqual(report.physics_shell_packing_playable_importance_weight, 1.25)
+            self.assertEqual(dict(report.physics_shell_packing_role_weights)["side_wall"], 2.0)
+            self.assertEqual(dict(report.physics_shell_packing_role_weights)["floor"], 3.0)
+            self.assertTrue(any("role weights" in item for item in report.notes))
+            manifest = compiler_strategy.build_full_world_skeleton_acceptance_manifest(report)
+            self.assertEqual(
+                manifest["generation"]["physics_shell_packing_role_weights"]["side_wall"],
+                2.0,
+            )
+            self.assertEqual(
+                manifest["generation"]["physics_shell_packing_playable_importance_weight"],
+                1.25,
+            )
+
+    @slow_dat_to_ed_test
+    def test_full_world_skeleton_acceptance_records_explicit_protected_voids(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        protected_bounds = (((1.0e9, 1.0e9, 1.0e9), (1.0e9 + 1.0, 1.0e9 + 1.0, 1.0e9 + 1.0)),)
+        with tempfile.TemporaryDirectory() as tmp:
+            report = compiler_strategy.build_full_world_skeleton_acceptance_report(
+                source_dat_path=bootcamp,
+                model_names=["MonsterDoor1"],
+                group_name="GeneratedProtectedVoidProbe",
+                work_dir=os.path.join(tmp, "run"),
+                output_filename="physics_shell_protected_void.ed",
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="PhysicsShellProtectedVoid",
+                physics_shell_max_polygons=8,
+                physics_shell_protected_bounds=protected_bounds,
+                physics_shell_protected_roles=("side_wall",),
+                block_unreconstructed_physics_shell=True,
+                max_processor_brushes=16,
+                max_processor_polygons=128,
+                max_models=8,
+                max_total_points=512,
+                max_total_polygons=512,
+            )
+
+            self.assertEqual(report.status, "ready_for_manual_full_world_skeleton_test")
+            self.assertEqual(report.physics_shell_protected_void_count, 1)
+            self.assertEqual(report.physics_shell_protected_roles, ("side_wall",))
+            self.assertTrue(any("explicit protected void bounds" in item for item in report.notes))
+            manifest = compiler_strategy.build_full_world_skeleton_acceptance_manifest(report)
+            self.assertEqual(manifest["generation"]["physics_shell_protected_void_count"], 1)
+            self.assertEqual(manifest["generation"]["physics_shell_protected_roles"], ["side_wall"])
+
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_acceptance_caps_physics_shell_by_generated_face_budget(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         if not os.path.exists(bootcamp):
@@ -3670,10 +4686,14 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertLessEqual(report.polygon_count, report.max_processor_polygons)
             self.assertTrue(any("32 -> 2" in item for item in report.notes))
 
+    @slow_dat_to_ed_test
     def test_anskramkeep_ui_physics_shell_budget_caps_to_validated_airail_candidate(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
         if not os.path.exists(anskramkeep):
             self.skipTest(f"missing test level: {anskramkeep}")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
 
         with open(anskramkeep, "rb") as f:
             parsed = bsp.parse(f.read())
@@ -3699,7 +4719,25 @@ class CompilerStrategyTests(unittest.TestCase):
                 requested_source_polygon_count=ui_requested_shell_polygons,
                 generated_polygon_budget=12000 - selected_polygon_count,
             ),
-            841,
+            1003,
+        )
+        door_clearance_bounds = surrogate_ed._source_door_clearance_bounds_from_source_ed(
+            source_ed,
+            candidate_names=selected_names,
+        )
+        self.assertEqual(
+            compiler_strategy._budgeted_physics_shell_source_polygon_count(
+                parsed,
+                "PhysicsBSP",
+                requested_source_polygon_count=ui_requested_shell_polygons,
+                generated_polygon_budget=12000 - selected_polygon_count,
+                focus_points=((0.0, -104.0, 16.0),),
+                focus_radius=512.0,
+                focus_budget=512,
+                focus_seed_radius=128.0,
+                door_clearance_bounds=door_clearance_bounds,
+            ),
+            1090,
         )
 
     def test_terrain_cutout_coverage_report_identifies_building_footprints(self):

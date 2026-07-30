@@ -10,10 +10,43 @@ from core import bsp
 from features.dat_editing import legacy_ed
 from features.dat_editing import legacy_ed_writer
 from features.dat_editing import surrogate_ed
+from features.dat_editing import terrain_reconstruction
 from features.dat_editing import terrain_semantics
 
 
+RUN_SLOW_DAT_TO_ED_TESTS = os.environ.get("MM9_RUN_SLOW_DAT_TO_ED_TESTS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+slow_dat_to_ed_test = unittest.skipUnless(
+    RUN_SLOW_DAT_TO_ED_TESTS,
+    "slow real-level DAT-to-ED regression; set MM9_RUN_SLOW_DAT_TO_ED_TESTS=1 to run",
+)
+
+
 class SurrogateEdTests(unittest.TestCase):
+    def test_dat_native_object_converter_is_class_agnostic(self):
+        dat_path = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        with open(dat_path, "rb") as f:
+            data = f.read()
+
+        specs, notes = surrogate_ed.dat_native_object_specs_from_dat_bytes(
+            data,
+            class_names=("Barrel", "DestructableBrush"),
+        )
+
+        self.assertEqual({item.class_name for item in specs}, {"Barrel", "DestructableBrush"})
+        self.assertEqual(sum(item.class_name == "Barrel" for item in specs), 4)
+        self.assertEqual(sum(item.class_name == "DestructableBrush" for item in specs), 6)
+        barrel = next(item for item in specs if item.class_name == "Barrel")
+        properties = {item.name: item for item in barrel.properties}
+        self.assertEqual(properties["Name"].value, barrel.name)
+        self.assertIn("Filename", properties)
+        self.assertEqual(barrel.source_model_name, "")
+        self.assertTrue(any("outside the requested class filter" in note for note in notes))
+
     def test_clean_legacy_ed_writer_builds_direct_root_prefab(self):
         brush = legacy_ed_writer.LegacyEdBrush(
             points=(
@@ -65,6 +98,64 @@ class SurrogateEdTests(unittest.TestCase):
         )
         self.assertEqual(layout.node_layout_kind, "direct_root_brush_nodes")
         self.assertEqual(layout.brush_names, ("CoreBrush",))
+
+    def test_legacy_ed_writer_welds_dedit_near_duplicate_brush_points(self):
+        brush = legacy_ed_writer.LegacyEdBrush(
+            points=(
+                (0.0, 0.0, 0.0),
+                (0.005, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (0.0, 0.0, 1.0),
+            ),
+            surfaces=(
+                legacy_ed_writer.LegacyEdSurface(
+                    vertex_indices=(0, 2, 3),
+                    plane_normal=(0.0, 1.0, 0.0),
+                    plane_dist=0.0,
+                ),
+                legacy_ed_writer.LegacyEdSurface(
+                    vertex_indices=(1, 3, 2),
+                    plane_normal=(0.0, -1.0, 0.0),
+                    plane_dist=0.0,
+                ),
+            ),
+        )
+
+        normalized = legacy_ed_writer.normalize_brush_points(brush)
+        generated = legacy_ed_writer.build_raw_brush_stream((brush,))
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="welded_writer.ed",
+        )
+
+        self.assertEqual(len(normalized.points), 3)
+        self.assertEqual(normalized.surfaces[0].vertex_indices, (0, 1, 2))
+        self.assertEqual(normalized.surfaces[1].vertex_indices, (0, 2, 1))
+        self.assertEqual(len(scene.mesh_models()[0].points), 3)
+        self.assertEqual(len(set(scene.mesh_models()[0].points)), 3)
+
+    def test_legacy_ed_writer_removes_compiled_boundary_residue(self):
+        brush = legacy_ed_writer.LegacyEdBrush(
+            points=(
+                (0.0, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (0.0, 0.0, 1.0),
+                (0.5, 0.0, 0.0),
+                (0.0, 0.0, 0.5),
+            ),
+            surfaces=(
+                legacy_ed_writer.LegacyEdSurface(
+                    vertex_indices=(0, 1, 2, 0, 3, 1, 2, 4),
+                    plane_normal=(0.0, 1.0, 0.0),
+                    plane_dist=0.0,
+                ),
+            ),
+        )
+
+        normalized = legacy_ed_writer.normalize_brush_points(brush)
+
+        self.assertEqual(len(normalized.points), 3)
+        self.assertEqual(normalized.surfaces[0].vertex_indices, (0, 1, 2, 0, 1, 2))
 
     def test_airail_object_property_template_matches_source_shape(self):
         properties = legacy_ed_writer.airail_object_properties(
@@ -363,6 +454,56 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(light["item"]["class_name"], "Light")
         self.assertEqual(light["item"]["properties"]["Name"], "Light0")
         self.assertEqual(len(light["item"]["properties"]), 11)
+
+    def test_full_world_skeleton_reuses_precomputed_sky_marker_bundle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        brush = legacy_ed_writer.LegacyEdBrush(
+            name="PrecomputedSkyMarker",
+            points=((0.0, 0.0, 0.0), (64.0, 0.0, 0.0), (0.0, 0.0, 64.0)),
+            surfaces=(legacy_ed_writer.LegacyEdSurface(
+                vertex_indices=(0, 1, 2),
+                plane_normal=(0.0, 1.0, 0.0),
+                plane_dist=0.0,
+                texture_name="TEXTURES\\LevelTextures\\Misc\\SkyMarker.dtx",
+            ),),
+        )
+        summary = surrogate_ed.SurrogateEdModelSummary(
+            name=brush.name,
+            status="written",
+            point_count=3,
+            polygon_count=1,
+            texture_count=1,
+        )
+        bundle = (
+            (brush,),
+            (summary,),
+            (legacy_ed_writer.full_world_brush_node_properties(brush.name),),
+            ("precomputed SkyMarker bundle reused",),
+        )
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            include_sky_marker_brushes=True,
+            sky_source_ed_path="missing-source-oracle.ed",
+            _precomputed_sky_marker_brush_bundle=bundle,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 2)
+        self.assertEqual(report.polygon_count, 7)
+        self.assertTrue(any("precomputed SkyMarker bundle reused" in note for note in report.notes))
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="precomputed_sky_marker.ed",
+        )
+        self.assertTrue(any("PrecomputedSkyMarker" in name for name in layout.brush_names))
 
     def test_full_world_skeleton_can_emit_airail_objects_from_source_oracle(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
@@ -886,6 +1027,7 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(layout.root_child_count, 33)
         self.assertEqual(layout.group_child_count, 1)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_can_emit_brazier_objects_from_source_oracle(self):
         terrors = os.path.join(ROOT, "mm9_data", "WORLDS", "1000TERRORS.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "1000TERRORS.ED")
@@ -1143,6 +1285,7 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(layout.root_child_count, 25)
         self.assertEqual(layout.group_child_count, 1)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_can_copy_sky_marker_brushes_from_source_oracle(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -1225,6 +1368,7 @@ class SurrogateEdTests(unittest.TestCase):
             texture_flag_counts[flags] = texture_flag_counts.get(flags, 0) + 1
         self.assertEqual(texture_flag_counts, {0: 33, 1: 123})
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_can_emit_sky_marker_residue_brushes_from_reference(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -1249,7 +1393,7 @@ class SurrogateEdTests(unittest.TestCase):
 
         self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
         self.assertEqual(report.model_count, 24)
-        self.assertEqual(report.point_count, 228)
+        self.assertEqual(report.point_count, 126)
         self.assertEqual(report.polygon_count, 33)
         self.assertEqual(report.object_count, 30)
         self.assertEqual(report.object_property_count, 780)
@@ -1571,6 +1715,71 @@ class SurrogateEdTests(unittest.TestCase):
         ]
         self.assertEqual(helper_faces, [])
 
+    def test_full_world_skeleton_uses_dat_native_helper_objects_without_source_oracle(self):
+        bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
+        if not os.path.exists(bootcamp):
+            self.skipTest(f"missing test level: {bootcamp}")
+
+        with open(bootcamp, "rb") as f:
+            data = f.read()
+
+        generated, report = surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+            data,
+            source_path=bootcamp,
+            model_names=["MonsterDoor1"],
+            group_name="GeneratedDatNativeHelperProbe",
+            include_airail_objects=True,
+            include_sky_objects=True,
+            include_sound_objects=True,
+            include_collision_helper_objects=True,
+            include_collision_helper_brushes=False,
+            include_trigger_helper_objects=True,
+            include_trigger_helper_brushes=False,
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.model_count, 1)
+        self.assertTrue(any("DAT object matches=15" in item for item in report.notes))
+        self.assertTrue(any("DAT object matches=2" in item for item in report.notes))
+        self.assertTrue(any("AmbientSound DAT object fallback loaded 20" in item for item in report.notes))
+        self.assertTrue(any("Sky DAT object fallback loaded 3" in item for item in report.notes))
+
+        object_scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="bootcamp_dat_native_helper_probe.ed",
+        )
+        self.assertEqual(object_scan.class_counts["AIRail"], 72)
+        self.assertEqual(object_scan.class_counts["AmbientSound"], 20)
+        self.assertEqual(object_scan.class_counts["PortalZone"], 2)
+        self.assertEqual(object_scan.class_counts["TOD_Sky"], 1)
+        self.assertEqual(object_scan.class_counts["SkyPointer"], 1)
+        self.assertEqual(object_scan.class_counts["DemoSkyWorldModel"], 1)
+        self.assertEqual(object_scan.class_counts["InvisibleBrush"], 5)
+        self.assertEqual(object_scan.class_counts["PerceptionBrush"], 6)
+        self.assertEqual(object_scan.class_counts["Ladder"], 3)
+        self.assertEqual(object_scan.class_counts["WorldObject"], 1)
+        helper_by_name = {
+            str(record.property_value("Name")): record
+            for record in object_scan.records
+            if record.class_name in {"PortalZone", "AmbientSound", "InvisibleBrush"}
+        }
+        self.assertEqual(helper_by_name["Tavernzone"].property_value("PortalName"), "Tavernportal")
+        self.assertEqual(helper_by_name["InvisibleBrush0"].property_value("Solid"), True)
+        self.assertTrue(str(helper_by_name["beachsound1"].property_value("Filename")))
+
+        scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
+            generated,
+            source_path="bootcamp_dat_native_helper_probe.ed",
+        )
+        helper_faces = [
+            face for model in scene.models for face in model.faces
+            if any(
+                texture in face.material_name.lower()
+                for texture in ("greenscreen.dtx", "invisible.dtx", "firethrough.dtx", "soundonly.dtx", "rail.dtx")
+            )
+        ]
+        self.assertEqual(helper_faces, [])
+
     def test_full_world_skeleton_can_add_budgeted_physics_shell_slabs(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         if not os.path.exists(bootcamp):
@@ -1597,7 +1806,7 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
         self.assertEqual(len(shell_summaries), 4)
         self.assertEqual(report.model_count, 5)
-        self.assertEqual(report.point_count, 156)
+        self.assertEqual(report.point_count, 124)
         self.assertEqual(report.polygon_count, 88)
         self.assertEqual(report.object_count, 8)
         self.assertEqual(report.object_property_count, 202)
@@ -1665,6 +1874,7 @@ class SurrogateEdTests(unittest.TestCase):
         ))
         self.assertGreater(len(generated), 0)
 
+    @slow_dat_to_ed_test
     def test_anskramkeep_no_helper_physics_shell_candidate_baseline(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
         if not os.path.exists(anskramkeep):
@@ -1697,30 +1907,158 @@ class SurrogateEdTests(unittest.TestCase):
         ]
 
         self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
-        self.assertEqual(len(shell_summaries), 864)
-        self.assertEqual(report.model_count, 970)
-        self.assertEqual(report.point_count, 19438)
-        self.assertEqual(report.polygon_count, 11695)
-        self.assertEqual(report.object_count, 973)
-        self.assertEqual(report.object_property_count, 27222)
-        self.assertTrue(any("PhysicsBSP shell patch emitted 864/6442" in item for item in report.notes))
-        self.assertTrue(any("side_wall=625, floor=164, ceiling=75, helper/special=0" in item for item in report.notes))
-        self.assertTrue(any("invalid=8, non-closed=80" in item for item in report.notes))
+        self.assertEqual(len(shell_summaries), 757)
+        self.assertEqual(report.model_count, 863)
+        self.assertEqual(report.point_count, 11737)
+        self.assertEqual(report.polygon_count, 10014)
+        self.assertEqual(report.object_count, 866)
+        self.assertEqual(report.object_property_count, 24226)
+        self.assertTrue(any("PhysicsBSP shell patch emitted 757/6442" in item for item in report.notes))
+        self.assertTrue(any("864 source polygon(s) in 757 brush(es)" in item for item in report.notes))
+        self.assertTrue(any("side_wall=617, floor=169, ceiling=78, helper/special=0" in item for item in report.notes))
+        self.assertTrue(any("invalid=8, non-closed=71" in item for item in report.notes))
 
         scene = legacy_ed.legacy_ed_bytes_to_geometry_scene(
             generated,
             source_path="ANSKRAMKEEP_no_helper_physics_shell.ed",
         )
-        self.assertEqual(scene.metadata["recovered_brush_count"], 970)
-        self.assertEqual(scene.metadata["recovered_polygon_count"], 11695)
-        self.assertEqual(scene.metadata["recovered_object_count"], 973)
-        self.assertEqual(scene.metadata["object_class_counts"]["Brush"], 970)
+        self.assertEqual(scene.metadata["recovered_brush_count"], 863)
+        self.assertEqual(scene.metadata["recovered_polygon_count"], 10014)
+        self.assertEqual(scene.metadata["recovered_object_count"], 866)
+        self.assertEqual(scene.metadata["object_class_counts"]["Brush"], 863)
+        self.assertEqual(sum(len(model.points) for model in scene.mesh_models()), report.point_count)
+        self.assertTrue(all(len(model.points) == len(set(model.points)) for model in scene.mesh_models()))
         rail_faces = [
             face for model in scene.models for face in model.faces
             if "rail.dtx" in face.material_name.lower()
         ]
         self.assertEqual(rail_faces, [])
 
+    @slow_dat_to_ed_test
+    def test_anskramkeep_stair_assembly_reservation_is_atomic(self):
+        anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
+        if not os.path.exists(anskramkeep):
+            self.skipTest(f"missing test level: {anskramkeep}")
+        with open(anskramkeep, "rb") as f:
+            data = f.read()
+        parsed = bsp.parse(data)
+        physics = terrain_semantics.model_by_name(parsed.world_models, "PhysicsBSP")
+        candidates = terrain_reconstruction.physics_shell_candidates(physics)
+        consolidation_index = terrain_reconstruction.build_physics_shell_consolidation_index(
+            physics,
+            candidates,
+        )
+        assembly = terrain_reconstruction.detect_physics_shell_stair_assemblies(
+            physics,
+            candidates,
+            consolidation_index=consolidation_index,
+        )[3]
+
+        selected_cache = {}
+        _generated, selected_report = (
+            surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+                data,
+                source_path=anskramkeep,
+                _preparsed_world=parsed,
+                _precomputed_physics_shell_consolidation_index=consolidation_index,
+                _physics_shell_analysis_cache=selected_cache,
+                model_names=("Innerdoor0",),
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="PhysicsShellAtomicStair",
+                physics_shell_max_polygons=128,
+                physics_shell_generated_face_budget=2048,
+                physics_shell_stair_assembly_indices=(3,),
+            )
+        )
+        emitted_indices = {
+            int(token)
+            for summary in selected_report.model_summaries
+            if summary.name.startswith("PhysicsShellAtomicStair_")
+            for token in summary.name.rsplit("_", 1)[-1].split("p")
+        }
+        self.assertEqual(selected_report.physics_shell_selected_stair_assembly_indices, (3,))
+        self.assertEqual(selected_report.physics_shell_rejected_stair_assembly_indices, ())
+        self.assertTrue(set(assembly.source_polygon_indices).issubset(emitted_indices))
+        self.assertTrue(all(
+            selected_cache["selection_reasons"][index] == "selected_for_shell_emission"
+            for index in assembly.source_polygon_indices
+        ))
+
+        rejected_cache = {}
+        _generated, rejected_report = (
+            surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+                data,
+                source_path=anskramkeep,
+                _preparsed_world=parsed,
+                _precomputed_physics_shell_consolidation_index=consolidation_index,
+                _physics_shell_analysis_cache=rejected_cache,
+                model_names=("Innerdoor0",),
+                include_physics_shell_patch=True,
+                physics_shell_name_prefix="PhysicsShellRejectedStair",
+                physics_shell_max_polygons=32,
+                physics_shell_generated_face_budget=512,
+                physics_shell_stair_assembly_indices=(3,),
+            )
+        )
+        rejected_emitted_indices = {
+            int(token)
+            for summary in rejected_report.model_summaries
+            if summary.name.startswith("PhysicsShellRejectedStair_")
+            for token in summary.name.rsplit("_", 1)[-1].split("p")
+        }
+        self.assertEqual(rejected_report.physics_shell_selected_stair_assembly_indices, ())
+        self.assertEqual(rejected_report.physics_shell_rejected_stair_assembly_indices, (3,))
+        self.assertTrue(set(assembly.source_polygon_indices).isdisjoint(rejected_emitted_indices))
+        self.assertTrue(all(
+            rejected_cache["selection_reasons"][index] == "rejected_stair_assembly"
+            for index in assembly.source_polygon_indices
+        ))
+
+    @slow_dat_to_ed_test
+    def test_source_door_clearance_bounds_are_derived_from_child_brushes(self):
+        source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
+        if not os.path.exists(source_ed):
+            self.skipTest(f"missing source oracle: {source_ed}")
+
+        bounds = surrogate_ed._source_door_clearance_bounds_from_source_ed(
+            source_ed,
+            candidate_names=("Innerdoor0",),
+        )
+
+        self.assertEqual(len(bounds), 1)
+        bounds_min, bounds_max = bounds[0]
+        self.assertLess(bounds_min[0], -384.0)
+        self.assertGreater(bounds_max[2], 4144.0)
+        self.assertTrue(
+            surrogate_ed._physics_shell_group_intersects_clearance_bounds(
+                ((-384.0, -192.0, 4112.0), (0.0, 0.0, 4144.0)),
+                bounds,
+            )
+        )
+        self.assertFalse(
+            surrogate_ed._physics_shell_group_intersects_clearance_bounds(
+                ((1000.0, 0.0, 1000.0), (1100.0, 100.0, 1100.0)),
+                bounds,
+            )
+        )
+
+        starting_door_bounds = surrogate_ed._source_door_clearance_bounds_from_source_ed(
+            source_ed,
+            candidate_names=("DoubleDoorL15", "DoubleDoorR15"),
+        )
+        self.assertTrue(
+            surrogate_ed._physics_shell_group_intersects_clearance_bounds(
+                (
+                    (-256.0, -192.0, 128.0),
+                    (128.0, 0.0, 128.0),
+                    (128.0, 0.0, 144.0),
+                    (-256.0, -192.0, 144.0),
+                ),
+                starting_door_bounds,
+            )
+        )
+
+    @slow_dat_to_ed_test
     def test_anskramkeep_physics_shell_start_point_uses_source_oracle_anchor(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")
@@ -1743,13 +2081,17 @@ class SurrogateEdTests(unittest.TestCase):
             physics_shell_name_prefix="ANSKRAMKEEP_PhysicsShell",
             physics_shell_max_polygons=864,
             physics_shell_thickness=16.0,
+            physics_shell_focus_points=((0.0, -104.0, 16.0),),
+            physics_shell_focus_radius=512.0,
+            physics_shell_focus_budget=512,
+            physics_shell_focus_seed_radius=128.0,
             door_source_ed_path=source_ed,
         )
 
         self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
         self.assertTrue(any("Source StartPoint oracle loaded 2" in item for item in report.notes))
         self.assertTrue(any("Source StartPoint support Brush copied for Anskramkeepback" in item for item in report.notes))
-        self.assertTrue(any("Source StartPoint support Brush replaced generated support Brush" in item for item in report.notes))
+        self.assertTrue(any("Source StartPoint support Brush appended as an additional generated Brush" in item for item in report.notes))
 
         object_scan = legacy_ed.scan_legacy_ed_object_records(
             generated,
@@ -1851,6 +2193,7 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(parsed["children"][2]["item"]["class_name"], "StartPoint")
         self.assertEqual(parsed["children"][3]["item"]["class_name"], "Light")
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_can_copy_matching_door_objects_from_source_oracle(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.ED")
@@ -1971,6 +2314,7 @@ class SurrogateEdTests(unittest.TestCase):
         self.assertEqual(len(pair_node["children"]), 1)
         self.assertEqual(pair_node["children"][0]["type"], legacy_ed_writer.NODE_BRUSH)
 
+    @slow_dat_to_ed_test
     def test_full_world_skeleton_copies_door_child_brush_properties_from_node_hierarchy(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")
         source_ed = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.ED")

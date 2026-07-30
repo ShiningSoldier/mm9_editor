@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import heapq
 from collections import defaultdict, deque
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from features.dat_editing import terrain_semantics
 
@@ -64,6 +64,70 @@ class PhysicsShellCandidate(NamedTuple):
     generated_face_count: int
 
 
+class PhysicsShellCandidateGroup(NamedTuple):
+    """One closed slab boundary representing one or more source polygons."""
+
+    candidates: Tuple[PhysicsShellCandidate, ...]
+    points: Tuple[Vec3, ...]
+    generated_face_count: int
+
+
+class PhysicsShellConsolidationIndex(NamedTuple):
+    """Reusable coplanar adjacency evidence for one candidate collection."""
+
+    candidate_indices: Tuple[int, ...]
+    compatible_neighbor_indices: Tuple[Tuple[int, Tuple[int, ...]], ...] = ()
+
+
+class PhysicsShellPackingPlan(NamedTuple):
+    """A deterministic cost-aware selection of consolidated shell regions."""
+
+    groups: Tuple[PhysicsShellCandidateGroup, ...] = ()
+    source_polygon_count: int = 0
+    generated_brush_count: int = 0
+    generated_face_count: int = 0
+    recovered_source_area: float = 0.0
+    weighted_value: float = 0.0
+    role_counts: Tuple[Tuple[str, int], ...] = ()
+    protected_polygon_indices: Tuple[int, ...] = ()
+
+
+class PhysicsShellPackingComparison(NamedTuple):
+    """Controlled comparison of balanced and cost-aware shell plans."""
+
+    balanced: PhysicsShellPackingPlan = PhysicsShellPackingPlan()
+    cost_aware: PhysicsShellPackingPlan = PhysicsShellPackingPlan()
+    candidate_count: int = 0
+    source_polygon_limit: int = 0
+    generated_face_budget: int = 0
+    preferred_validation_mode: str = "equivalent"
+    weighted_value_delta: float = 0.0
+    recovered_source_area_delta: float = 0.0
+    generated_brush_delta: int = 0
+    generated_face_delta: int = 0
+    protected_sets_match: bool = True
+    notes: Tuple[str, ...] = ()
+
+
+class PhysicsShellStairAssembly(NamedTuple):
+    """A conservative connected tread/riser candidate from PhysicsBSP."""
+
+    assembly_index: int
+    source_polygon_indices: Tuple[int, ...] = ()
+    tread_polygon_indices: Tuple[int, ...] = ()
+    riser_polygon_indices: Tuple[int, ...] = ()
+    support_wall_polygon_indices: Tuple[int, ...] = ()
+    elevation_levels: Tuple[float, ...] = ()
+    bounds_min: Vec3 = (0.0, 0.0, 0.0)
+    bounds_max: Vec3 = (0.0, 0.0, 0.0)
+    step_count: int = 0
+    min_step_height: float = 0.0
+    max_step_height: float = 0.0
+    generated_face_count: int = 0
+    confidence: str = "candidate"
+    notes: Tuple[str, ...] = ()
+
+
 class PhysicsShellFocusedSelection(NamedTuple):
     selected: Tuple[PhysicsShellCandidate, ...]
     anchor_candidate_count: int = 0
@@ -72,10 +136,28 @@ class PhysicsShellFocusedSelection(NamedTuple):
     focus_selected_count: int = 0
 
 
+class PhysicsShellRoleIndexBatch(NamedTuple):
+    """A deterministic source-polygon subset for controlled Processor runs."""
+
+    role: str
+    batch_index: int
+    polygon_indices: Tuple[int, ...]
+    generated_face_count: int = 0
+
+
 _PHYSICS_SHELL_MIN_POLYGON_AREA = 0.25
 _PHYSICS_SHELL_MIN_EDGE_LENGTH = 0.05
 _PHYSICS_SHELL_MAX_PLANE_DEVIATION = 0.01
 _PHYSICS_SHELL_MIN_EXTRUSION_THICKNESS = 1.0
+_PHYSICS_SHELL_MAX_CONSOLIDATED_GROUP_SIZE = 4
+_PHYSICS_SHELL_COST_AWARE_MAX_CONSOLIDATED_GROUP_SIZE = 8
+_PHYSICS_SHELL_CONSOLIDATION_SEARCH_NEIGHBORS = 24
+_DEFAULT_PHYSICS_SHELL_ROLE_WEIGHTS: Mapping[str, float] = {
+    "side_wall": 8.0,
+    "floor": 1.0,
+    "ceiling": 1.0,
+    "helper/special": 0.05,
+}
 
 
 class TerrainCutoutModelInfo(NamedTuple):
@@ -366,6 +448,82 @@ def physics_shell_candidates(model: object) -> Tuple[PhysicsShellCandidate, ...]
     return tuple(result)
 
 
+def physics_shell_role_index_batches(
+    model: object,
+    *,
+    max_indices_per_batch: int = 128,
+    max_generated_faces_per_batch: int = 0,
+    roles: Sequence[str] = PHYSICS_SHELL_COVERAGE_ROLES,
+) -> Tuple[PhysicsShellRoleIndexBatch, ...]:
+    """Return deterministic role/index batches for Processor warning bisection.
+
+    LithTech 2.1 Processor logs identify problem brushes only by count.  These
+    batches let callers compile small, provenance-preserving subsets whose
+    source polygon indices and shell roles are known before each run.  Invalid
+    or degenerate source polygons are omitted because they cannot produce a
+    stable shell brush.
+    """
+    batch_size = int(max_indices_per_batch)
+    if batch_size <= 0:
+        raise ValueError("PhysicsBSP subset batch size must be positive")
+    face_budget = int(max_generated_faces_per_batch)
+    if face_budget < 0:
+        raise ValueError("PhysicsBSP subset generated-face budget cannot be negative")
+
+    requested_roles: List[str] = []
+    seen_roles = set()
+    for raw_role in roles:
+        role = str(raw_role or "").strip()
+        if not role or role in seen_roles:
+            continue
+        seen_roles.add(role)
+        requested_roles.append(role)
+
+    candidates = physics_shell_candidates(model)
+    by_role: Dict[str, List[PhysicsShellCandidate]] = defaultdict(list)
+    for candidate in candidates:
+        by_role[str(candidate.role)].append(candidate)
+
+    batches: List[PhysicsShellRoleIndexBatch] = []
+    for role in requested_roles:
+        role_candidates = sorted(
+            by_role.get(role, ()),
+            key=lambda candidate: int(candidate.polygon_index),
+        )
+        role_batch_index = 0
+        group: List[PhysicsShellCandidate] = []
+        group_face_count = 0
+        for candidate in role_candidates:
+            candidate_faces = int(candidate.generated_face_count)
+            if group and (
+                len(group) >= batch_size
+                or (face_budget > 0 and group_face_count + candidate_faces > face_budget)
+            ):
+                batches.append(
+                    PhysicsShellRoleIndexBatch(
+                        role=role,
+                        batch_index=role_batch_index,
+                        polygon_indices=tuple(int(item.polygon_index) for item in group),
+                        generated_face_count=group_face_count,
+                    )
+                )
+                role_batch_index += 1
+                group = []
+                group_face_count = 0
+            group.append(candidate)
+            group_face_count += candidate_faces
+        if group:
+            batches.append(
+                PhysicsShellRoleIndexBatch(
+                    role=role,
+                    batch_index=role_batch_index,
+                    polygon_indices=tuple(int(item.polygon_index) for item in group),
+                    generated_face_count=group_face_count,
+                )
+            )
+    return tuple(batches)
+
+
 def physics_shell_slab_quality_ok(
     points: Sequence[object],
     *,
@@ -563,11 +721,607 @@ def focused_balanced_physics_shell_candidates(
     )
 
 
+def build_physics_shell_consolidation_index(
+    model: Optional[object],
+    candidates: Sequence[PhysicsShellCandidate],
+) -> PhysicsShellConsolidationIndex:
+    """Precompute safe coplanar adjacency for repeated packing estimates.
+
+    Budget preflight may evaluate the same candidate set many times while
+    searching for the largest source subset.  The old path rebuilt the
+    vertex-to-candidate graph and compatibility checks on every estimate.
+    This index stores only provenance-stable polygon-index neighbors, so a
+    later subset can reuse the expensive adjacency work without sharing any
+    mutable selection state.
+    """
+    ordered = tuple(candidates)
+    neighbors: Dict[int, set[int]] = {
+        int(candidate.polygon_index): set()
+        for candidate in ordered
+    }
+    by_vertex: Dict[int, List[int]] = defaultdict(list)
+    for offset, candidate in enumerate(ordered):
+        for index in set(candidate.indices):
+            by_vertex[int(index)].append(offset)
+    candidate_pairs = set()
+    for offsets in by_vertex.values():
+        for left_offset, left in enumerate(offsets):
+            for right in offsets[left_offset + 1:]:
+                candidate_pairs.add((left, right))
+    for left_offset, right_offset in sorted(candidate_pairs):
+        candidate = ordered[left_offset]
+        other = ordered[right_offset]
+        if len(set(candidate.indices) & set(other.indices)) < 2:
+            continue
+        if not _physics_shell_group_candidate_compatible(
+            model,
+            (candidate,),
+            other,
+        ):
+            continue
+        first_index = int(candidate.polygon_index)
+        other_index = int(other.polygon_index)
+        neighbors[first_index].add(other_index)
+        neighbors[other_index].add(first_index)
+    return PhysicsShellConsolidationIndex(
+        candidate_indices=tuple(int(candidate.polygon_index) for candidate in ordered),
+        compatible_neighbor_indices=tuple(
+            (
+                polygon_index,
+                tuple(sorted(neighbors.get(polygon_index, set()))),
+            )
+            for polygon_index in sorted(neighbors)
+        ),
+    )
+
+
+def physics_shell_group_intersects_bounds(
+    group: PhysicsShellCandidateGroup,
+    bounds: Sequence[Tuple[Vec3, Vec3]],
+    *,
+    roles: Sequence[str] = ("side_wall",),
+) -> bool:
+    """Return whether a group's role and bounds intersect a protected void."""
+    if not bounds:
+        return False
+    protected_roles = {str(role) for role in roles}
+    if protected_roles and not any(
+        str(candidate.role) in protected_roles
+        for candidate in group.candidates
+    ):
+        return False
+    if not group.points:
+        return False
+    group_min = tuple(
+        min(float(point[axis]) for point in group.points)
+        for axis in range(3)
+    )
+    group_max = tuple(
+        max(float(point[axis]) for point in group.points)
+        for axis in range(3)
+    )
+    return any(
+        all(
+            group_max[axis] >= bounds_min[axis] - 1.0e-5
+            and group_min[axis] <= bounds_max[axis] + 1.0e-5
+            for axis in range(3)
+        )
+        for bounds_min, bounds_max in bounds
+    )
+
+
+def normalized_physics_shell_role_weights(
+    overrides: Optional[Mapping[str, float]] = None,
+) -> Tuple[Tuple[str, float], ...]:
+    """Return deterministic non-negative role weights for shell scoring."""
+    weights = dict(_DEFAULT_PHYSICS_SHELL_ROLE_WEIGHTS)
+    for raw_role, raw_weight in (overrides or {}).items():
+        role = str(raw_role or "").strip()
+        if not role:
+            continue
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(weight) or weight < 0.0:
+            continue
+        weights[role] = weight
+    return tuple(sorted((role, float(weight)) for role, weight in weights.items()))
+
+
+def build_physics_shell_packing_plan(
+    model: Optional[object],
+    candidates: Sequence[PhysicsShellCandidate],
+    *,
+    source_polygon_limit: int = 0,
+    generated_face_budget: int = 0,
+    consolidation_index: Optional[PhysicsShellConsolidationIndex] = None,
+    protected_bounds: Sequence[Tuple[Vec3, Vec3]] = (),
+    protected_roles: Sequence[str] = ("side_wall",),
+    role_weights: Optional[Mapping[str, float]] = None,
+    playable_importance_points: Sequence[Vec3] = (),
+    playable_importance_radius: float = 0.0,
+    playable_importance_weight: float = 0.0,
+) -> PhysicsShellPackingPlan:
+    """Select consolidated regions by recovered value per generated face.
+
+    ``source_polygon_limit`` and ``generated_face_budget`` are independent
+    ceilings.  Regions are scored by role-weighted source area per normalized
+    slab face, then by source area and polygon index for deterministic ties.
+    Optional role-weight overrides and playable-importance points apply a
+    deterministic multiplicative bias without changing either hard ceiling.
+    A region is accepted only when both ceilings remain satisfied.  This
+    planner is intentionally side-effect free so callers can compare it with
+    the legacy role-balanced selector before enabling it for a world.
+    """
+    ordered = tuple(candidates)
+    if not ordered:
+        return PhysicsShellPackingPlan()
+    source_limit = (
+        len(ordered)
+        if int(source_polygon_limit) <= 0
+        else max(0, int(source_polygon_limit))
+    )
+    face_budget = max(0, int(generated_face_budget))
+    index = consolidation_index or build_physics_shell_consolidation_index(model, ordered)
+    groups = consolidated_physics_shell_candidate_groups(
+        model,
+        ordered,
+        consolidation_index=index,
+        max_group_size=_PHYSICS_SHELL_COST_AWARE_MAX_CONSOLIDATED_GROUP_SIZE,
+        require_exact_large_union=True,
+    )
+    normalized_weights = dict(normalized_physics_shell_role_weights(role_weights))
+    importance_points_list: List[Vec3] = []
+    for raw_point in playable_importance_points:
+        try:
+            point = _finite_vec3(raw_point)
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(float(value)) for value in point):
+            importance_points_list.append(point)
+    importance_points = tuple(importance_points_list)
+    importance_radius = max(0.0, float(playable_importance_radius))
+    importance_weight = max(0.0, float(playable_importance_weight))
+
+    def playable_factor(group: PhysicsShellCandidateGroup) -> float:
+        if not importance_points or importance_radius <= 0.0 or importance_weight <= 0.0:
+            return 1.0
+        if not group.points:
+            return 1.0
+        center = tuple(
+            sum(float(point[axis]) for point in group.points) / len(group.points)
+            for axis in range(3)
+        )
+        nearest_distance = min(
+            math.sqrt(sum((center[axis] - point[axis]) ** 2 for axis in range(3)))
+            for point in importance_points
+        )
+        influence = max(0.0, 1.0 - nearest_distance / importance_radius)
+        return 1.0 + importance_weight * influence
+
+    def group_metrics(group: PhysicsShellCandidateGroup) -> Tuple[float, float, int]:
+        source_area = sum(float(candidate.area) for candidate in group.candidates)
+        role_weight = max(
+            (normalized_weights.get(str(candidate.role), 0.25) for candidate in group.candidates),
+            default=0.25,
+        )
+        weighted_value = source_area * role_weight * playable_factor(group)
+        face_count = max(1, int(group.generated_face_count))
+        return weighted_value / float(face_count), source_area, min(
+            int(candidate.polygon_index) for candidate in group.candidates
+        )
+
+    ranked_groups = sorted(
+        groups,
+        key=lambda group: (
+            -group_metrics(group)[0],
+            -group_metrics(group)[1],
+            group_metrics(group)[2],
+        ),
+    )
+    selected: List[PhysicsShellCandidateGroup] = []
+    source_count = 0
+    face_count = 0
+    recovered_area = 0.0
+    weighted_value = 0.0
+    role_counts: Dict[str, int] = defaultdict(int)
+    protected_indices = set()
+    for group in ranked_groups:
+        group_source_count = len(group.candidates)
+        group_face_count = max(0, int(group.generated_face_count))
+        if physics_shell_group_intersects_bounds(
+            group,
+            protected_bounds,
+            roles=protected_roles,
+        ):
+            protected_indices.update(
+                int(candidate.polygon_index)
+                for candidate in group.candidates
+            )
+            continue
+        if source_count + group_source_count > source_limit:
+            continue
+        if face_budget and face_count + group_face_count > face_budget:
+            continue
+        selected.append(group)
+        source_count += group_source_count
+        face_count += group_face_count
+        group_value, group_area, _first_index = group_metrics(group)
+        recovered_area += group_area
+        weighted_value += group_value * float(group_face_count)
+        for candidate in group.candidates:
+            role_counts[str(candidate.role)] += 1
+    return PhysicsShellPackingPlan(
+        groups=tuple(selected),
+        source_polygon_count=source_count,
+        generated_brush_count=len(selected),
+        generated_face_count=face_count,
+        recovered_source_area=recovered_area,
+        weighted_value=weighted_value,
+        role_counts=tuple(sorted(role_counts.items())),
+        protected_polygon_indices=tuple(sorted(protected_indices)),
+    )
+
+
+def build_balanced_physics_shell_packing_plan(
+    model: Optional[object],
+    candidates: Sequence[PhysicsShellCandidate],
+    *,
+    source_polygon_limit: int = 0,
+    generated_face_budget: int = 0,
+    consolidation_index: Optional[PhysicsShellConsolidationIndex] = None,
+    protected_bounds: Sequence[Tuple[Vec3, Vec3]] = (),
+    protected_roles: Sequence[str] = ("side_wall",),
+    role_weights: Optional[Mapping[str, float]] = None,
+    playable_importance_points: Sequence[Vec3] = (),
+    playable_importance_radius: float = 0.0,
+    playable_importance_weight: float = 0.0,
+) -> PhysicsShellPackingPlan:
+    """Measure the legacy balanced policy with cost-aware plan semantics.
+
+    This preserves balanced ordering while applying the same source, face, and
+    protected-region ceilings used by the cost-aware planner.  It is intended
+    as a comparison baseline, not a replacement for focused shell emission.
+    """
+    ordered = tuple(candidates)
+    if not ordered:
+        return PhysicsShellPackingPlan()
+    source_limit = (
+        len(ordered)
+        if int(source_polygon_limit) <= 0
+        else max(0, int(source_polygon_limit))
+    )
+    face_budget = max(0, int(generated_face_budget))
+    index = consolidation_index or build_physics_shell_consolidation_index(model, ordered)
+    ranked = balanced_physics_shell_candidates(ordered, len(ordered))
+    groups = consolidated_physics_shell_candidate_groups(
+        model,
+        ranked,
+        consolidation_index=index,
+    )
+    normalized_weights = dict(normalized_physics_shell_role_weights(role_weights))
+    importance_points = tuple(_finite_vec3(point) for point in playable_importance_points)
+    importance_radius = max(0.0, float(playable_importance_radius))
+    importance_weight = max(0.0, float(playable_importance_weight))
+
+    selected: List[PhysicsShellCandidateGroup] = []
+    source_count = 0
+    face_count = 0
+    recovered_area = 0.0
+    weighted_value = 0.0
+    role_counts: Dict[str, int] = defaultdict(int)
+    protected_indices = set()
+    for group in groups:
+        if physics_shell_group_intersects_bounds(
+            group,
+            protected_bounds,
+            roles=protected_roles,
+        ):
+            protected_indices.update(
+                int(candidate.polygon_index) for candidate in group.candidates
+            )
+            continue
+        group_source_count = len(group.candidates)
+        group_face_count = max(0, int(group.generated_face_count))
+        if source_count + group_source_count > source_limit:
+            continue
+        if face_budget and face_count + group_face_count > face_budget:
+            continue
+        group_area = sum(float(candidate.area) for candidate in group.candidates)
+        role_weight = max(
+            (normalized_weights.get(str(candidate.role), 0.25) for candidate in group.candidates),
+            default=0.25,
+        )
+        playable_factor = 1.0
+        if importance_points and importance_radius > 0.0 and importance_weight > 0.0:
+            center = tuple(
+                sum(float(point[axis]) for point in group.points) / len(group.points)
+                for axis in range(3)
+            )
+            nearest_distance = min(
+                math.sqrt(sum((center[axis] - point[axis]) ** 2 for axis in range(3)))
+                for point in importance_points
+            )
+            playable_factor += importance_weight * max(
+                0.0,
+                1.0 - nearest_distance / importance_radius,
+            )
+        selected.append(group)
+        source_count += group_source_count
+        face_count += group_face_count
+        recovered_area += group_area
+        weighted_value += group_area * role_weight * playable_factor
+        for candidate in group.candidates:
+            role_counts[str(candidate.role)] += 1
+    return PhysicsShellPackingPlan(
+        groups=tuple(selected),
+        source_polygon_count=source_count,
+        generated_brush_count=len(selected),
+        generated_face_count=face_count,
+        recovered_source_area=recovered_area,
+        weighted_value=weighted_value,
+        role_counts=tuple(sorted(role_counts.items())),
+        protected_polygon_indices=tuple(sorted(protected_indices)),
+    )
+
+
+def compare_physics_shell_packing_plans(
+    model: Optional[object],
+    candidates: Sequence[PhysicsShellCandidate],
+    *,
+    source_polygon_limit: int = 0,
+    generated_face_budget: int = 0,
+    consolidation_index: Optional[PhysicsShellConsolidationIndex] = None,
+    protected_bounds: Sequence[Tuple[Vec3, Vec3]] = (),
+    protected_roles: Sequence[str] = ("side_wall",),
+    role_weights: Optional[Mapping[str, float]] = None,
+    playable_importance_points: Sequence[Vec3] = (),
+    playable_importance_radius: float = 0.0,
+    playable_importance_weight: float = 0.0,
+) -> PhysicsShellPackingComparison:
+    """Compare both policies without changing the generator's default mode."""
+    ordered = tuple(candidates)
+    index = consolidation_index or build_physics_shell_consolidation_index(model, ordered)
+    common = dict(
+        source_polygon_limit=source_polygon_limit,
+        generated_face_budget=generated_face_budget,
+        consolidation_index=index,
+        protected_bounds=protected_bounds,
+        protected_roles=protected_roles,
+        role_weights=role_weights,
+        playable_importance_points=playable_importance_points,
+        playable_importance_radius=playable_importance_radius,
+        playable_importance_weight=playable_importance_weight,
+    )
+    balanced = build_balanced_physics_shell_packing_plan(model, ordered, **common)
+    cost_aware = build_physics_shell_packing_plan(model, ordered, **common)
+    value_delta = cost_aware.weighted_value - balanced.weighted_value
+    area_delta = cost_aware.recovered_source_area - balanced.recovered_source_area
+    protected_sets_match = (
+        cost_aware.protected_polygon_indices == balanced.protected_polygon_indices
+    )
+    meaningful_gain = value_delta > max(1.0e-6, balanced.weighted_value * 0.01)
+    if meaningful_gain and protected_sets_match:
+        preferred = "cost_aware"
+    elif value_delta < -max(1.0e-6, balanced.weighted_value * 0.01):
+        preferred = "balanced"
+    else:
+        preferred = "equivalent"
+    notes = [
+        "Comparison is advisory; balanced remains the generation default.",
+    ]
+    if not protected_sets_match:
+        notes.append(
+            "Protected polygon sets differ between policies; manual opening review is required."
+        )
+    return PhysicsShellPackingComparison(
+        balanced=balanced,
+        cost_aware=cost_aware,
+        candidate_count=len(ordered),
+        source_polygon_limit=(
+            len(ordered) if int(source_polygon_limit) <= 0 else max(0, int(source_polygon_limit))
+        ),
+        generated_face_budget=max(0, int(generated_face_budget)),
+        preferred_validation_mode=preferred,
+        weighted_value_delta=value_delta,
+        recovered_source_area_delta=area_delta,
+        generated_brush_delta=(
+            cost_aware.generated_brush_count - balanced.generated_brush_count
+        ),
+        generated_face_delta=(
+            cost_aware.generated_face_count - balanced.generated_face_count
+        ),
+        protected_sets_match=protected_sets_match,
+        notes=tuple(notes),
+    )
+
+
+def detect_physics_shell_stair_assemblies(
+    model: Optional[object],
+    candidates: Sequence[PhysicsShellCandidate],
+    *,
+    consolidation_index: Optional[PhysicsShellConsolidationIndex] = None,
+    min_step_height: float = 3.0,
+    max_step_height: float = 32.0,
+    max_horizontal_gap: float = 4.0,
+    elevation_tolerance: float = 1.0,
+    min_elevation_levels: int = 3,
+) -> Tuple[PhysicsShellStairAssembly, ...]:
+    """Detect conservative connected tread/riser stair candidates.
+
+    Floor fragments are first consolidated into coplanar tread regions.  Tread
+    regions connect only when their vertical separation is a plausible step
+    rise and their X/Z bounds touch or nearly touch.  Requiring at least three
+    distinct elevations avoids classifying a floor plus curb as a staircase.
+    """
+    ordered = tuple(candidate for candidate in candidates if candidate.role != "degenerate")
+    floors = tuple(candidate for candidate in ordered if candidate.role == "floor")
+    if not floors:
+        return ()
+    safe_min_rise = max(0.1, float(min_step_height))
+    safe_max_rise = max(safe_min_rise, float(max_step_height))
+    safe_gap = max(0.0, float(max_horizontal_gap))
+    safe_elevation_tolerance = max(1.0e-4, float(elevation_tolerance))
+    safe_min_levels = max(3, int(min_elevation_levels))
+    index = consolidation_index or build_physics_shell_consolidation_index(
+        model,
+        ordered,
+    )
+    tread_groups = consolidated_physics_shell_candidate_groups(
+        model,
+        floors,
+        consolidation_index=index,
+        max_group_size=_PHYSICS_SHELL_COST_AWARE_MAX_CONSOLIDATED_GROUP_SIZE,
+        require_exact_large_union=True,
+    )
+
+    def group_geometry(
+        group: PhysicsShellCandidateGroup,
+    ) -> Tuple[float, Vec3, Vec3]:
+        points = tuple(_finite_vec3(point) for point in group.points)
+        elevation = sum(point[1] for point in points) / len(points)
+        bounds_min = tuple(min(point[axis] for point in points) for axis in range(3))
+        bounds_max = tuple(max(point[axis] for point in points) for axis in range(3))
+        return elevation, bounds_min, bounds_max  # type: ignore[return-value]
+
+    tread_geometry = tuple(group_geometry(group) for group in tread_groups)
+
+    def horizontal_gap(left: int, right: int) -> float:
+        _left_y, left_min, left_max = tread_geometry[left]
+        _right_y, right_min, right_max = tread_geometry[right]
+        dx = max(0.0, left_min[0] - right_max[0], right_min[0] - left_max[0])
+        dz = max(0.0, left_min[2] - right_max[2], right_min[2] - left_max[2])
+        return math.sqrt(dx * dx + dz * dz)
+
+    neighbors: Dict[int, set[int]] = {index: set() for index in range(len(tread_groups))}
+    for left in range(len(tread_groups)):
+        left_y = tread_geometry[left][0]
+        for right in range(left + 1, len(tread_groups)):
+            rise = abs(left_y - tread_geometry[right][0])
+            if rise < safe_min_rise or rise > safe_max_rise:
+                continue
+            if horizontal_gap(left, right) > safe_gap:
+                continue
+            neighbors[left].add(right)
+            neighbors[right].add(left)
+
+    components: List[Tuple[int, ...]] = []
+    remaining = set(neighbors)
+    while remaining:
+        seed = min(remaining)
+        stack = [seed]
+        component = set()
+        while stack:
+            current = stack.pop()
+            if current in component:
+                continue
+            component.add(current)
+            stack.extend(neighbors[current] - component)
+        remaining.difference_update(component)
+        if len(component) >= safe_min_levels:
+            components.append(tuple(sorted(component)))
+
+    side_walls = tuple(candidate for candidate in ordered if candidate.role == "side_wall")
+    detected: List[PhysicsShellStairAssembly] = []
+    for component in components:
+        raw_elevations = sorted(tread_geometry[index][0] for index in component)
+        elevations: List[float] = []
+        for elevation in raw_elevations:
+            if not elevations or abs(elevation - elevations[-1]) > safe_elevation_tolerance:
+                elevations.append(elevation)
+        if len(elevations) < safe_min_levels:
+            continue
+        rises = tuple(
+            upper - lower for lower, upper in zip(elevations, elevations[1:])
+        )
+        if any(rise < safe_min_rise or rise > safe_max_rise for rise in rises):
+            continue
+        tread_points = tuple(
+            point
+            for index in component
+            for point in tread_groups[index].points
+        )
+        tread_min = tuple(min(point[axis] for point in tread_points) for axis in range(3))
+        tread_max = tuple(max(point[axis] for point in tread_points) for axis in range(3))
+        risers: List[PhysicsShellCandidate] = []
+        supports: List[PhysicsShellCandidate] = []
+        for wall in side_walls:
+            wall_min = tuple(min(point[axis] for point in wall.points) for axis in range(3))
+            wall_max = tuple(max(point[axis] for point in wall.points) for axis in range(3))
+            near_xz = (
+                wall_max[0] >= tread_min[0] - safe_gap
+                and wall_min[0] <= tread_max[0] + safe_gap
+                and wall_max[2] >= tread_min[2] - safe_gap
+                and wall_min[2] <= tread_max[2] + safe_gap
+            )
+            overlaps_y = (
+                wall_max[1] >= elevations[0] - safe_elevation_tolerance
+                and wall_min[1] <= elevations[-1] + safe_elevation_tolerance
+            )
+            if not near_xz or not overlaps_y:
+                continue
+            height = wall_max[1] - wall_min[1]
+            if height <= safe_max_rise + safe_elevation_tolerance:
+                risers.append(wall)
+            else:
+                supports.append(wall)
+        tread_indices = tuple(sorted({
+            int(candidate.polygon_index)
+            for index in component
+            for candidate in tread_groups[index].candidates
+        }))
+        riser_indices = tuple(sorted(int(item.polygon_index) for item in risers))
+        support_indices = tuple(sorted(int(item.polygon_index) for item in supports))
+        all_candidates = tuple(
+            candidate
+            for index in component
+            for candidate in tread_groups[index].candidates
+        ) + tuple(risers) + tuple(supports)
+        all_points = tuple(point for candidate in all_candidates for point in candidate.points)
+        bounds_min = tuple(min(point[axis] for point in all_points) for axis in range(3))
+        bounds_max = tuple(max(point[axis] for point in all_points) for axis in range(3))
+        step_count = len(elevations) - 1
+        confidence = (
+            "high"
+            if len(elevations) >= 4 and len(risers) >= step_count
+            else "medium"
+            if risers
+            else "candidate"
+        )
+        detected.append(PhysicsShellStairAssembly(
+            assembly_index=0,
+            source_polygon_indices=tuple(sorted(set(tread_indices + riser_indices + support_indices))),
+            tread_polygon_indices=tread_indices,
+            riser_polygon_indices=riser_indices,
+            support_wall_polygon_indices=support_indices,
+            elevation_levels=tuple(elevations),
+            bounds_min=bounds_min,  # type: ignore[arg-type]
+            bounds_max=bounds_max,  # type: ignore[arg-type]
+            step_count=step_count,
+            min_step_height=min(rises),
+            max_step_height=max(rises),
+            generated_face_count=sum(int(item.generated_face_count) for item in all_candidates),
+            confidence=confidence,
+            notes=(
+                "Candidate requires route/Processor validation before atomic reservation is enabled.",
+            ),
+        ))
+    detected.sort(key=lambda item: (item.bounds_min, item.tread_polygon_indices))
+    return tuple(
+        item._replace(assembly_index=index)
+        for index, item in enumerate(detected)
+    )
+
+
 def budgeted_balanced_physics_shell_source_polygon_count(
     candidates: Sequence[PhysicsShellCandidate],
     *,
     requested_source_polygon_count: int,
     generated_polygon_budget: int,
+    model: Optional[object] = None,
+    consolidation_index: Optional[PhysicsShellConsolidationIndex] = None,
+    analysis_cache: Optional[Dict[str, object]] = None,
 ) -> int:
     """Return the largest balanced source count that fits a generated face budget."""
     requested = max(0, int(requested_source_polygon_count))
@@ -579,20 +1333,298 @@ def budgeted_balanced_physics_shell_source_polygon_count(
         requested,
         sum(len(role_candidates) for role_candidates in by_role.values()),
     )
+    index = consolidation_index or build_physics_shell_consolidation_index(model, candidates)
 
+    # Adding source polygons to the deterministic balanced ordering cannot
+    # normally reduce the generated-face requirement: a new polygon either
+    # joins an existing group without changing its hull or adds faces.  Use a
+    # binary search here; the old linear probe became prohibitively expensive
+    # once multi-polygon consolidation began exploring local combinations.
     fitted_count = 0
-    for candidate_count in range(1, candidate_limit + 1):
+    fitted_groups: Tuple[PhysicsShellCandidateGroup, ...] = ()
+    low = 0
+    high = candidate_limit
+    while low <= high:
+        candidate_count = (low + high) // 2
+        if candidate_count <= 0:
+            low = 1
+            continue
         selected = _balanced_physics_shell_candidates_from_sorted(
             by_role,
             structural_candidates,
             helper_candidates,
             candidate_count,
         )
-        generated_count = sum(candidate.generated_face_count for candidate in selected)
-        if generated_count > budget:
-            break
-        fitted_count = candidate_count
+        groups = consolidated_physics_shell_candidate_groups(
+            model,
+            selected,
+            consolidation_index=index,
+        )
+        generated_count = sum(group.generated_face_count for group in groups)
+        if generated_count <= budget:
+            fitted_count = candidate_count
+            fitted_groups = groups
+            low = candidate_count + 1
+        else:
+            high = candidate_count - 1
+    if analysis_cache is not None:
+        analysis_cache["balanced_group_plan_source_polygon_count"] = fitted_count
+        analysis_cache["balanced_group_plan"] = fitted_groups
     return fitted_count
+
+
+def consolidated_physics_shell_candidate_groups(
+    model: Optional[object],
+    candidates: Sequence[PhysicsShellCandidate],
+    *,
+    consolidation_index: Optional[PhysicsShellConsolidationIndex] = None,
+    max_group_size: int = _PHYSICS_SHELL_MAX_CONSOLIDATED_GROUP_SIZE,
+    require_exact_large_union: bool = False,
+) -> Tuple[PhysicsShellCandidateGroup, ...]:
+    """Greedily merge safe adjacent coplanar polygons into convex boundaries.
+
+    The default remains conservative for the balanced selector.  Cost-aware
+    packing can request larger groups, but groups larger than four polygons
+    must have an exact convex union: their hull area must match the sum of
+    source areas, so concave regions, holes, and gaps are rejected instead of
+    being filled by a synthetic slab.  Smaller groups may still represent safe
+    overlapping BSP fragments where the hull does not extend beyond their
+    total area.
+    """
+    ordered = tuple(candidates)
+    safe_max_group_size = max(2, int(max_group_size))
+    candidate_offsets = {
+        int(candidate.polygon_index): offset
+        for offset, candidate in enumerate(ordered)
+    }
+    candidate_polygon_indices = set(candidate_offsets)
+    indexed_candidate_indices = (
+        set(consolidation_index.candidate_indices)
+        if consolidation_index is not None
+        else set()
+    )
+    indexed_neighbors = (
+        dict(consolidation_index.compatible_neighbor_indices)
+        if consolidation_index is not None
+        and candidate_polygon_indices.issubset(indexed_candidate_indices)
+        else {}
+    )
+    by_vertex: Dict[int, List[int]] = defaultdict(list)
+    if not indexed_neighbors:
+        for offset, candidate in enumerate(ordered):
+            for index in set(candidate.indices):
+                by_vertex[int(index)].append(offset)
+
+    used = set()
+    result: List[PhysicsShellCandidateGroup] = []
+    for offset, candidate in enumerate(ordered):
+        if offset in used:
+            continue
+        best_group: Optional[Tuple[Tuple[int, ...], Tuple[Vec3, ...]]] = None
+
+        def search(group_offsets: Tuple[int, ...]) -> None:
+            nonlocal best_group
+            group_candidates = tuple(ordered[item] for item in group_offsets)
+            if len(group_candidates) >= 2:
+                merged_points = _merged_physics_shell_group_points(
+                    model,
+                    group_candidates[:-1],
+                    group_candidates[-1],
+                    require_exact_union=(
+                        require_exact_large_union and len(group_candidates) > 4
+                    ),
+                )
+                if merged_points:
+                    score = (
+                        len(group_offsets),
+                        -len(merged_points),
+                        tuple(ordered[item].polygon_index for item in group_offsets),
+                    )
+                    if best_group is None:
+                        best_group = (group_offsets, merged_points)
+                    else:
+                        best_score = (
+                            len(best_group[0]),
+                            -len(best_group[1]),
+                            tuple(ordered[item].polygon_index for item in best_group[0]),
+                        )
+                        if score > best_score:
+                            best_group = (group_offsets, merged_points)
+            if len(group_offsets) >= safe_max_group_size:
+                return
+            group_index_set = set(group_offsets)
+            neighbor_offsets = set()
+            for group_candidate in group_candidates:
+                if indexed_neighbors:
+                    neighbor_offsets.update(
+                        candidate_offsets[neighbor_index]
+                        for neighbor_index in indexed_neighbors.get(
+                            int(group_candidate.polygon_index),
+                            (),
+                        )
+                        if neighbor_index in candidate_offsets
+                    )
+                else:
+                    for index in set(group_candidate.indices):
+                        neighbor_offsets.update(by_vertex.get(int(index), ()))
+            compatible_neighbors: List[int] = []
+            for neighbor_offset in sorted(neighbor_offsets):
+                if neighbor_offset <= group_offsets[-1] or neighbor_offset in used or neighbor_offset in group_index_set:
+                    continue
+                if not _physics_shell_group_candidate_compatible(
+                    model,
+                    group_candidates,
+                    ordered[neighbor_offset],
+                ):
+                    continue
+                if not any(
+                    len(set(item.indices) & set(ordered[neighbor_offset].indices)) >= 2
+                    for item in group_candidates
+                ):
+                    continue
+                compatible_neighbors.append(neighbor_offset)
+            # Once a candidate group has four members, exact-union expansion
+            # follows one deterministic frontier.  Exploring every remaining
+            # combination is exponential on dense BSP triangulations and can
+            # make preflight slower than Processor itself; any rejected
+            # extension still leaves the already-safe four-polygon group.
+            branch_limit = (
+                1
+                if require_exact_large_union and len(group_offsets) >= 4
+                else _PHYSICS_SHELL_CONSOLIDATION_SEARCH_NEIGHBORS
+            )
+            for neighbor_offset in compatible_neighbors[:branch_limit]:
+                search(group_offsets + (neighbor_offset,))
+
+        search((offset,))
+        if best_group is None:
+            group_offsets = (offset,)
+            group_points = candidate.points
+        else:
+            group_offsets, group_points = best_group
+        group_candidates = tuple(ordered[item] for item in group_offsets)
+
+        result.append(PhysicsShellCandidateGroup(
+            candidates=tuple(group_candidates),
+            points=group_points,
+            generated_face_count=len(group_points) + 2,
+        ))
+        used.update(group_offsets)
+    return tuple(result)
+
+
+def _merged_physics_shell_pair_points(
+    model: Optional[object],
+    first: PhysicsShellCandidate,
+    second: PhysicsShellCandidate,
+) -> Tuple[Vec3, ...]:
+    if len(set(first.indices) & set(second.indices)) < 2:
+        return ()
+    return _merged_physics_shell_group_points(model, (first,), second)
+
+
+def _merged_physics_shell_group_points(
+    model: Optional[object],
+    group: Sequence[PhysicsShellCandidate],
+    additional: PhysicsShellCandidate,
+    *,
+    require_exact_union: bool = False,
+) -> Tuple[Vec3, ...]:
+    if not _physics_shell_group_candidate_compatible(model, group, additional):
+        return ()
+    if not any(len(set(item.indices) & set(additional.indices)) >= 2 for item in group):
+        return ()
+    if model is not None:
+        texture_names = {
+            dat_polygon_texture_name(model, item.polygon).casefold()
+            for item in tuple(group) + (additional,)
+        }
+        if len(texture_names) != 1:
+            return ()
+
+    first = group[0]
+    first_normal, first_distance = polygon_plane(first.points, tuple(range(len(first.points))))
+    for item in tuple(group[1:]) + (additional,):
+        item_normal, item_distance = polygon_plane(item.points, tuple(range(len(item.points))))
+        alignment = vec3_dot(first_normal, item_normal)
+        plane_sign = 1.0 if alignment >= 0.0 else -1.0
+        if abs(alignment) < 0.9999 or abs(first_distance - plane_sign * item_distance) > 0.1:
+            return ()
+
+    unique_points: List[Vec3] = []
+    seen_indices = set()
+    for candidate in tuple(group) + (additional,):
+        for index, point in zip(candidate.indices, candidate.points):
+            if index in seen_indices:
+                continue
+            seen_indices.add(index)
+            unique_points.append(point)
+    if len(unique_points) < 3:
+        return ()
+
+    drop_axis = max(range(3), key=lambda axis: abs(first_normal[axis]))
+    axes = tuple(axis for axis in range(3) if axis != drop_axis)
+    projected = [(point[axes[0]], point[axes[1]], offset) for offset, point in enumerate(unique_points)]
+    hull_offsets = _convex_hull_point_offsets(projected)
+    if len(hull_offsets) < 3:
+        return ()
+    hull = tuple(unique_points[offset] for offset in hull_offsets)
+    merged_area = polygon_area(hull)
+    source_area = sum(float(candidate.area) for candidate in tuple(group) + (additional,))
+    area_tolerance = max(0.1, source_area * 1.0e-4)
+    if require_exact_union and abs(merged_area - source_area) > area_tolerance:
+        return ()
+    if merged_area > source_area + area_tolerance:
+        return ()
+    if merged_area < max(float(candidate.area) for candidate in tuple(group) + (additional,)) - area_tolerance:
+        return ()
+    hull_normal, _distance = polygon_plane(hull, tuple(range(len(hull))))
+    if vec3_dot(hull_normal, first_normal) < 0.0:
+        hull = tuple(reversed(hull))
+    return hull
+
+
+def _physics_shell_group_candidate_compatible(
+    model: Optional[object],
+    group: Sequence[PhysicsShellCandidate],
+    additional: PhysicsShellCandidate,
+) -> bool:
+    if not group or any(item.role != additional.role for item in group):
+        return False
+    if model is not None:
+        texture_names = {
+            dat_polygon_texture_name(model, item.polygon).casefold()
+            for item in tuple(group) + (additional,)
+        }
+        if len(texture_names) != 1:
+            return False
+    first = group[0]
+    first_normal, first_distance = polygon_plane(first.points, tuple(range(len(first.points))))
+    item_normal, item_distance = polygon_plane(additional.points, tuple(range(len(additional.points))))
+    alignment = vec3_dot(first_normal, item_normal)
+    plane_sign = 1.0 if alignment >= 0.0 else -1.0
+    return abs(alignment) >= 0.9999 and abs(first_distance - plane_sign * item_distance) <= 0.1
+
+
+def _convex_hull_point_offsets(points: Sequence[Tuple[float, float, int]]) -> Tuple[int, ...]:
+    ordered = sorted(points, key=lambda item: (item[0], item[1], item[2]))
+    if len(ordered) <= 1:
+        return tuple(item[2] for item in ordered)
+
+    def cross(origin: Tuple[float, float, int], a: Tuple[float, float, int], b: Tuple[float, float, int]) -> float:
+        return (a[0] - origin[0]) * (b[1] - origin[1]) - (a[1] - origin[1]) * (b[0] - origin[0])
+
+    lower: List[Tuple[float, float, int]] = []
+    for point in ordered:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 1.0e-8:
+            lower.pop()
+        lower.append(point)
+    upper: List[Tuple[float, float, int]] = []
+    for point in reversed(ordered):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 1.0e-8:
+            upper.pop()
+        upper.append(point)
+    return tuple(item[2] for item in lower[:-1] + upper[:-1])
 
 
 def _physics_shell_candidate_sort_groups(
@@ -962,6 +1994,14 @@ def select_terrain_support_items(
             item for item in items
             if _xz_bounds_overlap(item.bounds, min_x, max_x, min_z, max_z)
         )
+    if mode == "multi_anchor_budget":
+        return _multi_anchor_terrain_support_items(
+            items,
+            anchor_points,
+            margin=safe_margin,
+            radius=radius,
+            max_items=max_items,
+        )
     if mode not in {"connected_radius", "connected_budget"}:
         raise ValueError(f"unsupported terrain support selection mode: {selection_mode}")
 
@@ -1009,7 +2049,161 @@ def normalize_terrain_support_selection_mode(value: object) -> str:
         "budgeted_component_radius",
     }:
         return "connected_budget"
+    if mode in {
+        "multi_anchor",
+        "multi_anchor_budget",
+        "multi_seed",
+        "multi_seed_budget",
+        "spread_budget",
+        "spread_anchor_budget",
+        "multi_component_budget",
+    }:
+        return "multi_anchor_budget"
     return mode
+
+
+def _multi_anchor_terrain_support_items(
+    items: Sequence[TerrainSupportItem],
+    anchor_points: Sequence[Vec3],
+    *,
+    margin: float,
+    radius: float,
+    max_items: int,
+) -> Tuple[TerrainSupportItem, ...]:
+    """Select connected terrain neighborhoods around multiple world anchors.
+
+    Outdoor worlds often contain several separated playable areas. A single
+    connected-budget seed can spend the entire budget in the first component;
+    this selector reserves a deterministic share for each distinct anchor
+    neighborhood, then grows each neighborhood through shared terrain vertices.
+    """
+    safe_radius = max(0.0, float(radius))
+    limit = max(0, int(max_items))
+    if safe_radius <= 0.0:
+        raise ValueError("multi-anchor terrain support requires a positive radius")
+    if limit <= 0 or not items or not anchor_points:
+        return ()
+
+    safe_margin = max(0.0, float(margin))
+    radius_sq = safe_radius * safe_radius
+    seeds: List[Tuple[int, Vec3]] = []
+    seen_seed_polygons = set()
+    for raw_anchor in anchor_points:
+        anchor = _finite_vec3(raw_anchor)
+        x, z = anchor[0], anchor[2]
+        local_candidates = [
+            (index, item)
+            for index, item in enumerate(items)
+            if _xz_bounds_overlap(
+                item.bounds,
+                x - safe_margin,
+                x + safe_margin,
+                z - safe_margin,
+                z + safe_margin,
+            )
+        ]
+        if not local_candidates:
+            local_candidates = [
+                (index, item)
+                for index, item in enumerate(items)
+                if _xz_bounds_distance_sq(item.bounds, x, z) <= radius_sq
+            ]
+        if not local_candidates:
+            continue
+        seed_index, seed_item = max(
+            local_candidates,
+            key=lambda pair: (
+                terrain_support_start_score(pair[1]),
+                -_xz_bounds_distance_sq(pair[1].bounds, x, z),
+                -pair[1].polygon_index,
+            ),
+        )
+        polygon_index = int(seed_item.polygon_index)
+        if polygon_index in seen_seed_polygons:
+            continue
+        seen_seed_polygons.add(polygon_index)
+        seeds.append((polygon_index, anchor))
+
+    if not seeds:
+        return ()
+    target_seed_count = min(limit, max(len(seeds), 128))
+    if len(seeds) < target_seed_count:
+        seed_centers = [
+            next(item.center for item in items if item.polygon_index == polygon_index)
+            for polygon_index, _anchor in seeds
+        ]
+        available = [
+            item for item in items
+            if item.polygon_index not in seen_seed_polygons
+        ]
+        while available and len(seeds) < target_seed_count:
+            candidate = max(
+                available,
+                key=lambda item: (
+                    min(
+                        (item.center[0] - center[0]) ** 2
+                        + (item.center[2] - center[2]) ** 2
+                        for center in seed_centers
+                    ),
+                    terrain_support_start_score(item),
+                    -item.polygon_index,
+                ),
+            )
+            available.remove(candidate)
+            seen_seed_polygons.add(int(candidate.polygon_index))
+            seeds.append((int(candidate.polygon_index), candidate.center))
+            seed_centers.append(candidate.center)
+    if len(seeds) > limit:
+        # Keep spatially distributed anchors instead of letting early model
+        # order consume every available seed slot.
+        stride = float(len(seeds)) / float(limit)
+        seeds = [seeds[min(len(seeds) - 1, int(index * stride))] for index in range(limit)]
+
+    base_quota, remainder = divmod(limit, len(seeds))
+    selected: List[TerrainSupportItem] = []
+    selected_polygon_indices = set()
+    for seed_order, (seed_index, anchor) in enumerate(seeds):
+        quota = base_quota + (1 if seed_order < remainder else 0)
+        if quota <= 0:
+            continue
+        neighborhood = _connected_terrain_support_items_within_radius(
+            items,
+            seed_polygon_index=seed_index,
+            center_x=float(anchor[0]),
+            center_z=float(anchor[2]),
+            radius=safe_radius,
+            max_items=quota,
+        )
+        for item in neighborhood:
+            if item.polygon_index in selected_polygon_indices:
+                continue
+            selected_polygon_indices.add(item.polygon_index)
+            selected.append(item)
+            if len(selected) >= limit:
+                return tuple(selected)
+    if len(selected) < limit:
+        # Some compiled terrain tiles do not share vertex indices across local
+        # seams. Fill any unused budget by nearest unselected tiles so sparse
+        # outdoor islands still receive support instead of under-filling the
+        # Processor allowance.
+        anchors = tuple(_finite_vec3(point) for point in anchor_points)
+        remaining = [
+            item for item in items
+            if item.polygon_index not in selected_polygon_indices
+        ]
+        remaining.sort(
+            key=lambda item: (
+                min(_xz_bounds_distance_sq(item.bounds, point[0], point[2]) for point in anchors),
+                -terrain_support_start_score(item),
+                item.polygon_index,
+            )
+        )
+        for item in remaining:
+            selected_polygon_indices.add(item.polygon_index)
+            selected.append(item)
+            if len(selected) >= limit:
+                break
+    return tuple(selected)
 
 
 def normalize_terrain_support_brush_mode(value: object) -> str:

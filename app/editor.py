@@ -39,7 +39,7 @@ import re
 import struct
 import sys
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 EDITOR_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -56,6 +56,8 @@ from features.doors import clone as door_clone
 from features.doors import links as door_links
 from features.dat_editing import compiler_strategy as dat_compiler_strategy
 from features.dat_editing import gltf_export as dat_gltf_export
+from features.dat_editing import legacy_ed as dat_legacy_ed
+from features.dat_editing import terrain_reconstruction
 from features.dat_editing import terrain_semantics
 from features.prefabs import import_static as prefab_import
 from features.prefabs import inspector as prefab_inspector
@@ -72,6 +74,10 @@ _view3d_missing: list = []   # packages still needed; populated by _import_gui()
 DAT_TO_ED_DEFAULT_TERRAIN_SUPPORT_RADIUS = 4096.0
 DAT_TO_ED_PROCESSOR_BRUSH_BUDGET = 1500
 DAT_TO_ED_PROCESSOR_POLYGON_BUDGET = 12000
+DAT_TO_ED_ANSKRAMKEEP_BACK_START_POINT = (0.0, -104.0, 16.0)
+DAT_TO_ED_TERRAIN_SUPPORT_SELECTION_MODE_BY_LEVEL = {
+    "ISLEOFASHES": "multi_anchor_budget",
+}
 
 
 def _ask_prefab_collision_options(parent, title: str = "Prefab Collision") -> Optional[Dict[str, Any]]:
@@ -351,6 +357,8 @@ class EditorApp:
         m_tools.add_separator()
         m_tools.add_command(label="Generate DEDit ED from DAT...",
                             command=self.cmd_generate_dedit_ed_from_dat)
+        m_tools.add_command(label="Generate DEDit ED with Reserved Stairs...",
+                            command=self.cmd_generate_dedit_ed_from_dat_with_stair_assemblies)
         m_tools.add_command(label="Export DAT Geometry as glTF for Inspection...",
                             command=self.cmd_export_dat_geometry_gltf)
 
@@ -1104,10 +1112,111 @@ class EditorApp:
             f"triangles: {result.triangle_count}",
         )
 
+    def cmd_generate_dedit_ed_from_dat_with_stair_assemblies(self) -> None:
+        """Select high-confidence PhysicsBSP stairs and run normal generation."""
+        if not getattr(self, "active", None):
+            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
+            return
+        bsp_world = self.active.get_bsp()
+        if bsp_world is None:
+            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
+            return
+        physics_model = terrain_semantics.model_by_name(
+            getattr(bsp_world, "world_models", ()) or (),
+            terrain_semantics.PHYSICS_BSP_MODEL,
+        )
+        if physics_model is None:
+            messagebox.showinfo(
+                "No stair assemblies",
+                "The active DAT has no PhysicsBSP model to inspect.",
+            )
+            return
+        try:
+            candidates = terrain_reconstruction.physics_shell_candidates(physics_model)
+            assemblies = terrain_reconstruction.detect_physics_shell_stair_assemblies(
+                physics_model,
+                candidates,
+            )
+        except Exception as e:
+            messagebox.showerror("Stair detection failed", str(e))
+            return
+        if not assemblies:
+            messagebox.showinfo(
+                "No stair assemblies",
+                "No conservative PhysicsBSP stair assemblies were detected.",
+            )
+            return
+
+        eligible_indices = {
+            int(assembly.assembly_index)
+            for assembly in assemblies
+            if str(assembly.confidence).lower() == "high"
+        }
+        details = []
+        for assembly in assemblies:
+            eligible = int(assembly.assembly_index) in eligible_indices
+            bounds_min = tuple(round(float(value), 1) for value in assembly.bounds_min)
+            bounds_max = tuple(round(float(value), 1) for value in assembly.bounds_max)
+            details.append(
+                f"{assembly.assembly_index}: {assembly.confidence}; "
+                f"steps={assembly.step_count}; "
+                f"source polygons={len(assembly.source_polygon_indices)}; "
+                f"estimated faces={assembly.generated_face_count}; "
+                f"bounds={bounds_min}..{bounds_max}"
+                + ("" if eligible else " [inspection only]")
+            )
+        if not eligible_indices:
+            messagebox.showinfo(
+                "No reservable stair assemblies",
+                "Stair candidates were detected, but none have high confidence.\n\n"
+                + "\n".join(details),
+            )
+            return
+
+        answer = simpledialog.askstring(
+            "Reserve PhysicsBSP stair assemblies",
+            "Detected stair assemblies:\n\n"
+            + "\n".join(details)
+            + "\n\nOnly high-confidence IDs are reservable. "
+              "Enter one or more eligible IDs separated by commas. "
+              "Every requested assembly will be emitted completely or rejected completely.\n"
+            + "Eligible IDs: "
+            + ", ".join(str(index) for index in sorted(eligible_indices)),
+            initialvalue="",
+            parent=getattr(self, "root", None),
+        )
+        if answer is None or not str(answer).strip():
+            return
+        try:
+            parts = tuple(
+                part for part in re.split(r"[,;\s]+", str(answer).strip()) if part
+            )
+            selected_indices = tuple(sorted({int(part) for part in parts}))
+        except ValueError:
+            messagebox.showerror(
+                "Invalid stair assembly selection",
+                "Enter only integer assembly IDs separated by commas.",
+            )
+            return
+        invalid_indices = tuple(
+            index for index in selected_indices if index not in eligible_indices
+        )
+        if not selected_indices or invalid_indices:
+            messagebox.showerror(
+                "Invalid stair assembly selection",
+                "These IDs are not eligible high-confidence assemblies: "
+                + ", ".join(str(index) for index in invalid_indices),
+            )
+            return
+        self.cmd_generate_dedit_ed_from_dat(
+            physics_shell_stair_assembly_indices=selected_indices,
+        )
+
     def cmd_generate_dedit_ed_from_dat(
         self,
         *,
         behavior_prop_validation_profile: str = "none",
+        physics_shell_stair_assembly_indices: Sequence[int] = (),
     ) -> None:
         if not getattr(self, "active", None):
             messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
@@ -1117,6 +1226,12 @@ class EditorApp:
         if bsp_world is None:
             messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
             return
+        source_name = L.display_name or L.rez_vpath or L.path or "level"
+        stem = self._dat_to_ed_output_stem(source_name)
+        level_policy_key = stem.upper()
+        physics_shell_stair_assembly_indices = tuple(sorted({
+            int(index) for index in physics_shell_stair_assembly_indices
+        }))
 
         behavior_prop_validation_profile_key = str(
             behavior_prop_validation_profile or "none"
@@ -1181,7 +1296,11 @@ class EditorApp:
             destructable_brush_model_names
         ) and (
             destructable_brush_behavior_prop_validation_enabled
-            or (not behavior_prop_validation_enabled and not has_terrain0)
+            or (
+                not behavior_prop_validation_enabled
+                and not has_terrain0
+                and level_policy_key == "DRAGONSTADIUM"
+            )
         )
         model_names = (
             destructable_brush_model_names
@@ -1240,8 +1359,6 @@ class EditorApp:
             return
 
         try:
-            source_name = L.display_name or L.rez_vpath or L.path or "level"
-            stem = self._dat_to_ed_output_stem(source_name)
             source_ed_oracle_path = self._source_ed_oracle_path(
                 source_name,
                 level_path=getattr(L, "path", "") or "",
@@ -1354,26 +1471,26 @@ class EditorApp:
             if not include_door_objects:
                 door_source_ed_path = ""
             airail_source_ed_path = source_ed_oracle_path
-            include_airail_objects = bool(has_airail_helpers and airail_source_ed_path)
+            include_airail_objects = bool(has_airail_helpers)
             if not include_airail_objects:
                 airail_source_ed_path = ""
             sky_source_ed_path = source_ed_oracle_path
-            include_sky_objects = bool(has_sky_helpers and sky_source_ed_path)
+            include_sky_objects = bool(has_sky_helpers)
             if not include_sky_objects:
                 sky_source_ed_path = ""
             sound_source_ed_path = source_ed_oracle_path
-            include_sound_objects = bool(has_sound_helpers and sound_source_ed_path)
+            include_sound_objects = bool(has_sound_helpers)
             if not include_sound_objects:
                 sound_source_ed_path = ""
             # Helper Brush emissions remain diagnostic-only until compiled-DAT
             # leakage reports show they do not enter visible/visibility BSP.
             collision_helper_source_ed_path = source_ed_oracle_path
-            include_collision_helper_objects = bool(has_collision_helpers and collision_helper_source_ed_path)
+            include_collision_helper_objects = bool(has_collision_helpers)
             include_collision_helper_brushes = False
             if not include_collision_helper_objects:
                 collision_helper_source_ed_path = ""
             trigger_helper_source_ed_path = source_ed_oracle_path
-            include_trigger_helper_objects = bool(has_trigger_helpers and trigger_helper_source_ed_path)
+            include_trigger_helper_objects = bool(has_trigger_helpers)
             include_trigger_helper_brushes = False
             if not include_trigger_helper_objects:
                 trigger_helper_source_ed_path = ""
@@ -1429,10 +1546,23 @@ class EditorApp:
             include_destructable_prop_objects = bool(destructable_prop_behavior_prop_source_ed_path)
             include_destructable_brush_objects = bool(dat_native_destructable_brush_enabled)
             allow_unreconstructed_physics_shell = bool(dat_native_destructable_brush_enabled)
-            if include_destructable_prop_objects and not has_terrain0:
+            source_has_destructable_props = self._source_ed_has_object_class(
+                destructable_prop_behavior_prop_source_ed_path,
+                "DestructableProp",
+            )
+            if include_destructable_prop_objects and source_has_destructable_props and not has_terrain0:
                 include_physics_shell_patch = False
                 include_validation_floor = True
                 allow_unreconstructed_physics_shell = True
+            physics_shell_focus_points = ()
+            physics_shell_focus_radius = 0.0
+            physics_shell_focus_budget = 0
+            physics_shell_focus_seed_radius = 0.0
+            if include_physics_shell_patch and level_policy_key == "ANSKRAMKEEP":
+                physics_shell_focus_points = (DAT_TO_ED_ANSKRAMKEEP_BACK_START_POINT,)
+                physics_shell_focus_radius = 512.0
+                physics_shell_focus_budget = 512
+                physics_shell_focus_seed_radius = 128.0
             os.makedirs(output_dir, exist_ok=True)
             staged_dir = os.path.join(output_dir, "source_dat")
             os.makedirs(staged_dir, exist_ok=True)
@@ -1481,6 +1611,10 @@ class EditorApp:
                 output_suffix = "reconstructed_high_risk_prop_validation"
             else:
                 output_suffix = "reconstructed_behavior_prop_validation"
+            if physics_shell_stair_assembly_indices:
+                output_suffix += "_stairs_" + "_".join(
+                    str(index) for index in physics_shell_stair_assembly_indices
+                )
 
             report = dat_compiler_strategy.build_full_world_skeleton_acceptance_report(
                 source_dat_path=staged_dat,
@@ -1495,7 +1629,10 @@ class EditorApp:
                 include_terrain_support_patch=include_terrain_support_patch,
                 terrain_support_name_prefix=f"{stem}_TerrainSupport",
                 terrain_support_margin=0.0,
-                terrain_support_selection_mode="connected_budget",
+                terrain_support_selection_mode=DAT_TO_ED_TERRAIN_SUPPORT_SELECTION_MODE_BY_LEVEL.get(
+                    level_policy_key,
+                    "connected_budget",
+                ),
                 terrain_support_radius=DAT_TO_ED_DEFAULT_TERRAIN_SUPPORT_RADIUS,
                 terrain_support_brush_mode="single_polygon",
                 terrain_support_thickness=128.0,
@@ -1504,6 +1641,11 @@ class EditorApp:
                 physics_shell_name_prefix=f"{stem}_PhysicsShell",
                 physics_shell_max_polygons=physics_shell_polygon_budget,
                 physics_shell_thickness=16.0,
+                physics_shell_focus_points=physics_shell_focus_points,
+                physics_shell_focus_radius=physics_shell_focus_radius,
+                physics_shell_focus_budget=physics_shell_focus_budget,
+                physics_shell_focus_seed_radius=physics_shell_focus_seed_radius,
+                physics_shell_stair_assembly_indices=physics_shell_stair_assembly_indices,
                 include_door_objects=include_door_objects,
                 door_source_ed_path=door_source_ed_path,
                 include_airail_objects=include_airail_objects,
@@ -1644,6 +1786,9 @@ class EditorApp:
             f"DestructableProp objects: {'included' if getattr(report, 'include_destructable_prop_objects', False) else 'not included'}\n\n"
             f"DestructableBrush objects: {'included' if getattr(report, 'include_destructable_brush_objects', False) else 'not included'}\n\n"
             f"Behavior prop validation profile: {behavior_prop_validation_profile_key if behavior_prop_validation_enabled else 'not included'}\n\n"
+            f"Stair assemblies requested: {', '.join(str(index) for index in physics_shell_stair_assembly_indices) or 'none'}; "
+            f"selected: {', '.join(str(index) for index in getattr(report, 'physics_shell_selected_stair_assembly_indices', ())) or 'none'}; "
+            f"rejected: {', '.join(str(index) for index in getattr(report, 'physics_shell_rejected_stair_assembly_indices', ())) or 'none'}\n\n"
             "Next: open the ED in old DEDit, save it, process it with LithTech 2.1 "
             "Processor.exe, then fresh-load the DAT in game.",
         )
@@ -1678,6 +1823,21 @@ class EditorApp:
             if os.path.exists(path):
                 return path
         return ""
+
+    @staticmethod
+    def _source_ed_has_object_class(source_ed_path: str, class_name: str) -> bool:
+        path = os.path.abspath(source_ed_path) if source_ed_path else ""
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            report = dat_legacy_ed.load_legacy_ed_object_scan_report(path)
+        except Exception:
+            return False
+        target = str(class_name or "").strip().lower()
+        return any(
+            str(name or "").strip().lower() == target and int(count) > 0
+            for name, count in (getattr(report, "class_counts", {}) or {}).items()
+        )
 
     @staticmethod
     def _dat_model_is_pure_airail_helper(model: Any) -> bool:
