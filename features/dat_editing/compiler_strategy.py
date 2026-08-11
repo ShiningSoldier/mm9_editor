@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import math
 import re
 import shutil
@@ -620,6 +621,13 @@ class FullWorldSkeletonAcceptanceReport:
     group_name: str = ""
     include_validation_floor: bool = False
     include_terrain_support_patch: bool = False
+    terrain_support_model_names: Tuple[str, ...] = ()
+    terrain_support_model_budgets: Tuple[Tuple[str, int], ...] = ()
+    terrain_support_generated_brush_counts: Tuple[Tuple[str, int], ...] = ()
+    terrain_support_generated_source_polygon_counts: Tuple[
+        Tuple[str, int], ...
+    ] = ()
+    terrain_support_anchor_points: Tuple[Tuple[float, float, float], ...] = ()
     include_physics_shell_patch: bool = False
     physics_shell_focus_points: Tuple[Tuple[float, float, float], ...] = ()
     physics_shell_focus_radius: float = 0.0
@@ -711,6 +719,109 @@ class FullWorldSkeletonAcceptanceReport:
     preflight_sky_marker_polygon_count: int = 0
     preflight_sky_marker_point_count: int = 0
     stage_timings_seconds: Tuple[Tuple[str, float], ...] = ()
+
+
+@dataclass(frozen=True)
+class OracleFreeTerrainBaselineCoverage:
+    model_name: str
+    source_point_count: int = 0
+    source_polygon_count: int = 0
+    eligible_support_polygon_count: int = 0
+    playable_area_count: int = 0
+    playable_polygon_count: int = 0
+    walkable_polygon_count: int = 0
+    walkable_xz_area: float = 0.0
+    allocated_polygon_budget: int = 0
+    generated_support_brush_count: int = 0
+    generated_support_source_polygon_count: int = 0
+    nearby_anchor_count: int = 0
+    nearest_anchor_distance: float = 0.0
+    terrain_object_present: bool = False
+    reconstructed_by_baseline: bool = False
+    coverage_status: str = "not_checked"
+    generated_coverage_polygon_count: int = 0
+    sample_count: int = 0
+    covered_sample_count: int = 0
+    missing_sample_count: int = 0
+    missing_ratio: float = 0.0
+
+
+@dataclass(frozen=True)
+class TerrainSupportModelBudget:
+    model_name: str
+    source_polygon_count: int = 0
+    eligible_support_polygon_count: int = 0
+    playable_area_count: int = 0
+    playable_polygon_count: int = 0
+    walkable_polygon_count: int = 0
+    walkable_xz_area: float = 0.0
+    bounds_min: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds_max: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    nearby_anchor_count: int = 0
+    nearest_anchor_distance: float = 0.0
+    allocation_weight: float = 0.0
+    allocated_polygon_budget: int = 0
+
+
+@dataclass(frozen=True)
+class TerrainSupportPlayableAreaBudget:
+    model_name: str
+    area_index: int = 0
+    seed_polygon_index: int = 0
+    anchor_count: int = 0
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bounds: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    candidate_polygon_count: int = 0
+    walkable_polygon_count: int = 0
+    walkable_xz_area: float = 0.0
+    allocation_weight: float = 0.0
+    allocated_source_polygon_budget: int = 0
+
+
+@dataclass(frozen=True)
+class OracleFreeDatToEdBaselineReport:
+    status: str
+    source_dat_path: str
+    generated_ed_path: str = ""
+    source_sha256: str = ""
+    source_byte_count: int = 0
+    oracle_free: bool = False
+    source_ed_dependencies: Tuple[Tuple[str, str], ...] = ()
+    acceptance: Optional[FullWorldSkeletonAcceptanceReport] = None
+    total_world_model_count: int = 0
+    total_world_polygon_count: int = 0
+    selected_model_count: int = 0
+    selected_model_polygon_count: int = 0
+    terrain_model_count: int = 0
+    terrain_source_polygon_count: int = 0
+    reconstructed_terrain_model_count: int = 0
+    terrain_sample_count: int = 0
+    terrain_covered_sample_count: int = 0
+    terrain_missing_sample_count: int = 0
+    terrain_missing_ratio: float = 0.0
+    terrain_support_budget: int = 0
+    terrain_support_anchor_points: Tuple[Tuple[float, float, float], ...] = ()
+    terrain_support_budget_plan: Tuple[TerrainSupportModelBudget, ...] = ()
+    terrain_playable_area_budget_plan: Tuple[
+        TerrainSupportPlayableAreaBudget, ...
+    ] = ()
+    terrain_models: Tuple[OracleFreeTerrainBaselineCoverage, ...] = ()
+    terrain_object_names: Tuple[str, ...] = ()
+    unmatched_terrain_object_names: Tuple[str, ...] = ()
+    physics_bsp_polygon_count: int = 0
+    dat_object_count: int = 0
+    dat_object_class_counts: Tuple[Tuple[str, int], ...] = ()
+    helper_model_counts: Tuple[Tuple[str, int], ...] = ()
+    generated_object_class_counts: Tuple[Tuple[str, int], ...] = ()
+    generated_brush_count: int = 0
+    generated_polygon_count: int = 0
+    processor_brush_budget: int = 0
+    processor_polygon_budget: int = 0
+    processor_brush_headroom: int = 0
+    processor_polygon_headroom: int = 0
+    blockers: Tuple[str, ...] = ()
+    cautions: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3160,6 +3271,9 @@ def _preflight_terrain_support_patch_cost(
     *,
     surrogate_module: object,
     source_model_name: str,
+    source_model_names: Sequence[str] = (),
+    model_polygon_budgets: Optional[Mapping[str, int]] = None,
+    extra_anchor_points: Sequence[object] = (),
     name_prefix: str,
     margin: float,
     selection_mode: str,
@@ -3176,13 +3290,22 @@ def _preflight_terrain_support_patch_cost(
     the actual normalized Brush/face cost instead of treating each source
     polygon as an equal-cost triangle.
     """
-    terrain = terrain_semantics.model_by_name(
-        tuple(getattr(parsed, "world_models", ()) or ()),
-        str(source_model_name or "Terrain0"),
+    terrain_names = tuple(
+        str(name).strip() for name in source_model_names if str(name).strip()
     )
-    if terrain is None:
+    if not terrain_names:
+        terrain_names = (str(source_model_name or "Terrain0"),)
+    world_models = tuple(getattr(parsed, "world_models", ()) or ())
+    missing_names = tuple(
+        name
+        for name in terrain_names
+        if terrain_semantics.model_by_name(world_models, name) is None
+    )
+    if missing_names:
         return 0, 0, 0, (
-            f"Terrain support preflight could not find source model {source_model_name}; support cost is unmeasured.",
+            "Terrain support preflight could not find source model(s) "
+            + ", ".join(missing_names)
+            + "; support cost is unmeasured.",
         ), None
     anchor_brushes = tuple(
         brush
@@ -3195,30 +3318,79 @@ def _preflight_terrain_support_patch_cost(
             "Terrain support preflight had no anchor model points; support cost is unmeasured.",
         ), None
     try:
-        patch_brushes, patch_summaries, placement = (
-            surrogate_module._terrain_support_patch_brushes_for_brushes(
-                data,
-                anchor_brushes,
-                parsed_world=parsed,
-                source_model_name=source_model_name,
-                name_prefix=name_prefix,
-                margin=margin,
-                selection_mode=selection_mode,
-                radius=radius,
-                brush_mode=brush_mode,
-                thickness=thickness,
-                max_polygons=max_polygons,
-                side_texture=side_texture,
+        if len(terrain_names) > 1 or model_polygon_budgets:
+            budgets = {
+                name: max(
+                    0,
+                    int(
+                        (model_polygon_budgets or {}).get(
+                            name,
+                            (model_polygon_budgets or {}).get(
+                                name.lower(),
+                                0,
+                            ),
+                        )
+                    ),
+                )
+                for name in terrain_names
+            }
+            patch_brushes, patch_summaries, placement = (
+                surrogate_module._terrain_support_patch_brushes_for_models(
+                    data,
+                    anchor_brushes,
+                    parsed_world=parsed,
+                    source_model_names=terrain_names,
+                    model_polygon_budgets=budgets,
+                    extra_anchor_points=extra_anchor_points,
+                    name_prefix=name_prefix,
+                    margin=margin,
+                    selection_mode=selection_mode,
+                    radius=radius,
+                    brush_mode=brush_mode,
+                    thickness=thickness,
+                    side_texture=side_texture,
+                )
             )
-        )
+        else:
+            patch_brushes, patch_summaries, placement = (
+                surrogate_module._terrain_support_patch_brushes_for_brushes(
+                    data,
+                    anchor_brushes,
+                    parsed_world=parsed,
+                    extra_anchor_points=extra_anchor_points,
+                    source_model_name=source_model_name,
+                    name_prefix=name_prefix,
+                    margin=margin,
+                    selection_mode=selection_mode,
+                    radius=radius,
+                    brush_mode=brush_mode,
+                    thickness=thickness,
+                    max_polygons=max_polygons,
+                    side_texture=side_texture,
+                )
+            )
         brush_count = len(patch_brushes)
         polygon_count = sum(len(getattr(brush, "surfaces", ()) or ()) for brush in patch_brushes)
         point_count = sum(len(getattr(brush, "points", ()) or ()) for brush in patch_brushes)
-        source_polygon_count = sum(int(item.polygon_count > 0) for item in patch_summaries)
-        return brush_count, polygon_count, point_count, (
+        source_polygon_count = sum(
+            max(
+                1,
+                int(getattr(item, "source_polygon_count", 0) or 0),
+            )
+            for item in patch_summaries
+        )
+        normalization_notes = tuple(
+            note
+            for summary in patch_summaries
+            for note in tuple(getattr(summary, "notes", ()) or ())
+            if "terrain support skipped" in str(note).lower()
+        )
+        return brush_count, polygon_count, point_count, tuple(_unique_text((
             f"Terrain support preflight measured {brush_count} normalized Brush(es), "
-            f"{polygon_count} face(s), and {point_count} point(s) across {source_polygon_count} support group(s).",
-        ), (patch_brushes, patch_summaries, placement)
+            f"{polygon_count} face(s), and {point_count} point(s) across "
+            f"{source_polygon_count} source polygon(s) from "
+            f"{len(terrain_names)} Terrain* model(s).",
+        ) + normalization_notes)), (patch_brushes, patch_summaries, placement)
     except Exception as exc:
         return 0, 0, 0, (
             f"Terrain support preflight could not measure normalized Brush cost: {exc}",
@@ -3332,6 +3504,9 @@ def build_full_world_skeleton_acceptance_report(
     validation_floor_texture: str = "TEXTURES\\LevelTextures\\Terrain\\MainGrass.dtx",
     include_terrain_support_patch: bool = False,
     terrain_support_model_name: str = "Terrain0",
+    terrain_support_model_names: Sequence[str] = (),
+    terrain_support_model_budgets: Optional[Mapping[str, int]] = None,
+    terrain_support_anchor_points: Sequence[object] = (),
     terrain_support_name_prefix: str = "TerrainSupportPatch",
     terrain_support_margin: float = 0.0,
     terrain_support_selection_mode: str = "bounds",
@@ -3469,6 +3644,39 @@ def build_full_world_skeleton_acceptance_report(
             ),
         )
     requested_names = tuple(str(name).strip() for name in model_names if str(name).strip())
+    requested_terrain_support_names = tuple(
+        str(name).strip()
+        for name in terrain_support_model_names
+        if str(name).strip()
+    )
+    if not requested_terrain_support_names:
+        requested_terrain_support_names = (
+            str(terrain_support_model_name or "Terrain0"),
+        )
+    raw_terrain_budget_lookup = {
+        str(name).strip().lower(): max(0, int(value))
+        for name, value in (terrain_support_model_budgets or {}).items()
+        if str(name).strip()
+    }
+    reported_terrain_support_budgets = tuple(
+        (
+            name,
+            raw_terrain_budget_lookup.get(
+                name.lower(),
+                (
+                    max(0, int(terrain_support_max_polygons))
+                    if len(requested_terrain_support_names) == 1
+                    else 0
+                ),
+            ),
+        )
+        for name in requested_terrain_support_names
+    )
+    reported_terrain_support_anchor_points = tuple(
+        _safe_vec3(point)
+        for point in terrain_support_anchor_points
+        if _is_vec3(point)
+    )
     install_path = ""
     cutout_coverage_enabled = (
         bool(include_terrain_support_patch)
@@ -3491,9 +3699,30 @@ def build_full_world_skeleton_acceptance_report(
             "A synthetic validation floor is included so isolated object clusters can be walked in game."
         )
     if include_terrain_support_patch:
-        notes.append(
-            f"A closed terrain support patch is generated from local {terrain_support_model_name} polygons."
-        )
+        if len(requested_terrain_support_names) > 1:
+            notes.append(
+                "Closed terrain support patches are generated independently from "
+                + ", ".join(requested_terrain_support_names)
+                + " under one shared Processor Brush budget."
+            )
+            notes.append(
+                "Terrain support model budgets: "
+                + ", ".join(
+                    f"{name}={budget}"
+                    for name, budget in reported_terrain_support_budgets
+                )
+                + "."
+            )
+        else:
+            notes.append(
+                f"A closed terrain support patch is generated from local {terrain_support_model_name} polygons."
+            )
+        if reported_terrain_support_anchor_points:
+            notes.append(
+                "DAT-native Terrain support anchors: "
+                f"{len(reported_terrain_support_anchor_points)} "
+                "StartPoint/ExitTrigger position(s)."
+            )
         if str(terrain_support_selection_mode or "bounds").lower().replace("-", "_") != "bounds":
             notes.append(
                 f"Terrain support selection mode: {terrain_support_selection_mode}, radius={terrain_support_radius:g}."
@@ -3532,14 +3761,23 @@ def build_full_world_skeleton_acceptance_report(
                 + "."
             )
     if include_door_objects:
-        notes.append("Door/RotatingDoor object records will be copied from the source ED oracle when their Name matches a selected DAT world model.")
         notes.append(
-            "Copied Door child Brushes replace matching selected model Brushes; preflight does not double-count them as extra Brush cost."
+            "Door/RotatingDoor object records will prefer the source ED oracle "
+            "and fall back to DAT-native records when their Name matches a "
+            "selected DAT world model."
+        )
+        notes.append(
+            "Door child Brushes replace matching static group entries; DAT-native "
+            "models use compiled geometry and source-ED child assets take priority "
+            "when available."
         )
         if source_door_ed:
             notes.append(f"Door source ED oracle: {source_door_ed}.")
         else:
-            notes.append("Door source ED oracle is not configured; Door/RotatingDoor object nodes will be skipped.")
+            notes.append(
+                "Door source ED oracle is not configured; DAT-native "
+                "Door/RotatingDoor records and compiled model Brushes will be used."
+            )
     if include_airail_objects:
         notes.append("AIRail object records will be generated from DAT aiRail helper models.")
         if source_airail_ed:
@@ -3698,7 +3936,9 @@ def build_full_world_skeleton_acceptance_report(
         )
     if include_door_objects and not source_door_ed:
         cautions.append(
-            "Door object emission requires a source ED oracle; no synthetic Door or RotatingDoor template is emitted."
+            "Door/RotatingDoor emission is DAT-native without a source ED oracle; "
+            "compiled model Brushes are nested under the matching movable object, "
+            "but source-only Brush projection/flag details cannot be recovered."
         )
     if include_door_objects:
         if include_terrain_support_patch:
@@ -3714,7 +3954,10 @@ def build_full_world_skeleton_acceptance_report(
         else:
             door_behavior_context = "sparse_context_warning"
             cautions.append(
-                "Door behavior validation is sparse: copied Door/RotatingDoor objects without local Terrain* or PhysicsBSP support context can move incorrectly in game; use a source-derived support patch before accepting BoxPhysics door movement."
+                "Door behavior validation is sparse: generated Door/RotatingDoor "
+                "objects without local Terrain* or PhysicsBSP support context can "
+                "move incorrectly in game; include local support geometry before "
+                "accepting BoxPhysics door movement."
             )
     if include_airail_objects and not source_airail_ed:
         cautions.append(
@@ -4064,11 +4307,21 @@ def build_full_world_skeleton_acceptance_report(
         )
 
     door_pair_notes: Tuple[str, ...] = ()
-    if include_door_objects and source_door_ed:
-        requested_names, door_pair_notes = surrogate_ed._expand_model_names_with_source_door_pairs(
-            requested_names,
-            source_ed_path=source_door_ed,
-        )
+    if include_door_objects:
+        if source_door_ed:
+            requested_names, door_pair_notes = (
+                surrogate_ed._expand_model_names_with_source_door_pairs(
+                    requested_names,
+                    source_ed_path=source_door_ed,
+                )
+            )
+        else:
+            requested_names, door_pair_notes = (
+                surrogate_ed._expand_model_names_with_dat_door_pairs(
+                    source_dat_bytes,
+                    model_names=requested_names,
+                )
+            )
         notes.extend(door_pair_notes)
 
     effective_max_models = max(0, int(max_models))
@@ -4163,6 +4416,10 @@ def build_full_world_skeleton_acceptance_report(
     terrain_support_preflight_brushes = 0
     terrain_support_preflight_polygons = 0
     terrain_support_preflight_points = 0
+    terrain_support_generated_brush_counts: Tuple[Tuple[str, int], ...] = ()
+    terrain_support_generated_source_polygon_counts: Tuple[
+        Tuple[str, int], ...
+    ] = ()
     precomputed_terrain_support_brush_bundle: Optional[Tuple[object, ...]] = None
     if include_terrain_support_patch:
         (
@@ -4177,6 +4434,9 @@ def build_full_world_skeleton_acceptance_report(
             selected,
             surrogate_module=surrogate_ed,
             source_model_name=terrain_support_model_name,
+            source_model_names=requested_terrain_support_names,
+            model_polygon_budgets=dict(reported_terrain_support_budgets),
+            extra_anchor_points=reported_terrain_support_anchor_points,
             name_prefix=terrain_support_name_prefix,
             margin=terrain_support_margin,
             selection_mode=terrain_support_selection_mode,
@@ -4187,6 +4447,47 @@ def build_full_world_skeleton_acceptance_report(
             side_texture=terrain_support_side_texture,
         )
         notes.extend(terrain_support_preflight_notes)
+        if precomputed_terrain_support_brush_bundle is not None:
+            patch_summaries = tuple(
+                precomputed_terrain_support_brush_bundle[1]
+            )
+            terrain_support_generated_brush_counts = tuple(
+                (
+                    name,
+                    sum(
+                        str(
+                            getattr(summary, "source_model_name", "") or ""
+                        ).lower()
+                        == name.lower()
+                        for summary in patch_summaries
+                    ),
+                )
+                for name in requested_terrain_support_names
+            )
+            terrain_support_generated_source_polygon_counts = tuple(
+                (
+                    name,
+                    sum(
+                        max(
+                            1,
+                            int(
+                                getattr(
+                                    summary,
+                                    "source_polygon_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                        )
+                        for summary in patch_summaries
+                        if str(
+                            getattr(summary, "source_model_name", "") or ""
+                        ).lower()
+                        == name.lower()
+                    ),
+                )
+                for name in requested_terrain_support_names
+            )
     sky_marker_preflight_brushes = 0
     sky_marker_preflight_polygons = 0
     sky_marker_preflight_points = 0
@@ -5173,7 +5474,9 @@ def build_full_world_skeleton_acceptance_report(
         ) + manual_steps[2:]
     if include_terrain_support_patch:
         manual_steps = manual_steps[:2] + (
-            f"Confirm the closed {terrain_support_model_name} support patch is present under the generated cluster and the StartPoint is above it.",
+            "Confirm closed support patches are present for "
+            + ", ".join(requested_terrain_support_names)
+            + " and the generated StartPoint is above a reconstructed surface.",
         ) + manual_steps[2:]
     if include_physics_shell_patch:
         manual_steps = manual_steps[:2] + (
@@ -5185,11 +5488,11 @@ def build_full_world_skeleton_acceptance_report(
             )
     if include_door_objects:
         manual_steps = manual_steps[:2] + (
-            "Confirm copied Door/RotatingDoor object nodes are present for matching selected DAT door models, keep their source Name, AttachTo, movement, lock, and sound properties, and contain the matching Brush child. When a source child Brush is available, its original projection and Brush flags should be preserved.",
+            "Confirm generated Door/RotatingDoor object nodes are present for matching DAT movable models, keep their Name, AttachTo, movement, lock, and sound properties, and contain every matching Brush child. A Terrain-named movable model may correctly contain multiple convex child Brushes. When a source child Brush is available, its original projection and Brush flags should be preserved.",
         ) + manual_steps[2:]
         if door_behavior_context in {"source_terrain_support_patch", "source_physics_shell_patch"}:
             manual_steps = manual_steps + (
-                "Activate each copied Door/RotatingDoor in game; door behavior can be accepted only if it works with the included local support context.",
+                "Activate each generated Door/RotatingDoor in game; door behavior can be accepted only if it works with the included local support context.",
             )
         elif door_behavior_context == "sparse_context_warning":
             manual_steps = manual_steps + (
@@ -5321,6 +5624,15 @@ def build_full_world_skeleton_acceptance_report(
         group_name=group_name,
         include_validation_floor=include_validation_floor,
         include_terrain_support_patch=include_terrain_support_patch,
+        terrain_support_model_names=requested_terrain_support_names,
+        terrain_support_model_budgets=reported_terrain_support_budgets,
+        terrain_support_generated_brush_counts=(
+            terrain_support_generated_brush_counts
+        ),
+        terrain_support_generated_source_polygon_counts=(
+            terrain_support_generated_source_polygon_counts
+        ),
+        terrain_support_anchor_points=reported_terrain_support_anchor_points,
         include_physics_shell_patch=include_physics_shell_patch,
         physics_shell_focus_points=tuple(reported_shell_focus_points),
         physics_shell_focus_radius=max(0.0, float(physics_shell_focus_radius)),
@@ -5428,6 +5740,825 @@ def build_full_world_skeleton_acceptance_report(
         manual_steps=manual_steps,
         cautions=tuple(_unique_text(cautions + list(surrogate_report.cautions))),
         notes=tuple(_unique_text(notes + skipped_notes + list(surrogate_report.notes))),
+    )
+
+
+def _oracle_free_source_ed_dependencies(
+    report: FullWorldSkeletonAcceptanceReport,
+) -> Tuple[Tuple[str, str], ...]:
+    dependencies = []
+    for field_name in report.__dataclass_fields__:
+        if not field_name.endswith("_source_ed_path"):
+            continue
+        value = str(getattr(report, field_name, "") or "").strip()
+        if value:
+            dependencies.append((field_name, os.path.abspath(value)))
+    return tuple(sorted(dependencies))
+
+
+def _dat_object_name(record: object) -> str:
+    for prop in tuple(getattr(record, "props", ()) or ()):
+        if str(getattr(prop, "name", "") or "").strip().lower() == "name":
+            return str(getattr(prop, "value", "") or "").strip()
+    return ""
+
+
+def _baseline_name_key(value: object) -> Tuple[object, ...]:
+    return tuple(
+        int(part) if part.isdigit() else part.lower()
+        for part in re.split(r"(\d+)", str(value or ""))
+        if part
+    )
+
+
+def _dat_object_property(
+    record: object,
+    property_name: str,
+    default: object = None,
+) -> object:
+    target = str(property_name or "").strip().lower()
+    for prop in tuple(getattr(record, "props", ()) or ()):
+        if str(getattr(prop, "name", "") or "").strip().lower() == target:
+            return getattr(prop, "value", default)
+    return default
+
+
+def _oracle_free_gameplay_anchor_points(
+    dat_objects: Sequence[object],
+) -> Tuple[Tuple[float, float, float], ...]:
+    points: List[Tuple[float, float, float]] = []
+    seen = set()
+    for record in dat_objects:
+        class_name = str(getattr(record, "type_str", "") or "").strip().lower()
+        if class_name not in {"startpoint", "exittrigger"}:
+            continue
+        raw_point = _dat_object_property(record, "Pos")
+        if not _is_vec3(raw_point):
+            continue
+        point = tuple(float(value) for value in raw_point)  # type: ignore[arg-type]
+        key = tuple(round(value, 5) for value in point)
+        if key in seen:
+            continue
+        seen.add(key)
+        points.append(point)  # type: ignore[arg-type]
+    return tuple(points)
+
+
+def _xz_distance_to_bounds(
+    point: Tuple[float, float, float],
+    bounds_min: Tuple[float, float, float],
+    bounds_max: Tuple[float, float, float],
+) -> float:
+    dx = max(bounds_min[0] - point[0], 0.0, point[0] - bounds_max[0])
+    dz = max(bounds_min[2] - point[2], 0.0, point[2] - bounds_max[2])
+    return math.hypot(dx, dz)
+
+
+def build_terrain_support_model_budget_plan(
+    parsed_world: object,
+    *,
+    anchor_points: Sequence[object] = (),
+    total_polygon_budget: int,
+    minimum_per_model: int = 32,
+    anchor_radius: float = 4096.0,
+) -> Tuple[TerrainSupportModelBudget, ...]:
+    """Allocate one shared support budget across every compiled Terrain* model.
+
+    Every model receives a deterministic minimum when the total budget permits.
+    Remaining capacity is weighted by connected playable-region coverage around
+    DAT-native StartPoint/ExitTrigger anchors, rather than raw polygon count.
+    """
+    terrains = tuple(sorted(
+        (
+            model
+            for model in tuple(getattr(parsed_world, "world_models", ()) or ())
+            if terrain_semantics.is_terrain_model(model)
+        ),
+        key=lambda model: _baseline_name_key(getattr(model, "name", "")),
+    ))
+    if not terrains:
+        return ()
+
+    finite_anchors = tuple(
+        _safe_vec3(point) for point in anchor_points if _is_vec3(point)
+    )
+    safe_radius = max(1.0, float(anchor_radius))
+    raw_rows: List[Dict[str, object]] = []
+    for model in terrains:
+        model_name = str(getattr(model, "name", "") or "")
+        points = tuple(
+            _safe_vec3(point)
+            for point in tuple(getattr(model, "points", ()) or ())
+            if _is_vec3(point)
+        )
+        if points:
+            bounds_min, bounds_max, _center = _points_bounds_center(points)
+        else:
+            bounds_min = (0.0, 0.0, 0.0)
+            bounds_max = (0.0, 0.0, 0.0)
+        distances = tuple(
+            _xz_distance_to_bounds(point, bounds_min, bounds_max)
+            for point in finite_anchors
+        )
+        nearby_count = sum(distance <= safe_radius for distance in distances)
+        nearest_distance = min(distances) if distances else 0.0
+        terrain_items = terrain_reconstruction.terrain_support_items(model)
+        eligible_count = len(terrain_items)
+        playable_areas = terrain_reconstruction.playable_terrain_area_allocations(
+            terrain_items,
+            finite_anchors,
+            margin=0.0,
+            radius=safe_radius,
+            total_polygon_budget=0,
+        )
+        playable_items = terrain_reconstruction.select_terrain_support_items(
+            terrain_items,
+            finite_anchors,
+            margin=0.0,
+            selection_mode="playable_area_budget",
+            radius=safe_radius,
+            max_items=eligible_count,
+        )
+        walkable_items = tuple(
+            item
+            for item in playable_items
+            if terrain_reconstruction.terrain_support_item_is_walkable(item)
+        )
+        walkable_xz_area = sum(
+            terrain_reconstruction.terrain_support_item_walkable_xz_area(item)
+            for item in walkable_items
+        )
+        proximity = (
+            1.0
+            + 0.20 * float(nearby_count)
+            + (
+                0.50 / (1.0 + nearest_distance / safe_radius)
+                if distances
+                else 0.0
+            )
+        )
+        playable_count = len(playable_items)
+        playable_weight = (
+            math.sqrt(max(1.0, float(playable_count)))
+            * math.sqrt(max(1.0, float(walkable_xz_area)))
+        )
+        raw_rows.append({
+            "model_name": model_name,
+            "source_polygon_count": len(
+                tuple(getattr(model, "polygons", ()) or ())
+            ),
+            "eligible_support_polygon_count": eligible_count,
+            "playable_area_count": len(playable_areas),
+            "playable_polygon_count": playable_count,
+            "walkable_polygon_count": len(walkable_items),
+            "walkable_xz_area": float(walkable_xz_area),
+            "bounds_min": bounds_min,
+            "bounds_max": bounds_max,
+            "nearby_anchor_count": nearby_count,
+            "nearest_anchor_distance": nearest_distance,
+            "allocation_weight": max(1.0, playable_weight * proximity),
+        })
+
+    total_budget = max(0, int(total_polygon_budget))
+    capacities = [
+        int(
+            row["playable_polygon_count"]
+            or row["eligible_support_polygon_count"]
+        )
+        for row in raw_rows
+    ]
+    allocations = [0 for _row in raw_rows]
+    if total_budget:
+        if total_budget < len(raw_rows):
+            ranked = sorted(
+                range(len(raw_rows)),
+                key=lambda index: (
+                    -float(raw_rows[index]["allocation_weight"]),
+                    _baseline_name_key(raw_rows[index]["model_name"]),
+                ),
+            )
+            for index in ranked[:total_budget]:
+                if capacities[index] > 0:
+                    allocations[index] = 1
+        else:
+            minimum = max(1, int(minimum_per_model))
+            equal_minimum = min(minimum, total_budget // len(raw_rows))
+            for index, capacity in enumerate(capacities):
+                allocations[index] = min(equal_minimum, capacity)
+
+        remaining = min(total_budget, sum(capacities)) - sum(allocations)
+        while remaining > 0:
+            active = [
+                index
+                for index, capacity in enumerate(capacities)
+                if allocations[index] < capacity
+            ]
+            if not active:
+                break
+            weight_total = sum(
+                float(raw_rows[index]["allocation_weight"]) for index in active
+            )
+            quotas = {
+                index: (
+                    float(remaining)
+                    * float(raw_rows[index]["allocation_weight"])
+                    / weight_total
+                )
+                for index in active
+            }
+            granted = 0
+            for index in active:
+                room = capacities[index] - allocations[index]
+                grant = min(room, int(math.floor(quotas[index])))
+                allocations[index] += grant
+                granted += grant
+            remaining -= granted
+            if remaining <= 0:
+                break
+            ranked = sorted(
+                (
+                    index
+                    for index in active
+                    if allocations[index] < capacities[index]
+                ),
+                key=lambda index: (
+                    -(quotas[index] - math.floor(quotas[index])),
+                    _baseline_name_key(raw_rows[index]["model_name"]),
+                ),
+            )
+            if not ranked:
+                break
+            for index in ranked:
+                if remaining <= 0:
+                    break
+                allocations[index] += 1
+                remaining -= 1
+
+    return tuple(
+        TerrainSupportModelBudget(
+            model_name=str(row["model_name"]),
+            source_polygon_count=int(row["source_polygon_count"]),
+            eligible_support_polygon_count=int(
+                row["eligible_support_polygon_count"]
+            ),
+            playable_area_count=int(row["playable_area_count"]),
+            playable_polygon_count=int(row["playable_polygon_count"]),
+            walkable_polygon_count=int(row["walkable_polygon_count"]),
+            walkable_xz_area=float(row["walkable_xz_area"]),
+            bounds_min=row["bounds_min"],  # type: ignore[arg-type]
+            bounds_max=row["bounds_max"],  # type: ignore[arg-type]
+            nearby_anchor_count=int(row["nearby_anchor_count"]),
+            nearest_anchor_distance=float(row["nearest_anchor_distance"]),
+            allocation_weight=float(row["allocation_weight"]),
+            allocated_polygon_budget=int(allocations[index]),
+        )
+        for index, row in enumerate(raw_rows)
+    )
+
+
+def _analyze_oracle_free_dat_to_ed_baseline(
+    *,
+    source_dat_path: str,
+    acceptance: FullWorldSkeletonAcceptanceReport,
+    terrain_support_model_name: str,
+    terrain_support_budget_plan: Sequence[TerrainSupportModelBudget] = (),
+    terrain_support_anchor_points: Sequence[object] = (),
+    terrain_coverage_ignored_textures: Sequence[str],
+    terrain_coverage_sample_grid: int,
+    terrain_support_radius: float = 4096.0,
+) -> OracleFreeDatToEdBaselineReport:
+    from core import bsp
+    from mm9_patcher import mm9_patch as patcher
+
+    source_dat = os.path.abspath(source_dat_path)
+    blockers = list(acceptance.blockers)
+    cautions = list(acceptance.cautions)
+    notes: List[str] = []
+    try:
+        with open(source_dat, "rb") as handle:
+            source_data = handle.read()
+        parsed = bsp.parse(source_data)
+        header = patcher.Header.parse(source_data)
+        dat_objects, _object_end = patcher.parse_objects(source_data, header.obj_pos)
+    except Exception as exc:
+        return OracleFreeDatToEdBaselineReport(
+            status="oracle_free_baseline_inventory_failed",
+            source_dat_path=source_dat,
+            generated_ed_path=acceptance.generated_ed_path,
+            acceptance=acceptance,
+            blockers=tuple(_unique_text(blockers + [f"baseline DAT inventory failed: {exc}"])),
+            cautions=tuple(_unique_text(cautions)),
+        )
+
+    dependencies = _oracle_free_source_ed_dependencies(acceptance)
+    if dependencies:
+        blockers.append(
+            "oracle-free baseline unexpectedly used source ED dependencies: "
+            + ", ".join(f"{name}={path}" for name, path in dependencies)
+        )
+    if acceptance.status != "ready_for_manual_full_world_skeleton_test":
+        blockers.append(
+            "full-world acceptance did not produce a manual-test candidate: "
+            + acceptance.status
+        )
+    if not acceptance.generated_ed_path or not os.path.exists(acceptance.generated_ed_path):
+        blockers.append("oracle-free baseline did not produce a generated ED")
+
+    world_models = tuple(getattr(parsed, "world_models", ()) or ())
+    terrain_models = tuple(
+        sorted(
+            (model for model in world_models if terrain_semantics.is_terrain_model(model)),
+            key=lambda model: _baseline_name_key(getattr(model, "name", "")),
+        )
+    )
+    selected_name_keys = {
+        str(name or "").lower() for name in acceptance.selected_model_names
+    }
+    selected_model_polygon_count = sum(
+        len(tuple(getattr(model, "polygons", ()) or ()))
+        for model in world_models
+        if str(getattr(model, "name", "") or "").lower() in selected_name_keys
+    )
+
+    object_class_counter = Counter(
+        str(getattr(record, "type_str", "") or "") for record in dat_objects
+    )
+    terrain_object_names = tuple(sorted(
+        (
+            _dat_object_name(record)
+            for record in dat_objects
+            if str(getattr(record, "type_str", "") or "").lower() == "terrain"
+            and _dat_object_name(record)
+        ),
+        key=_baseline_name_key,
+    ))
+    terrain_model_name_keys = {
+        str(getattr(model, "name", "") or "").lower() for model in terrain_models
+    }
+    unmatched_terrain_object_names = tuple(
+        name for name in terrain_object_names if name.lower() not in terrain_model_name_keys
+    )
+
+    helper_counts: Counter[str] = Counter()
+    for model in world_models:
+        for role in terrain_semantics.helper_texture_roles_for_model(model):
+            helper_counts[str(role)] += 1
+
+    coverage_cache: Dict[str, object] = {}
+    terrain_summaries: List[OracleFreeTerrainBaselineCoverage] = []
+    total_samples = 0
+    total_covered = 0
+    total_missing = 0
+    ignored_texture_keys = tuple(
+        str(item or "").lower() for item in terrain_coverage_ignored_textures
+    )
+    support_plan_by_name = {
+        item.model_name.lower(): item for item in terrain_support_budget_plan
+    }
+    playable_area_budget_plan: List[TerrainSupportPlayableAreaBudget] = []
+    reconstructed_terrain_keys = {
+        str(name).lower()
+        for name in acceptance.terrain_support_model_names
+    } or {str(terrain_support_model_name or "Terrain0").lower()}
+    generated_support_count_by_name = {
+        str(name).lower(): int(count)
+        for name, count in acceptance.terrain_support_generated_brush_counts
+    }
+    generated_support_source_count_by_name = {
+        str(name).lower(): int(count)
+        for name, count
+        in acceptance.terrain_support_generated_source_polygon_counts
+    }
+    for model in terrain_models:
+        model_name = str(getattr(model, "name", "") or "")
+        source_points = len(tuple(getattr(model, "points", ()) or ()))
+        source_polygons = len(tuple(getattr(model, "polygons", ()) or ()))
+        if acceptance.generated_ed_path and os.path.exists(acceptance.generated_ed_path):
+            coverage = build_terrain_support_source_coverage_report(
+                source_dat_path=source_dat,
+                generated_ed_path=acceptance.generated_ed_path,
+                terrain_model_name=model_name,
+                ignored_terrain_textures=terrain_coverage_ignored_textures,
+                sample_grid=terrain_coverage_sample_grid,
+                max_gaps=1,
+                _preparsed_world=parsed,
+                _generated_ed_analysis_cache=coverage_cache,
+            )
+        else:
+            coverage = TerrainSupportSourceCoverageReport(
+                status="generated_ed_missing",
+                source_dat_path=source_dat,
+                generated_ed_path=acceptance.generated_ed_path,
+                terrain_model_name=model_name,
+                source_polygon_count=source_polygons,
+            )
+        sample_count = int(coverage.sample_count)
+        covered_samples = int(coverage.covered_sample_count)
+        missing_samples = int(coverage.missing_sample_count)
+        if not sample_count and coverage.status == "no_generated_terrain_coverage":
+            source_items = _terrain_source_coverage_items(
+                model,
+                ignored_textures=ignored_texture_keys,
+            )
+            sample_count = sum(
+                len(terrain_reconstruction.xz_polygon_interior_sample_points(
+                    item[4],
+                    _clamp_int(int(terrain_coverage_sample_grid), 1, 9),
+                ))
+                for item in source_items
+            )
+            missing_samples = sample_count
+        total_samples += sample_count
+        total_covered += covered_samples
+        total_missing += missing_samples
+        model_plan = support_plan_by_name.get(model_name.lower())
+        if model_plan is not None:
+            source_selection_budget = min(
+                int(model_plan.playable_polygon_count),
+                max(1, int(model_plan.allocated_polygon_budget)) * 2,
+            )
+            for area in terrain_reconstruction.playable_terrain_area_allocations(
+                terrain_reconstruction.terrain_support_items(model),
+                tuple(
+                    _safe_vec3(point)
+                    for point in terrain_support_anchor_points
+                    if _is_vec3(point)
+                ),
+                margin=0.0,
+                radius=max(1.0, float(terrain_support_radius)),
+                total_polygon_budget=source_selection_budget,
+            ):
+                playable_area_budget_plan.append(
+                    TerrainSupportPlayableAreaBudget(
+                        model_name=model_name,
+                        area_index=int(area.area_index),
+                        seed_polygon_index=int(area.seed_polygon_index),
+                        anchor_count=int(area.anchor_count),
+                        center=tuple(area.center),
+                        bounds=tuple(area.bounds),
+                        candidate_polygon_count=int(
+                            area.candidate_polygon_count
+                        ),
+                        walkable_polygon_count=int(
+                            area.walkable_polygon_count
+                        ),
+                        walkable_xz_area=float(area.walkable_xz_area),
+                        allocation_weight=float(area.allocation_weight),
+                        allocated_source_polygon_budget=int(
+                            area.allocated_polygon_budget
+                        ),
+                    )
+                )
+        terrain_summaries.append(OracleFreeTerrainBaselineCoverage(
+            model_name=model_name,
+            source_point_count=source_points,
+            source_polygon_count=source_polygons,
+            eligible_support_polygon_count=(
+                model_plan.eligible_support_polygon_count if model_plan else 0
+            ),
+            playable_area_count=(
+                model_plan.playable_area_count if model_plan else 0
+            ),
+            playable_polygon_count=(
+                model_plan.playable_polygon_count if model_plan else 0
+            ),
+            walkable_polygon_count=(
+                model_plan.walkable_polygon_count if model_plan else 0
+            ),
+            walkable_xz_area=(
+                model_plan.walkable_xz_area if model_plan else 0.0
+            ),
+            allocated_polygon_budget=(
+                model_plan.allocated_polygon_budget if model_plan else 0
+            ),
+            generated_support_brush_count=generated_support_count_by_name.get(
+                model_name.lower(),
+                0,
+            ),
+            generated_support_source_polygon_count=(
+                generated_support_source_count_by_name.get(
+                    model_name.lower(),
+                    0,
+                )
+            ),
+            nearby_anchor_count=(
+                model_plan.nearby_anchor_count if model_plan else 0
+            ),
+            nearest_anchor_distance=(
+                model_plan.nearest_anchor_distance if model_plan else 0.0
+            ),
+            terrain_object_present=model_name.lower() in {
+                name.lower() for name in terrain_object_names
+            },
+            reconstructed_by_baseline=(
+                model_name.lower() in reconstructed_terrain_keys
+            ),
+            coverage_status=coverage.status,
+            generated_coverage_polygon_count=int(
+                coverage.generated_coverage_polygon_count
+            ),
+            sample_count=sample_count,
+            covered_sample_count=covered_samples,
+            missing_sample_count=missing_samples,
+            missing_ratio=(
+                float(missing_samples) / float(sample_count)
+                if sample_count
+                else 0.0
+            ),
+        ))
+        if coverage.blockers and model_name.lower() in reconstructed_terrain_keys:
+            blockers.extend(coverage.blockers)
+
+    physics_model = terrain_semantics.model_by_name(
+        world_models,
+        terrain_semantics.PHYSICS_BSP_MODEL,
+    )
+    generated_class_counts = tuple(sorted(
+        (
+            (str(name), int(count))
+            for name, count in acceptance.generated_object_class_counts.items()
+        ),
+        key=lambda item: item[0].lower(),
+    ))
+    generated_brush_count = int(
+        acceptance.generated_object_class_counts.get(
+            "Brush",
+            acceptance.model_count,
+        )
+    )
+    brush_budget = int(acceptance.max_processor_brushes)
+    polygon_budget = int(acceptance.max_processor_polygons)
+    if total_missing:
+        cautions.append(
+            f"oracle-free baseline leaves {total_missing}/{total_samples} sampled "
+            "Terrain* points uncovered"
+        )
+    notes.extend((
+        "No source ED path was supplied to any generation subsystem."
+        if not dependencies
+        else "One or more source ED dependencies were detected.",
+        "Terrain coverage is measured independently for every compiled Terrain* model.",
+        "Every compiled Terrain* model receives an independent, gameplay-anchor-biased "
+        "support selection inside one shared Processor Brush budget.",
+        "Terrain budget allocation is based on connected playable areas, upward-projected "
+        "walkable surface, and clustered gameplay anchors instead of uniform polygon shares.",
+        "Adaptive structural terrain patches preserve exact gameplay-route, slope, "
+        "cliff, and shoreline geometry while compressing safe remote near-coplanar "
+        "regions into larger convex Brushes.",
+        "PhysicsBSP is consulted only as a collision/walkability height oracle; "
+        "no visible PhysicsBSP slab Brushes are emitted.",
+        "Terrain-named models with DAT Door records remain movable: their generated "
+        "support Brushes are children of the Door object rather than static group entries.",
+    ))
+    status = (
+        "oracle_free_baseline_blocked"
+        if blockers
+        else "oracle_free_baseline_ready_for_manual_test"
+    )
+    return OracleFreeDatToEdBaselineReport(
+        status=status,
+        source_dat_path=source_dat,
+        generated_ed_path=acceptance.generated_ed_path,
+        source_sha256=hashlib.sha256(source_data).hexdigest(),
+        source_byte_count=len(source_data),
+        oracle_free=not dependencies,
+        source_ed_dependencies=dependencies,
+        acceptance=acceptance,
+        total_world_model_count=len(world_models),
+        total_world_polygon_count=sum(
+            len(tuple(getattr(model, "polygons", ()) or ()))
+            for model in world_models
+        ),
+        selected_model_count=len(acceptance.selected_model_names),
+        selected_model_polygon_count=selected_model_polygon_count,
+        terrain_model_count=len(terrain_summaries),
+        terrain_source_polygon_count=sum(
+            item.source_polygon_count for item in terrain_summaries
+        ),
+        reconstructed_terrain_model_count=sum(
+            int(item.reconstructed_by_baseline) for item in terrain_summaries
+        ),
+        terrain_sample_count=total_samples,
+        terrain_covered_sample_count=total_covered,
+        terrain_missing_sample_count=total_missing,
+        terrain_missing_ratio=(
+            float(total_missing) / float(total_samples) if total_samples else 0.0
+        ),
+        terrain_support_budget=sum(
+            item.allocated_polygon_budget for item in terrain_support_budget_plan
+        ),
+        terrain_support_anchor_points=tuple(
+            _safe_vec3(point)
+            for point in terrain_support_anchor_points
+            if _is_vec3(point)
+        ),
+        terrain_support_budget_plan=tuple(terrain_support_budget_plan),
+        terrain_playable_area_budget_plan=tuple(
+            playable_area_budget_plan
+        ),
+        terrain_models=tuple(terrain_summaries),
+        terrain_object_names=terrain_object_names,
+        unmatched_terrain_object_names=unmatched_terrain_object_names,
+        physics_bsp_polygon_count=(
+            len(tuple(getattr(physics_model, "polygons", ()) or ()))
+            if physics_model is not None
+            else 0
+        ),
+        dat_object_count=len(dat_objects),
+        dat_object_class_counts=tuple(sorted(
+            ((name, int(count)) for name, count in object_class_counter.items()),
+            key=lambda item: item[0].lower(),
+        )),
+        helper_model_counts=tuple(sorted(
+            ((name, int(count)) for name, count in helper_counts.items()),
+            key=lambda item: item[0].lower(),
+        )),
+        generated_object_class_counts=generated_class_counts,
+        generated_brush_count=generated_brush_count,
+        generated_polygon_count=int(acceptance.polygon_count),
+        processor_brush_budget=brush_budget,
+        processor_polygon_budget=polygon_budget,
+        processor_brush_headroom=(
+            brush_budget - generated_brush_count if brush_budget else 0
+        ),
+        processor_polygon_headroom=(
+            polygon_budget - int(acceptance.polygon_count) if polygon_budget else 0
+        ),
+        blockers=tuple(_unique_text(blockers)),
+        cautions=tuple(_unique_text(cautions)),
+        notes=tuple(_unique_text(notes)),
+    )
+
+
+def build_oracle_free_dat_to_ed_baseline_report(
+    *,
+    source_dat_path: str,
+    work_dir: str,
+    worlds_install_dir: str = "",
+    output_filename: str = "ISLEOFASHES_oracle_free_adaptive_structural.ed",
+    output_prefix: str = "ISLEOFASHES",
+    group_name: str = "ISLEOFASHES_OracleFreeAdaptiveStructural",
+    terrain_support_model_name: str = "Terrain0",
+    terrain_support_selection_mode: str = "adaptive_playable_area_budget",
+    terrain_support_radius: float = 4096.0,
+    terrain_support_thickness: float = 128.0,
+    terrain_coverage_ignored_textures: Sequence[str] = (
+        "TEXTURES\\LevelTextures\\Terrain\\sand.dtx",
+    ),
+    terrain_coverage_sample_grid: int = 1,
+    max_processor_brushes: int = 1500,
+    max_processor_polygons: int = 12000,
+) -> OracleFreeDatToEdBaselineReport:
+    """Generate a deterministic DAT-only multi-Terrain candidate with no ED oracle."""
+    from core import bsp
+    from mm9_patcher import mm9_patch as patcher
+
+    source_dat = os.path.abspath(source_dat_path)
+    if not os.path.exists(source_dat):
+        return OracleFreeDatToEdBaselineReport(
+            status="source_dat_missing",
+            source_dat_path=source_dat,
+            blockers=(f"source DAT was not found: {source_dat}",),
+        )
+    try:
+        with open(source_dat, "rb") as handle:
+            source_data = handle.read()
+        parsed = bsp.parse(source_data)
+        header = patcher.Header.parse(source_data)
+        dat_objects, _object_end = patcher.parse_objects(
+            source_data,
+            header.obj_pos,
+        )
+    except Exception as exc:
+        return OracleFreeDatToEdBaselineReport(
+            status="dat_parse_failed",
+            source_dat_path=source_dat,
+            blockers=(f"DAT parse failed: {exc}",),
+        )
+    selected_models = terrain_semantics.default_dat_to_ed_model_names(parsed)
+    support_budget = max(
+        1,
+        int(max_processor_brushes) - len(selected_models),
+    )
+    terrain_anchor_points = _oracle_free_gameplay_anchor_points(dat_objects)
+    budget_plan = build_terrain_support_model_budget_plan(
+        parsed,
+        anchor_points=terrain_anchor_points,
+        total_polygon_budget=support_budget,
+        minimum_per_model=32,
+        anchor_radius=terrain_support_radius,
+    )
+    terrain_model_names = tuple(
+        item.model_name
+        for item in budget_plan
+        if item.allocated_polygon_budget > 0
+    )
+    if len(terrain_model_names) != len(budget_plan):
+        unsupported = tuple(
+            item.model_name
+            for item in budget_plan
+            if item.allocated_polygon_budget <= 0
+        )
+        return OracleFreeDatToEdBaselineReport(
+            status="terrain_support_budget_too_small",
+            source_dat_path=source_dat,
+            terrain_model_count=len(budget_plan),
+            terrain_support_budget=support_budget,
+            terrain_support_anchor_points=terrain_anchor_points,
+            terrain_support_budget_plan=budget_plan,
+            blockers=(
+                "shared terrain support budget cannot allocate at least one "
+                "polygon to every compiled Terrain* model: "
+                + ", ".join(unsupported),
+            ),
+        )
+    terrain_model_budgets = {
+        item.model_name: item.allocated_polygon_budget for item in budget_plan
+    }
+    acceptance = build_full_world_skeleton_acceptance_report(
+        source_dat_path=source_dat,
+        model_names=selected_models,
+        group_name=group_name,
+        work_dir=work_dir,
+        worlds_install_dir=worlds_install_dir,
+        output_filename=output_filename,
+        output_prefix=output_prefix,
+        include_validation_floor=False,
+        include_terrain_support_patch=True,
+        terrain_support_model_name=terrain_support_model_name,
+        terrain_support_model_names=terrain_model_names,
+        terrain_support_model_budgets=terrain_model_budgets,
+        terrain_support_anchor_points=terrain_anchor_points,
+        terrain_support_name_prefix=f"{output_prefix}_TerrainSupport",
+        terrain_support_margin=0.0,
+        terrain_support_selection_mode=terrain_support_selection_mode,
+        terrain_support_radius=terrain_support_radius,
+        terrain_support_brush_mode="adaptive_structural",
+        terrain_support_thickness=terrain_support_thickness,
+        terrain_support_max_polygons=support_budget,
+        include_physics_shell_patch=False,
+        include_door_objects=True,
+        door_source_ed_path="",
+        include_airail_objects=True,
+        airail_source_ed_path="",
+        include_sky_objects=True,
+        sky_source_ed_path="",
+        include_sky_marker_brushes=False,
+        include_sound_objects=True,
+        sound_source_ed_path="",
+        include_gameplay_trigger_objects=False,
+        gameplay_trigger_source_ed_path="",
+        include_static_prop_objects=False,
+        static_prop_source_ed_path="",
+        include_low_risk_behavior_prop_objects=False,
+        low_risk_behavior_prop_source_ed_path="",
+        include_wall_torch_objects=False,
+        wall_torch_source_ed_path="",
+        include_fire_objects=False,
+        fire_source_ed_path="",
+        include_candle_prop_objects=False,
+        candle_prop_source_ed_path="",
+        include_brazier_objects=False,
+        brazier_source_ed_path="",
+        include_treasure_chest_objects=False,
+        treasure_chest_source_ed_path="",
+        include_prop_damager_objects=False,
+        prop_damager_source_ed_path="",
+        include_destructable_prop_objects=False,
+        destructable_prop_source_ed_path="",
+        include_destructable_brush_objects=False,
+        include_collision_helper_objects=True,
+        include_collision_helper_brushes=False,
+        collision_helper_source_ed_path="",
+        include_trigger_helper_objects=True,
+        include_trigger_helper_brushes=False,
+        trigger_helper_source_ed_path="",
+        include_terrain_cutout_coverage=False,
+        include_terrain_support_source_coverage=True,
+        terrain_support_source_coverage_ignored_textures=(
+            terrain_coverage_ignored_textures
+        ),
+        terrain_support_source_coverage_sample_grid=terrain_coverage_sample_grid,
+        terrain_support_source_coverage_max_gaps=128,
+        include_physics_shell_source_coverage=False,
+        max_processor_brushes=max_processor_brushes,
+        max_processor_polygons=max_processor_polygons,
+        block_unreconstructed_physics_shell=False,
+        max_models=512,
+        max_model_points=16384,
+        max_model_polygons=16384,
+        max_total_points=65536,
+        max_total_polygons=65536,
+    )
+    return _analyze_oracle_free_dat_to_ed_baseline(
+        source_dat_path=source_dat,
+        acceptance=acceptance,
+        terrain_support_model_name=terrain_support_model_name,
+        terrain_support_budget_plan=budget_plan,
+        terrain_support_anchor_points=terrain_anchor_points,
+        terrain_support_radius=terrain_support_radius,
+        terrain_coverage_ignored_textures=terrain_coverage_ignored_textures,
+        terrain_coverage_sample_grid=terrain_coverage_sample_grid,
     )
 
 
@@ -11555,6 +12686,117 @@ def format_prefab_surrogate_pack_report(report: PrefabSurrogatePackReport) -> st
     return "\n".join(lines)
 
 
+def format_oracle_free_dat_to_ed_baseline_report(
+    report: OracleFreeDatToEdBaselineReport,
+) -> str:
+    lines = [
+        "DAT-to-ED oracle-free baseline",
+        f"status: {report.status}",
+        f"source DAT: {report.source_dat_path}",
+        f"source SHA-256: {report.source_sha256 or 'unavailable'}",
+        f"generated ED: {report.generated_ed_path or 'not generated'}",
+        (
+            "oracle proof: "
+            f"oracle_free={'yes' if report.oracle_free else 'no'}, "
+            f"source_ED_dependencies={len(report.source_ed_dependencies)}"
+        ),
+        (
+            "world inventory: "
+            f"models={report.total_world_model_count}, "
+            f"polygons={report.total_world_polygon_count}, "
+            f"selected_models={report.selected_model_count}, "
+            f"selected_polygons={report.selected_model_polygon_count}"
+        ),
+        (
+            "terrain aggregate: "
+            f"models={report.terrain_model_count}, "
+            f"reconstructed={report.reconstructed_terrain_model_count}, "
+            f"support_budget={report.terrain_support_budget}, "
+            f"anchors={len(report.terrain_support_anchor_points)}, "
+            f"source_polygons={report.terrain_source_polygon_count}, "
+            f"samples={report.terrain_sample_count}, "
+            f"covered={report.terrain_covered_sample_count}, "
+            f"missing={report.terrain_missing_sample_count}, "
+            f"missing_ratio={report.terrain_missing_ratio:.6f}"
+        ),
+        (
+            "DAT objects: "
+            f"total={report.dat_object_count}, "
+            f"classes={len(report.dat_object_class_counts)}, "
+            f"PhysicsBSP_polygons={report.physics_bsp_polygon_count}"
+        ),
+        (
+            "Processor estimate: "
+            f"brushes={report.generated_brush_count}/{report.processor_brush_budget} "
+            f"(headroom={report.processor_brush_headroom}), "
+            f"polygons={report.generated_polygon_count}/{report.processor_polygon_budget} "
+            f"(headroom={report.processor_polygon_headroom})"
+        ),
+    ]
+    if report.terrain_object_names:
+        lines.append("Terrain objects: " + ", ".join(report.terrain_object_names))
+    if report.unmatched_terrain_object_names:
+        lines.append(
+            "unmatched Terrain objects: "
+            + ", ".join(report.unmatched_terrain_object_names)
+        )
+    for item in report.terrain_models:
+        lines.append(
+            f"- {item.model_name}: source_points={item.source_point_count}, "
+            f"source_polygons={item.source_polygon_count}, "
+            f"eligible_support={item.eligible_support_polygon_count}, "
+            f"playable_areas={item.playable_area_count}, "
+            f"playable_polygons={item.playable_polygon_count}, "
+            f"walkable_polygons={item.walkable_polygon_count}, "
+            f"walkable_xz_area={item.walkable_xz_area:.2f}, "
+            f"allocated_budget={item.allocated_polygon_budget}, "
+            f"generated_support_brushes={item.generated_support_brush_count}, "
+            f"generated_source_polygons="
+            f"{item.generated_support_source_polygon_count}, "
+            f"nearby_anchors={item.nearby_anchor_count}, "
+            f"nearest_anchor={item.nearest_anchor_distance:.2f}, "
+            f"terrain_object={'yes' if item.terrain_object_present else 'no'}, "
+            f"baseline_source={'yes' if item.reconstructed_by_baseline else 'no'}, "
+            f"coverage={item.coverage_status}, generated_tops="
+            f"{item.generated_coverage_polygon_count}, samples={item.sample_count}, "
+            f"covered={item.covered_sample_count}, missing={item.missing_sample_count}, "
+            f"missing_ratio={item.missing_ratio:.6f}"
+        )
+    if report.terrain_playable_area_budget_plan:
+        lines.append("playable-area source selection:")
+        for item in report.terrain_playable_area_budget_plan:
+            lines.append(
+                f"  - {item.model_name}/area{item.area_index}: "
+                f"seed={item.seed_polygon_index}, anchors={item.anchor_count}, "
+                f"candidates={item.candidate_polygon_count}, "
+                f"walkable={item.walkable_polygon_count}, "
+                f"walkable_xz_area={item.walkable_xz_area:.2f}, "
+                f"allocated_source_polygons="
+                f"{item.allocated_source_polygon_budget}"
+            )
+    if report.helper_model_counts:
+        lines.append(
+            "helper models: "
+            + ", ".join(f"{name}={count}" for name, count in report.helper_model_counts)
+        )
+    if report.generated_object_class_counts:
+        lines.append(
+            "generated object classes: "
+            + ", ".join(
+                f"{name}={count}" for name, count in report.generated_object_class_counts
+            )
+        )
+    for name, path in report.source_ed_dependencies:
+        lines.append(f"source ED dependency: {name}={path}")
+    for blocker in report.blockers:
+        lines.append(f"blocker: {blocker}")
+    for caution in report.cautions:
+        lines.append(f"caution: {caution}")
+    for note in report.notes:
+        lines.append(f"note: {note}")
+    return "\n".join(lines)
+
+
 def format_full_world_skeleton_acceptance_report(
     report: FullWorldSkeletonAcceptanceReport,
 ) -> str:
@@ -11574,7 +12816,40 @@ def format_full_world_skeleton_acceptance_report(
     if report.include_validation_floor:
         lines.append("validation floor: included")
     if report.include_terrain_support_patch:
-        lines.append("terrain support patch: included")
+        lines.append(
+            "terrain support patch: included"
+            + (
+                " for " + ", ".join(report.terrain_support_model_names)
+                if report.terrain_support_model_names
+                else ""
+            )
+        )
+        if report.terrain_support_model_budgets:
+            lines.append(
+                "terrain support budgets: "
+                + ", ".join(
+                    f"{name}={budget}"
+                    for name, budget in report.terrain_support_model_budgets
+                )
+            )
+        if report.terrain_support_generated_brush_counts:
+            lines.append(
+                "terrain support generated Brushes: "
+                + ", ".join(
+                    f"{name}={count}"
+                    for name, count
+                    in report.terrain_support_generated_brush_counts
+                )
+            )
+        if report.terrain_support_generated_source_polygon_counts:
+            lines.append(
+                "terrain support represented source polygons: "
+                + ", ".join(
+                    f"{name}={count}"
+                    for name, count
+                    in report.terrain_support_generated_source_polygon_counts
+                )
+            )
     if report.include_physics_shell_patch:
         lines.append("PhysicsBSP shell patch: included")
     if report.physics_shell_focus_points and report.physics_shell_focus_radius > 0.0:
@@ -13498,6 +14773,180 @@ def format_physics_shell_packing_experiment_validation(
     return "\n".join(lines)
 
 
+def build_oracle_free_dat_to_ed_baseline_manifest(
+    report: OracleFreeDatToEdBaselineReport,
+    *,
+    text_report_path: str = "",
+    acceptance_report_path: str = "",
+    acceptance_manifest_path: str = "",
+) -> Dict[str, object]:
+    return {
+        "kind": "mm9_dat_to_ed_oracle_free_baseline",
+        "schema_version": 1,
+        "status": report.status,
+        "source": {
+            "dat_path": report.source_dat_path,
+            "sha256": report.source_sha256,
+            "byte_count": report.source_byte_count,
+        },
+        "generated_ed_path": report.generated_ed_path,
+        "oracle_proof": {
+            "oracle_free": report.oracle_free,
+            "source_ed_dependency_count": len(report.source_ed_dependencies),
+            "source_ed_dependencies": [
+                {"field": name, "path": path}
+                for name, path in report.source_ed_dependencies
+            ],
+        },
+        "world_inventory": {
+            "model_count": report.total_world_model_count,
+            "polygon_count": report.total_world_polygon_count,
+            "selected_model_count": report.selected_model_count,
+            "selected_model_polygon_count": report.selected_model_polygon_count,
+            "physics_bsp_polygon_count": report.physics_bsp_polygon_count,
+        },
+        "terrain": {
+            "model_count": report.terrain_model_count,
+            "reconstructed_model_count": report.reconstructed_terrain_model_count,
+            "support_budget": report.terrain_support_budget,
+            "support_anchor_points": [
+                list(point) for point in report.terrain_support_anchor_points
+            ],
+            "source_polygon_count": report.terrain_source_polygon_count,
+            "sample_count": report.terrain_sample_count,
+            "covered_sample_count": report.terrain_covered_sample_count,
+            "missing_sample_count": report.terrain_missing_sample_count,
+            "missing_ratio": report.terrain_missing_ratio,
+            "terrain_object_names": list(report.terrain_object_names),
+            "unmatched_terrain_object_names": list(
+                report.unmatched_terrain_object_names
+            ),
+            "models": [
+                {
+                    "model_name": item.model_name,
+                    "source_point_count": item.source_point_count,
+                    "source_polygon_count": item.source_polygon_count,
+                    "eligible_support_polygon_count": (
+                        item.eligible_support_polygon_count
+                    ),
+                    "playable_area_count": item.playable_area_count,
+                    "playable_polygon_count": item.playable_polygon_count,
+                    "walkable_polygon_count": item.walkable_polygon_count,
+                    "walkable_xz_area": item.walkable_xz_area,
+                    "allocated_polygon_budget": item.allocated_polygon_budget,
+                    "generated_support_brush_count": (
+                        item.generated_support_brush_count
+                    ),
+                    "generated_support_source_polygon_count": (
+                        item.generated_support_source_polygon_count
+                    ),
+                    "nearby_anchor_count": item.nearby_anchor_count,
+                    "nearest_anchor_distance": item.nearest_anchor_distance,
+                    "terrain_object_present": item.terrain_object_present,
+                    "reconstructed_by_baseline": item.reconstructed_by_baseline,
+                    "coverage_status": item.coverage_status,
+                    "generated_coverage_polygon_count": (
+                        item.generated_coverage_polygon_count
+                    ),
+                    "sample_count": item.sample_count,
+                    "covered_sample_count": item.covered_sample_count,
+                    "missing_sample_count": item.missing_sample_count,
+                    "missing_ratio": item.missing_ratio,
+                }
+                for item in report.terrain_models
+            ],
+            "budget_plan": [
+                {
+                    "model_name": item.model_name,
+                    "source_polygon_count": item.source_polygon_count,
+                    "eligible_support_polygon_count": (
+                        item.eligible_support_polygon_count
+                    ),
+                    "playable_area_count": item.playable_area_count,
+                    "playable_polygon_count": item.playable_polygon_count,
+                    "walkable_polygon_count": item.walkable_polygon_count,
+                    "walkable_xz_area": item.walkable_xz_area,
+                    "bounds_min": list(item.bounds_min),
+                    "bounds_max": list(item.bounds_max),
+                    "nearby_anchor_count": item.nearby_anchor_count,
+                    "nearest_anchor_distance": item.nearest_anchor_distance,
+                    "allocation_weight": item.allocation_weight,
+                    "allocated_polygon_budget": item.allocated_polygon_budget,
+                }
+                for item in report.terrain_support_budget_plan
+            ],
+            "playable_area_budget_plan": [
+                {
+                    "model_name": item.model_name,
+                    "area_index": item.area_index,
+                    "seed_polygon_index": item.seed_polygon_index,
+                    "anchor_count": item.anchor_count,
+                    "center": list(item.center),
+                    "bounds": list(item.bounds),
+                    "candidate_polygon_count": (
+                        item.candidate_polygon_count
+                    ),
+                    "walkable_polygon_count": (
+                        item.walkable_polygon_count
+                    ),
+                    "walkable_xz_area": item.walkable_xz_area,
+                    "allocation_weight": item.allocation_weight,
+                    "allocated_source_polygon_budget": (
+                        item.allocated_source_polygon_budget
+                    ),
+                }
+                for item in report.terrain_playable_area_budget_plan
+            ],
+        },
+        "objects": {
+            "dat_object_count": report.dat_object_count,
+            "dat_object_class_counts": dict(report.dat_object_class_counts),
+            "generated_object_class_counts": dict(
+                report.generated_object_class_counts
+            ),
+        },
+        "helper_model_counts": dict(report.helper_model_counts),
+        "processor_estimate": {
+            "generated_brush_count": report.generated_brush_count,
+            "generated_polygon_count": report.generated_polygon_count,
+            "brush_budget": report.processor_brush_budget,
+            "polygon_budget": report.processor_polygon_budget,
+            "brush_headroom": report.processor_brush_headroom,
+            "polygon_headroom": report.processor_polygon_headroom,
+        },
+        "artifacts": {
+            "text_report_path": os.path.abspath(text_report_path)
+            if text_report_path
+            else "",
+            "acceptance_report_path": os.path.abspath(acceptance_report_path)
+            if acceptance_report_path
+            else "",
+            "acceptance_manifest_path": os.path.abspath(
+                acceptance_manifest_path
+            )
+            if acceptance_manifest_path
+            else "",
+        },
+        "blockers": list(report.blockers),
+        "cautions": list(report.cautions),
+        "notes": list(report.notes),
+    }
+
+
+def write_oracle_free_dat_to_ed_baseline_manifest(
+    report: OracleFreeDatToEdBaselineReport,
+    manifest_path: str,
+    **kwargs: object,
+) -> str:
+    manifest = build_oracle_free_dat_to_ed_baseline_manifest(report, **kwargs)
+    absolute = os.path.abspath(manifest_path)
+    os.makedirs(os.path.dirname(absolute) or ".", exist_ok=True)
+    with open(absolute, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return absolute
+
+
 def build_full_world_skeleton_acceptance_manifest(
     report: FullWorldSkeletonAcceptanceReport,
     *,
@@ -13575,6 +15024,26 @@ def build_full_world_skeleton_acceptance_manifest(
             "generated_object_class_counts": dict(report.generated_object_class_counts),
             "include_validation_floor": report.include_validation_floor,
             "include_terrain_support_patch": report.include_terrain_support_patch,
+            "terrain_support_model_names": list(
+                report.terrain_support_model_names
+            ),
+            "terrain_support_model_budgets": {
+                name: budget
+                for name, budget in report.terrain_support_model_budgets
+            },
+            "terrain_support_generated_brush_counts": {
+                name: count
+                for name, count
+                in report.terrain_support_generated_brush_counts
+            },
+            "terrain_support_generated_source_polygon_counts": {
+                name: count
+                for name, count
+                in report.terrain_support_generated_source_polygon_counts
+            },
+            "terrain_support_anchor_points": [
+                list(point) for point in report.terrain_support_anchor_points
+            ],
             "include_physics_shell_patch": report.include_physics_shell_patch,
             "physics_shell_packing_mode": report.physics_shell_packing_mode,
             "physics_shell_packing_source_polygon_count": report.physics_shell_packing_source_polygon_count,

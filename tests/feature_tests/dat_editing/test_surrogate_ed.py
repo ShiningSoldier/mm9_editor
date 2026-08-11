@@ -2,6 +2,7 @@ import hashlib
 import os
 import struct
 import tempfile
+import types
 import unittest
 
 from tests._path import ROOT  # noqa: F401
@@ -2313,6 +2314,265 @@ class SurrogateEdTests(unittest.TestCase):
         )
         self.assertEqual(len(pair_node["children"]), 1)
         self.assertEqual(pair_node["children"][0]["type"], legacy_ed_writer.NODE_BRUSH)
+
+    def test_full_world_skeleton_builds_dat_native_rotating_door_with_brush_child(self):
+        isle = os.path.join(ROOT, "mm9_data", "WORLDS", "ISLEOFASHES.DAT")
+        if not os.path.exists(isle):
+            self.skipTest(f"missing test level: {isle}")
+        with open(isle, "rb") as handle:
+            data = handle.read()
+
+        generated, report = (
+            surrogate_ed.build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
+                data,
+                source_path=isle,
+                model_names=["RotatingDoor8"],
+                group_name="DatNativeDoorProbe",
+                include_door_objects=True,
+            )
+        )
+
+        self.assertEqual(report.status, "full_world_skeleton_surrogate_ed_built")
+        self.assertEqual(report.selected_model_names, ("RotatingDoor8",))
+        self.assertTrue(
+            any(
+                "DAT-native movable door fallback loaded 1 matched" in note
+                for note in report.notes
+            )
+        )
+        scan = legacy_ed.scan_legacy_ed_object_records(
+            generated,
+            source_path="isleofashes_dat_native_door_probe.ed",
+        )
+        self.assertEqual(scan.class_counts["RotatingDoor"], 1)
+        door = next(
+            record
+            for record in scan.records
+            if record.class_name == "RotatingDoor"
+        )
+        self.assertEqual(door.property_value("Name"), "RotatingDoor8")
+        self.assertEqual(door.property_value("Pos"), (-1896.0, 138.0, -6610.0))
+        self.assertEqual(door.property_value("RotationAngles"), (0.0, 90.0, 0.0))
+        self.assertTrue(door.property_value("PushOpen"))
+        self.assertFalse(door.property_value("Locked"))
+
+        layout = legacy_ed.scan_legacy_ed_node_layout(
+            generated,
+            source_path="isleofashes_dat_native_door_probe.ed",
+        )
+        wrapper = legacy_ed._try_decompress_full_level_wrapper(generated)
+        self.assertIsNotNone(wrapper)
+        assert wrapper is not None
+        parsed, _end = _read_legacy_node_container(
+            wrapper["decompressed"],
+            layout.node_start,
+            include_entry=False,
+        )
+        group = parsed["children"][0]
+        self.assertEqual(group["item"]["display_name"], "DatNativeDoorProbe")
+        self.assertEqual(group["children"], [])
+
+        def _walk(node):
+            yield node
+            for child in node["children"]:
+                yield from _walk(child)
+
+        door_node = next(
+            node
+            for node in _walk(parsed)
+            if node["item"]["class_name"] == "RotatingDoor"
+        )
+        self.assertEqual(len(door_node["children"]), 1)
+        self.assertEqual(
+            door_node["children"][0]["type"],
+            legacy_ed_writer.NODE_BRUSH,
+        )
+
+    def test_adjacent_convex_terrain_group_removes_shared_vertical_wall(self):
+        points = (
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 10.0),
+            (10.0, 0.0, 10.0),
+            (10.0, 0.0, 0.0),
+        )
+        first = terrain_reconstruction.TerrainSupportItem(
+            10,
+            object(),
+            (0, 1, 2),
+            (points[0], points[1], points[2]),
+            (10.0 / 3.0, 0.0, 20.0 / 3.0),
+            (0.0, 10.0, 0.0, 10.0),
+        )
+        second = terrain_reconstruction.TerrainSupportItem(
+            11,
+            object(),
+            (0, 2, 3),
+            (points[0], points[2], points[3]),
+            (20.0 / 3.0, 0.0, 10.0 / 3.0),
+            (0.0, 10.0, 0.0, 10.0),
+        )
+
+        groups = surrogate_ed._terrain_support_item_groups(
+            (first, second),
+            brush_mode="adjacent_convex",
+        )
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(tuple(item.polygon_index for item in groups[0]), (10, 11))
+
+        brush, summary = surrogate_ed._terrain_polygon_group_prism_brush(
+            None,
+            groups[0],
+            name="AdjacentTerrainProbe",
+            patch_index=0,
+            thickness=8.0,
+            side_texture="Default",
+        )
+        self.assertEqual(summary.source_polygon_count, 2)
+        self.assertEqual(len(brush.surfaces), 8)
+        self.assertEqual(
+            surrogate_ed._terrain_group_internal_edge_count(groups[0]),
+            1,
+        )
+        self.assertTrue(surrogate_ed._legacy_brush_faces_enclose_points(brush))
+
+    def test_adaptive_terrain_merges_coplanar_faces_into_one_structural_top(self):
+        source_surface = types.SimpleNamespace(
+            uv_o=(2.0, 3.0, 4.0),
+            uv_p=(0.5, 0.0, 0.0),
+            uv_q=(0.0, 0.0, -0.5),
+            texture_flags=13,
+        )
+        terrain_model = types.SimpleNamespace(
+            name="TerrainProbe",
+            surfaces=(source_surface,),
+            texture_name_for=lambda _polygon: (
+                "TEXTURES\\A1ISLEOFASHES\\Terrain\\AshCliff.dtx"
+            ),
+        )
+        points = (
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 10.0),
+            (10.0, 0.0, 10.0),
+            (10.0, 0.0, 0.0),
+        )
+        items = (
+            terrain_reconstruction.TerrainSupportItem(
+                20,
+                types.SimpleNamespace(surface_index=0),
+                (0, 1, 2),
+                (points[0], points[1], points[2]),
+                (10.0 / 3.0, 0.0, 20.0 / 3.0),
+                (0.0, 10.0, 0.0, 10.0),
+            ),
+            terrain_reconstruction.TerrainSupportItem(
+                21,
+                types.SimpleNamespace(surface_index=0),
+                (0, 2, 3),
+                (points[0], points[2], points[3]),
+                (20.0 / 3.0, 0.0, 10.0 / 3.0),
+                (0.0, 10.0, 0.0, 10.0),
+            ),
+        )
+        oracle = terrain_reconstruction.TerrainCollisionOracle(
+            512.0,
+            {},
+            0,
+        )
+
+        groups = surrogate_ed._terrain_support_item_groups(
+            items,
+            brush_mode="adaptive_structural",
+            terrain_model=terrain_model,
+            anchor_points=(),
+            radius=4096.0,
+            physics_oracle=oracle,
+        )
+        self.assertEqual(len(groups), 1)
+        result = surrogate_ed._adaptive_structural_terrain_prism_brush(
+            terrain_model,
+            groups[0],
+            anchor_points=(),
+            radius=4096.0,
+            physics_oracle=oracle,
+            name="AdaptiveTerrainProbe",
+            patch_index=0,
+            thickness=8.0,
+            side_texture="Default",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        brush, summary = result
+        self.assertEqual(summary.source_polygon_count, 2)
+        self.assertEqual(len(brush.surfaces), 6)
+        self.assertEqual(
+            brush.surfaces[0].texture_name,
+            "TEXTURES\\A1ISLEOFASHES\\Terrain\\AshCliff.dtx",
+        )
+        self.assertEqual(brush.surfaces[0].uv_o, source_surface.uv_o)
+        self.assertEqual(brush.surfaces[0].uv_p, source_surface.uv_p)
+        self.assertEqual(brush.surfaces[0].uv_q, source_surface.uv_q)
+        self.assertEqual(
+            brush.surfaces[0].texture_flags,
+            source_surface.texture_flags,
+        )
+        self.assertTrue(
+            any("max source error=0.0000" in note for note in summary.notes)
+        )
+        self.assertTrue(
+            any("visible slabs=0" in note for note in summary.notes)
+        )
+        self.assertTrue(surrogate_ed._legacy_brush_faces_enclose_points(brush))
+
+    def test_adaptive_terrain_keeps_anchor_patch_top_faces_exact(self):
+        points = (
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 10.0),
+            (10.0, 0.0, 10.0),
+            (10.0, 0.0, 0.0),
+        )
+        items = (
+            terrain_reconstruction.TerrainSupportItem(
+                30,
+                object(),
+                (0, 1, 2),
+                (points[0], points[1], points[2]),
+                (10.0 / 3.0, 0.0, 20.0 / 3.0),
+                (0.0, 10.0, 0.0, 10.0),
+            ),
+            terrain_reconstruction.TerrainSupportItem(
+                31,
+                object(),
+                (0, 2, 3),
+                (points[0], points[2], points[3]),
+                (20.0 / 3.0, 0.0, 10.0 / 3.0),
+                (0.0, 10.0, 0.0, 10.0),
+            ),
+        )
+        oracle = terrain_reconstruction.TerrainCollisionOracle(
+            512.0,
+            {},
+            0,
+        )
+        result = surrogate_ed._adaptive_structural_terrain_prism_brush(
+            None,
+            items,
+            anchor_points=((5.0, 0.0, 5.0),),
+            radius=4096.0,
+            physics_oracle=oracle,
+            name="ExactAnchorTerrainProbe",
+            patch_index=0,
+            thickness=8.0,
+            side_texture="Default",
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        brush, summary = result
+        self.assertEqual(summary.source_polygon_count, 2)
+        self.assertEqual(len(brush.surfaces), 8)
+        self.assertTrue(
+            any("preserved without approximation" in note for note in summary.notes)
+        )
 
     @slow_dat_to_ed_test
     def test_full_world_skeleton_copies_door_child_brush_properties_from_node_hierarchy(self):

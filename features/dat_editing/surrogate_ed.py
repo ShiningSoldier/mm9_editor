@@ -42,6 +42,8 @@ _LEGACY_BRUSH_OBJECT_PROPERTIES = legacy_ed_writer.MM9_BRUSH_OBJECT_PROPERTIES
 class SurrogateEdModelSummary:
     name: str
     status: str
+    source_model_name: str = ""
+    source_polygon_count: int = 0
     point_count: int = 0
     polygon_count: int = 0
     skipped_polygon_count: int = 0
@@ -856,10 +858,20 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
     effective_max_models = max_models
     door_pair_notes: Tuple[str, ...] = ()
     if include_door_objects:
-        effective_model_names, door_pair_notes = _expand_model_names_with_source_door_pairs(
-            effective_model_names,
-            source_ed_path=door_source_ed_path,
-        )
+        if door_source_ed_path:
+            effective_model_names, door_pair_notes = (
+                _expand_model_names_with_source_door_pairs(
+                    effective_model_names,
+                    source_ed_path=door_source_ed_path,
+                )
+            )
+        else:
+            effective_model_names, door_pair_notes = (
+                _expand_model_names_with_dat_door_pairs(
+                    data,
+                    model_names=effective_model_names,
+                )
+            )
         if max_models is not None and len(effective_model_names) > int(max_models):
             effective_max_models = len(effective_model_names)
     absolute, selected, error_report = _parse_selected_models_from_dat_bytes(
@@ -1207,10 +1219,37 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
 
     door_objects: Tuple[_DoorObjectSpec, ...] = ()
     if include_door_objects:
-        door_objects, door_notes = _door_object_specs_from_source_ed(
-            door_source_ed_path,
-            candidate_names=raw_report.selected_model_names,
+        door_candidate_names = tuple(_unique_text(
+            tuple(raw_report.selected_model_names)
+            + tuple(
+                str(summary.source_model_name or "")
+                for summary in raw_report.model_summaries
+                if summary.status == "written"
+                and str(summary.source_model_name or "")
+            )
+        ))
+        if door_source_ed_path:
+            source_door_objects, source_door_notes = (
+                _door_object_specs_from_source_ed(
+                    door_source_ed_path,
+                    candidate_names=door_candidate_names,
+                )
+            )
+        else:
+            source_door_objects, source_door_notes = (), ()
+        dat_door_objects, dat_door_notes = _door_object_specs_from_dat_bytes(
+            data,
+            candidate_names=door_candidate_names,
         )
+        source_door_names = {
+            item.name.lower() for item in source_door_objects if item.name
+        }
+        door_objects = tuple(source_door_objects) + tuple(
+            item
+            for item in dat_door_objects
+            if item.name.lower() not in source_door_names
+        )
+        door_notes = tuple(source_door_notes) + tuple(dat_door_notes)
         raw_report = replace(
             raw_report,
             notes=tuple(_unique_text(tuple(raw_report.notes) + tuple(door_notes))),
@@ -1419,7 +1458,10 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
         _full_world_skeleton_brush_name(summary.name, index, brush_name_prefix)
         for index, summary in enumerate(written_summaries)
     )
-    brush_source_model_names = tuple(summary.name for summary in written_summaries)
+    brush_source_model_names = tuple(
+        summary.source_model_name or summary.name
+        for summary in written_summaries
+    )
     node_hierarchy_started = time.monotonic()
     node_hierarchy = _full_world_skeleton_node_hierarchy(
         brush_names,
@@ -1537,10 +1579,29 @@ def build_full_world_skeleton_surrogate_legacy_ed_bytes_from_dat_bytes(
             "AIRail object records are derived from DAT aiRail helper geometry; source ED oracle links are used when supplied.",
         )
     if include_door_objects:
+        door_child_counts = tuple(
+            (
+                item.name,
+                sum(
+                    str(source_name or "").lower()
+                    == str(item.source_model_name or item.name or "").lower()
+                    for source_name in brush_source_model_names
+                ),
+            )
+            for item in door_objects
+        )
         notes += (
             f"Generated Door/RotatingDoor object records: {len(door_objects)}.",
-            "Door object records are copied from the source ED oracle only when their Name matches a selected DAT world model.",
-            "Matching Brush nodes are nested under their Door/RotatingDoor object; when the source hierarchy exposes a child Brush, that source Brush record, projection, and flags replace the DAT-derived fallback.",
+            "Door object records prefer the source ED oracle and fall back to DAT-native Door/RotatingDoor records when their Name matches generated DAT model geometry.",
+            "Every matching Brush node is removed from the static group and nested under its Door/RotatingDoor object; large movable models may contain multiple convex child Brushes. When the source hierarchy exposes a child Brush, that source Brush record, projection, and flags replace the DAT-derived fallback.",
+            "Door child Brush attachment counts: "
+            + (
+                ", ".join(
+                    f"{name}={count}" for name, count in door_child_counts
+                )
+                or "none"
+            )
+            + ".",
         )
     if include_sky_objects:
         notes += (
@@ -2348,22 +2409,22 @@ def _full_world_skeleton_node_hierarchy(
             ),
         )
 
-    source_name_to_brush_index: Dict[str, int] = {}
+    source_name_to_brush_indices: Dict[str, List[int]] = defaultdict(list)
     for index, source_name in enumerate(brush_source_model_names):
         key = str(source_name or "").lower()
-        if key and key not in source_name_to_brush_index:
-            source_name_to_brush_index[key] = index
+        if key:
+            source_name_to_brush_indices[key].append(index)
     door_brush_indices = {
-        source_name_to_brush_index[key]
+        brush_index
         for item in door_objects
         for key in (str(item.source_model_name or item.name or "").lower(),)
-        if key in source_name_to_brush_index
+        for brush_index in source_name_to_brush_indices.get(key, ())
     }
     destructable_brush_indices = {
-        source_name_to_brush_index[key]
+        brush_index
         for item in destructable_brush_objects
         for key in (str(item.source_model_name or item.name or "").lower(),)
-        if key in source_name_to_brush_index
+        for brush_index in source_name_to_brush_indices.get(key, ())
     }
     next_node_id = 3
     brush_nodes_list: List[legacy_ed_writer.LegacyEdNode] = []
@@ -2412,9 +2473,13 @@ def _full_world_skeleton_node_hierarchy(
         next_node_id += 1
         key = str(item.source_model_name or item.name or "").lower()
         children: Tuple[legacy_ed_writer.LegacyEdNode, ...] = ()
-        if key in source_name_to_brush_index:
-            children = (make_brush_node(source_name_to_brush_index[key], next_node_id),)
-            next_node_id += 1
+        child_brush_indices = tuple(source_name_to_brush_indices.get(key, ()))
+        if child_brush_indices:
+            children = tuple(
+                make_brush_node(brush_index, next_node_id + offset)
+                for offset, brush_index in enumerate(child_brush_indices)
+            )
+            next_node_id += len(children)
         door_nodes_list.append(legacy_ed_writer.object_node(
             item.class_name,
             "",
@@ -2564,9 +2629,13 @@ def _full_world_skeleton_node_hierarchy(
         next_node_id += 1
         key = str(item.source_model_name or item.name or "").lower()
         children: Tuple[legacy_ed_writer.LegacyEdNode, ...] = ()
-        if key in source_name_to_brush_index:
-            children = (make_brush_node(source_name_to_brush_index[key], next_node_id),)
-            next_node_id += 1
+        child_brush_indices = tuple(source_name_to_brush_indices.get(key, ()))
+        if child_brush_indices:
+            children = tuple(
+                make_brush_node(brush_index, next_node_id + offset)
+                for offset, brush_index in enumerate(child_brush_indices)
+            )
+            next_node_id += len(children)
         destructable_brush_nodes_list.append(legacy_ed_writer.object_node(
             item.class_name,
             "",
@@ -3078,6 +3147,101 @@ def _door_object_specs_from_source_ed(
     if hierarchy_note:
         notes.append(hierarchy_note)
     return tuple(specs), tuple(_unique_text(notes))
+
+
+def _door_object_specs_from_dat_bytes(
+    data: bytes,
+    *,
+    candidate_names: Sequence[str],
+) -> Tuple[Tuple[_DoorObjectSpec, ...], Tuple[str, ...]]:
+    dat_specs, notes = _dat_native_object_specs_from_dat_bytes(
+        data,
+        class_names=tuple(sorted(_DOOR_OBJECT_CLASSES)),
+        selected_model_names=candidate_names,
+        source_model_name_from_name=True,
+        note_label="Door/RotatingDoor",
+    )
+    specs = tuple(
+        _DoorObjectSpec(
+            name=item.name,
+            class_name=item.class_name,
+            properties=item.properties,
+            source_model_name=item.source_model_name or item.name,
+            source_kind="dat_object",
+        )
+        for item in dat_specs
+    )
+    class_counts: Dict[str, int] = {}
+    for item in specs:
+        class_counts[item.class_name] = class_counts.get(item.class_name, 0) + 1
+    detail = (
+        ", ".join(
+            f"{name}={class_counts[name]}" for name in sorted(class_counts)
+        )
+        or "none"
+    )
+    return specs, tuple(_unique_text(tuple(notes) + (
+        f"DAT-native movable door fallback loaded {len(specs)} matched "
+        f"Door/RotatingDoor object record(s): {detail}.",
+    )))
+
+
+def _door_spec_property_value(
+    item: _DoorObjectSpec,
+    property_name: str,
+    default: object = "",
+) -> object:
+    target = str(property_name or "").lower()
+    for prop in item.properties:
+        if str(prop.name or "").lower() == target:
+            return prop.value
+    return default
+
+
+def _expand_model_names_with_dat_door_pairs(
+    data: bytes,
+    *,
+    model_names: Sequence[str],
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    requested = [
+        str(name or "").strip()
+        for name in model_names
+        if str(name or "").strip()
+    ]
+    if not requested:
+        return tuple(requested), ()
+    all_specs, scan_notes = _door_object_specs_from_dat_bytes(
+        data,
+        candidate_names=(),
+    )
+    by_key = {name.lower(): name for name in requested}
+    expanded = list(requested)
+    added: List[str] = []
+    for item in all_specs:
+        name = str(item.name or "").strip()
+        pair_name = str(
+            _door_spec_property_value(item, "DoubleDoorName", "") or ""
+        ).strip()
+        if not name or not pair_name:
+            continue
+        name_key = name.lower()
+        pair_key = pair_name.lower()
+        if name_key in by_key and pair_key not in by_key:
+            expanded.append(pair_name)
+            by_key[pair_key] = pair_name
+            added.append(pair_name)
+        elif pair_key in by_key and name_key not in by_key:
+            expanded.append(name)
+            by_key[name_key] = name
+            added.append(name)
+    if not added:
+        return tuple(expanded), tuple(scan_notes)
+    return tuple(expanded), tuple(_unique_text(tuple(scan_notes) + (
+        "DAT-native Door/RotatingDoor records expanded selected model names "
+        "with paired DoubleDoorName leaf/leaves: "
+        + ", ".join(added)
+        + ".",
+    )))
 
 
 def _expand_model_names_with_source_door_pairs(
@@ -4628,6 +4792,8 @@ def _terrain_support_patch_brushes_for_brushes(
     anchor_brushes: Sequence[legacy_ed_writer.LegacyEdBrush],
     *,
     parsed_world: Optional[object] = None,
+    extra_anchor_points: Sequence[object] = (),
+    prefer_extra_anchor_points: bool = False,
     source_model_name: str,
     name_prefix: str,
     margin: float,
@@ -4638,9 +4804,17 @@ def _terrain_support_patch_brushes_for_brushes(
     max_polygons: int,
     side_texture: str,
 ) -> Tuple[Tuple[legacy_ed_writer.LegacyEdBrush, ...], Tuple[SurrogateEdModelSummary, ...], _ValidationFloorPlacement]:
-    anchor_points = [point for brush in anchor_brushes for point in brush.points]
+    explicit_anchor_points = [
+        _finite_vec3(point) for point in extra_anchor_points
+    ]
+    anchor_points = (
+        list(explicit_anchor_points)
+        if prefer_extra_anchor_points and explicit_anchor_points
+        else [point for brush in anchor_brushes for point in brush.points]
+        + explicit_anchor_points
+    )
     if not anchor_points:
-        raise ValueError("terrain support patch requires at least one anchor brush")
+        raise ValueError("terrain support patch requires at least one Brush or DAT object anchor")
     parsed = parsed_world
     if parsed is None:
         try:
@@ -4659,21 +4833,33 @@ def _terrain_support_patch_brushes_for_brushes(
         raise ValueError(f"terrain support source model was not found: {terrain_name}")
 
     terrain_items = terrain_reconstruction.terrain_support_items(terrain)
+    limit = max(1, int(max_polygons))
+    brush_mode_key = terrain_reconstruction.normalize_terrain_support_brush_mode(
+        brush_mode
+    )
+    selection_limit = limit
+    if brush_mode_key == "adjacent_convex":
+        selection_limit = min(len(terrain_items), limit * 2)
+    elif brush_mode_key == "adaptive_structural":
+        selection_limit = min(len(terrain_items), limit * 8)
     selected = terrain_reconstruction.select_terrain_support_items(
         terrain_items,
         tuple(anchor_points),
         margin=margin,
         selection_mode=selection_mode,
         radius=radius,
-        max_items=max_polygons,
+        max_items=selection_limit,
     )
 
     if not selected:
         raise ValueError(
             f"terrain support patch found no {terrain_name} polygons inside selected model bounds"
         )
-    limit = max(1, int(max_polygons))
-    if len(selected) > limit:
+    if (
+        brush_mode_key
+        not in {"adjacent_convex", "adaptive_structural"}
+        and len(selected) > limit
+    ):
         raise ValueError(
             f"terrain support patch selected {len(selected)} polygon(s), above limit {limit}"
         )
@@ -4682,31 +4868,373 @@ def _terrain_support_patch_brushes_for_brushes(
     prefix = _safe_legacy_name_component(name_prefix) or "TerrainSupportPatch"
     patch_brushes: List[legacy_ed_writer.LegacyEdBrush] = []
     patch_summaries: List[SurrogateEdModelSummary] = []
-    support_placement = terrain_reconstruction.terrain_support_start_placement(
+    physics_oracle = terrain_reconstruction.TerrainCollisionOracle(
+        512.0,
+        {},
+        0,
+    )
+    if brush_mode_key == "adaptive_structural":
+        physics_model = terrain_semantics.model_by_name(
+            tuple(getattr(parsed, "world_models", ()) or ()),
+            terrain_semantics.PHYSICS_BSP_MODEL,
+        )
+        physics_oracle = terrain_reconstruction.build_terrain_collision_oracle(
+            physics_model
+        )
+    support_groups = _terrain_support_item_groups(
         selected,
+        brush_mode=brush_mode,
+        terrain_model=terrain,
+        anchor_points=tuple(anchor_points),
+        radius=radius,
+        physics_oracle=physics_oracle,
+    )
+    adaptive_exact_fallback = False
+    if (
+        brush_mode_key == "adaptive_structural"
+        and len(support_groups) > limit
+    ):
+        support_groups = _adaptive_terrain_budgeted_groups(
+            support_groups,
+            max_groups=limit,
+            anchor_points=tuple(anchor_points),
+        )
+    if brush_mode_key == "adaptive_structural":
+        exact_groups = _adjacent_convex_terrain_support_item_groups(
+            selected,
+            max_group_size=12,
+        )
+        exact_groups = exact_groups[:limit]
+        adaptive_source_count = sum(
+            len(group) for group in support_groups[:limit]
+        )
+        exact_source_count = sum(len(group) for group in exact_groups)
+        if exact_source_count > adaptive_source_count:
+            support_groups = exact_groups
+            adaptive_exact_fallback = True
+    if len(support_groups) > limit:
+        support_groups = support_groups[:limit]
+    emitted_support_items = tuple(
+        item for group in support_groups for item in group
+    )
+    support_placement = terrain_reconstruction.terrain_support_start_placement(
+        emitted_support_items,
         tuple(anchor_points),
         margin=margin,
     )
-
-    support_groups = _terrain_support_item_groups(selected, brush_mode=brush_mode)
+    skipped_group_polygon_indices: List[int] = []
+    emitted_support_groups: List[Tuple[object, ...]] = []
     for patch_index, group in enumerate(support_groups):
         first_polygon_index = int(group[0][0])
-        brush, summary = _terrain_polygon_group_prism_brush(
-            terrain,
-            group,
-            name=f"{prefix}_{first_polygon_index:04d}",
-            patch_index=patch_index,
-            thickness=thickness,
-            side_texture=side_texture_name,
-        )
+        try:
+            if (
+                brush_mode_key == "adaptive_structural"
+                and not adaptive_exact_fallback
+            ):
+                adaptive_result = _adaptive_structural_terrain_prism_brush(
+                    terrain,
+                    group,
+                    anchor_points=tuple(anchor_points),
+                    radius=radius,
+                    physics_oracle=physics_oracle,
+                    name=f"{prefix}_{first_polygon_index:04d}",
+                    patch_index=patch_index,
+                    thickness=thickness,
+                    side_texture=side_texture_name,
+                )
+                if adaptive_result is None:
+                    raise ValueError("adaptive structural Brush was rejected")
+                brush, summary = adaptive_result
+            else:
+                brush, summary = _terrain_polygon_group_prism_brush(
+                    terrain,
+                    group,
+                    name=f"{prefix}_{first_polygon_index:04d}",
+                    patch_index=patch_index,
+                    thickness=thickness,
+                    side_texture=side_texture_name,
+                )
+        except ValueError:
+            skipped_group_polygon_indices.extend(int(item[0]) for item in group)
+            continue
         patch_brushes.append(brush)
         patch_summaries.append(summary)
+        emitted_support_groups.append(tuple(group))
+    if not patch_brushes:
+        raise ValueError(
+            f"terrain support patch could not build a stable prism from any selected "
+            f"{terrain_name} polygon"
+        )
+    if skipped_group_polygon_indices:
+        first_summary = patch_summaries[0]
+        patch_summaries[0] = replace(
+            first_summary,
+            notes=tuple(first_summary.notes) + (
+                "terrain support skipped "
+                f"{len(skipped_group_polygon_indices)} selected source polygon(s) "
+                "whose prism surfaces became degenerate after DEDit-style point welding: "
+                + ", ".join(
+                    str(index) for index in skipped_group_polygon_indices[:32]
+                )
+                + (
+                    f", ... {len(skipped_group_polygon_indices) - 32} more"
+                    if len(skipped_group_polygon_indices) > 32
+                    else ""
+                ),
+            ),
+        )
+    if brush_mode_key == "adjacent_convex":
+        emitted_source_polygon_count = sum(
+            item.source_polygon_count for item in patch_summaries
+        )
+        grouped_brush_count = sum(
+            item.source_polygon_count > 1 for item in patch_summaries
+        )
+        removed_internal_edge_count = sum(
+            _terrain_group_internal_edge_count(group)
+            for group in emitted_support_groups
+        )
+        first_summary = patch_summaries[0]
+        patch_summaries[0] = replace(
+            first_summary,
+            notes=tuple(first_summary.notes) + (
+                "adjacent convex terrain grouping emitted "
+                f"{emitted_source_polygon_count} source polygon(s) as "
+                f"{len(patch_brushes)} Brush(es); grouped Brushes="
+                f"{grouped_brush_count}; internal vertical wall edges removed="
+                f"{removed_internal_edge_count}",
+            ),
+        )
+    if brush_mode_key == "adaptive_structural":
+        represented_source_polygons = sum(
+            item.source_polygon_count for item in patch_summaries
+        )
+        structural_patch_count = sum(
+            any("adaptive structural" in note for note in item.notes)
+            for item in patch_summaries
+        )
+        oracle_checked_patch_count = sum(
+            any("PhysicsBSP oracle samples=" in note for note in item.notes)
+            for item in patch_summaries
+        )
+        first_summary = patch_summaries[0]
+        patch_summaries[0] = replace(
+            first_summary,
+            notes=tuple(first_summary.notes) + (
+                "adaptive terrain compression represented "
+                f"{represented_source_polygons} source polygon(s) as "
+                f"{len(patch_brushes)} Brush(es); structural patches="
+                f"{structural_patch_count}; PhysicsBSP-oracle checked patches="
+                f"{oracle_checked_patch_count}; PhysicsBSP visible slabs=0; "
+                "exact convex fallback="
+                f"{'yes' if adaptive_exact_fallback else 'no'}",
+            ),
+        )
 
     placement = _ValidationFloorPlacement(
         center=support_placement.center,
         top_y=support_placement.top_y,
     )
     return tuple(patch_brushes), tuple(patch_summaries), placement
+
+
+def _terrain_group_internal_edge_count(
+    group: Sequence[
+        Tuple[
+            int,
+            object,
+            Tuple[int, ...],
+            Tuple[Vec3, ...],
+            Vec3,
+            Tuple[float, float, float, float],
+        ]
+    ],
+) -> int:
+    edge_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    for item in group:
+        indices = tuple(int(index) for index in item[2])
+        for offset, first in enumerate(indices):
+            second = indices[(offset + 1) % len(indices)]
+            edge_counts[tuple(sorted((first, second)))] += 1
+    return sum(count > 1 for count in edge_counts.values())
+
+
+def _adaptive_terrain_budgeted_groups(
+    groups: Sequence[
+        Tuple[
+            Tuple[
+                int,
+                object,
+                Tuple[int, ...],
+                Tuple[Vec3, ...],
+                Vec3,
+                Tuple[float, float, float, float],
+            ],
+            ...,
+        ]
+    ],
+    *,
+    max_groups: int,
+    anchor_points: Sequence[Vec3],
+) -> Tuple[
+    Tuple[
+        Tuple[
+            int,
+            object,
+            Tuple[int, ...],
+            Tuple[Vec3, ...],
+            Vec3,
+            Tuple[float, float, float, float],
+        ],
+        ...,
+    ],
+    ...,
+]:
+    """Keep playable-area continuity while spending headroom on compression."""
+    limit = max(0, int(max_groups))
+    if limit <= 0:
+        return ()
+    if len(groups) <= limit:
+        return tuple(groups)
+
+    # The selector's leading groups are round-robin allocations around DAT
+    # gameplay anchors.  Reserve half of the Brush budget for that order so a
+    # remote high-compression patch cannot displace the spawn/route surface.
+    reserved_count = max(1, limit // 2)
+    reserved = tuple(groups[:reserved_count])
+    remaining = tuple(enumerate(groups[reserved_count:], reserved_count))
+    packed = sorted(
+        remaining,
+        key=lambda entry: (
+            -len(entry[1]),
+            min(
+                _terrain_item_anchor_distance(item, anchor_points)
+                for item in entry[1]
+            ),
+            entry[0],
+        ),
+    )
+    result = reserved + tuple(
+        group
+        for _index, group in packed[:limit - len(reserved)]
+    )
+    return result
+
+
+def _terrain_support_patch_brushes_for_models(
+    data: bytes,
+    anchor_brushes: Sequence[legacy_ed_writer.LegacyEdBrush],
+    *,
+    parsed_world: Optional[object] = None,
+    source_model_names: Sequence[str],
+    model_polygon_budgets: Mapping[str, int],
+    extra_anchor_points: Sequence[object] = (),
+    name_prefix: str,
+    margin: float,
+    selection_mode: str = "bounds",
+    radius: float = 0.0,
+    brush_mode: str = "single_polygon",
+    thickness: float,
+    side_texture: str,
+) -> _TerrainSupportBrushBundle:
+    """Build independently budgeted support Brushes for multiple Terrain* models."""
+    names = tuple(
+        str(name).strip() for name in source_model_names if str(name).strip()
+    )
+    if not names:
+        raise ValueError("multi-model terrain support requires at least one source model")
+
+    all_brushes: List[legacy_ed_writer.LegacyEdBrush] = []
+    all_summaries: List[SurrogateEdModelSummary] = []
+    placement: Optional[_ValidationFloorPlacement] = None
+    prefix = _safe_legacy_name_component(name_prefix) or "TerrainSupportPatch"
+    budget_lookup = {
+        str(name).lower(): max(0, int(value))
+        for name, value in model_polygon_budgets.items()
+    }
+    for model_name in names:
+        budget = budget_lookup.get(model_name.lower(), 0)
+        if budget <= 0:
+            raise ValueError(
+                f"terrain support model {model_name} has no allocated polygon budget"
+            )
+        model_prefix = (
+            f"{prefix}_{_safe_legacy_name_component(model_name) or 'Terrain'}"
+        )
+        brushes, summaries, model_placement = (
+            _terrain_support_patch_brushes_for_brushes(
+                data,
+                anchor_brushes,
+                parsed_world=parsed_world,
+                extra_anchor_points=extra_anchor_points,
+                prefer_extra_anchor_points=True,
+                source_model_name=model_name,
+                name_prefix=model_prefix,
+                margin=margin,
+                selection_mode=selection_mode,
+                radius=radius,
+                brush_mode=brush_mode,
+                thickness=thickness,
+                max_polygons=budget,
+                side_texture=side_texture,
+            )
+        )
+        if summaries:
+            first = summaries[0]
+            summaries = (
+                replace(
+                    first,
+                    notes=tuple(first.notes) + (
+                        f"multi-model terrain support source={model_name}, "
+                        f"allocated_polygon_budget={budget}",
+                    ),
+                ),
+            ) + tuple(summaries[1:])
+        all_brushes.extend(brushes)
+        all_summaries.extend(summaries)
+        if placement is None:
+            placement = model_placement
+
+    if not all_brushes or placement is None:
+        raise ValueError("multi-model terrain support did not generate any Brushes")
+    anchor_placement = _generated_gameplay_anchor_placement(
+        all_brushes,
+        extra_anchor_points,
+    )
+    if anchor_placement is not None:
+        placement = anchor_placement
+        first_summary = all_summaries[0]
+        all_summaries[0] = replace(
+            first_summary,
+            notes=tuple(first_summary.notes) + (
+                "multi-model terrain StartPoint uses the first DAT gameplay "
+                "anchor with generated walkable support beneath it",
+            ),
+        )
+    return tuple(all_brushes), tuple(all_summaries), placement
+
+
+def _generated_gameplay_anchor_placement(
+    brushes: Sequence[legacy_ed_writer.LegacyEdBrush],
+    anchor_points: Sequence[object],
+) -> Optional[_ValidationFloorPlacement]:
+    for raw_anchor in anchor_points:
+        anchor = _finite_vec3(raw_anchor)
+        floor_y = _raycast_brush_floor_y_at_xz(
+            brushes,
+            anchor[0],
+            anchor[2],
+            y_max=anchor[1] + 256.0,
+        )
+        if floor_y is None:
+            continue
+        safe_floor_y = float(floor_y)
+        return _ValidationFloorPlacement(
+            center=(anchor[0], safe_floor_y, anchor[2]),
+            top_y=safe_floor_y,
+            start_y=max(float(anchor[1]), safe_floor_y + 64.0),
+        )
+    return None
 
 
 def _source_door_clearance_bounds_from_source_ed(
@@ -5402,6 +5930,12 @@ def _terrain_support_item_groups(
     items: Sequence[Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]]],
     *,
     brush_mode: str,
+    terrain_model: Optional[object] = None,
+    anchor_points: Sequence[Vec3] = (),
+    radius: float = 0.0,
+    physics_oracle: Optional[
+        terrain_reconstruction.TerrainCollisionOracle
+    ] = None,
 ) -> Tuple[Tuple[Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]], ...], ...]:
     mode = terrain_reconstruction.normalize_terrain_support_brush_mode(brush_mode)
     if mode == "single_polygon":
@@ -5426,6 +5960,16 @@ def _terrain_support_item_groups(
             else:
                 groups.extend((triangle_item,) for triangle_item in triangle_items)
         return tuple(groups)
+    if mode == "adjacent_convex":
+        return _adjacent_convex_terrain_support_item_groups(items)
+    if mode == "adaptive_structural":
+        return _adaptive_structural_terrain_support_item_groups(
+            items,
+            terrain_model=terrain_model,
+            anchor_points=anchor_points,
+            radius=radius,
+            physics_oracle=physics_oracle,
+        )
     if mode != "paired_triangles":
         raise ValueError(f"unsupported terrain support brush mode: {brush_mode}")
 
@@ -5479,6 +6023,1010 @@ def _terrain_support_item_groups(
             used.add(polygon_index)
             groups.append((item,))
     return tuple(groups)
+
+
+def _adjacent_convex_terrain_support_item_groups(
+    items: Sequence[
+        Tuple[
+            int,
+            object,
+            Tuple[int, ...],
+            Tuple[Vec3, ...],
+            Vec3,
+            Tuple[float, float, float, float],
+        ]
+    ],
+    *,
+    max_group_size: int = 8,
+) -> Tuple[
+    Tuple[
+        Tuple[
+            int,
+            object,
+            Tuple[int, ...],
+            Tuple[Vec3, ...],
+            Vec3,
+            Tuple[float, float, float, float],
+        ],
+        ...,
+    ],
+    ...,
+]:
+    """Greedily combine edge-adjacent polygons into stable convex prisms."""
+    by_polygon = {int(item[0]): item for item in items}
+    order = {
+        int(item[0]): index for index, item in enumerate(items)
+    }
+    by_edge: Dict[Tuple[int, int], List[int]] = defaultdict(list)
+    for item in items:
+        polygon_index = int(item[0])
+        indices = tuple(int(index) for index in item[2])
+        for offset, first in enumerate(indices):
+            second = indices[(offset + 1) % len(indices)]
+            by_edge[tuple(sorted((first, second)))].append(polygon_index)
+
+    neighbors: Dict[int, set[int]] = defaultdict(set)
+    for polygon_indices in by_edge.values():
+        unique = tuple(dict.fromkeys(polygon_indices))
+        if len(unique) < 2:
+            continue
+        for first in unique:
+            neighbors[first].update(
+                second for second in unique if second != first
+            )
+
+    used: set[int] = set()
+    groups: List[Tuple[Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]], ...]] = []
+    safe_group_size = max(2, int(max_group_size))
+    for seed in items:
+        seed_index = int(seed[0])
+        if seed_index in used:
+            continue
+        group = [seed]
+        rejected: set[int] = set()
+        while len(group) < safe_group_size:
+            group_indices = {int(item[0]) for item in group}
+            frontier = sorted(
+                {
+                    neighbor
+                    for polygon_index in group_indices
+                    for neighbor in neighbors.get(polygon_index, ())
+                    if neighbor not in used
+                    and neighbor not in group_indices
+                    and neighbor not in rejected
+                    and neighbor in by_polygon
+                },
+                key=lambda polygon_index: (
+                    order.get(polygon_index, len(order)),
+                    polygon_index,
+                ),
+            )
+            if not frontier:
+                break
+            accepted = False
+            for candidate_index in frontier:
+                candidate_group = tuple(group + [by_polygon[candidate_index]])
+                try:
+                    probe_brush, _summary = _terrain_polygon_group_prism_brush(
+                        None,
+                        candidate_group,
+                        name="adjacent_convex_probe",
+                        patch_index=0,
+                        thickness=128.0,
+                        side_texture="Default",
+                    )
+                except ValueError:
+                    rejected.add(candidate_index)
+                    continue
+                if not _legacy_brush_faces_enclose_points(probe_brush):
+                    rejected.add(candidate_index)
+                    continue
+                group.append(by_polygon[candidate_index])
+                accepted = True
+                break
+            if not accepted:
+                break
+        used.update(int(item[0]) for item in group)
+        groups.append(tuple(group))
+    return tuple(groups)
+
+
+def _adaptive_structural_terrain_support_item_groups(
+    items: Sequence[
+        Tuple[
+            int,
+            object,
+            Tuple[int, ...],
+            Tuple[Vec3, ...],
+            Vec3,
+            Tuple[float, float, float, float],
+        ]
+    ],
+    *,
+    terrain_model: Optional[object],
+    anchor_points: Sequence[Vec3],
+    radius: float,
+    physics_oracle: Optional[
+        terrain_reconstruction.TerrainCollisionOracle
+    ],
+) -> Tuple[
+    Tuple[
+        Tuple[
+            int,
+            object,
+            Tuple[int, ...],
+            Tuple[Vec3, ...],
+            Vec3,
+            Tuple[float, float, float, float],
+        ],
+        ...,
+    ],
+    ...,
+]:
+    """Greedily form larger safe convex terrain regions for compression."""
+    by_polygon = {int(item[0]): item for item in items}
+    order = {int(item[0]): index for index, item in enumerate(items)}
+    by_edge: Dict[Tuple[int, int], List[int]] = defaultdict(list)
+    for item in items:
+        polygon_index = int(item[0])
+        indices = tuple(int(index) for index in item[2])
+        for offset, first in enumerate(indices):
+            second = indices[(offset + 1) % len(indices)]
+            by_edge[tuple(sorted((first, second)))].append(polygon_index)
+    neighbors: Dict[int, set[int]] = defaultdict(set)
+    for polygon_indices in by_edge.values():
+        unique = tuple(dict.fromkeys(polygon_indices))
+        for first in unique:
+            neighbors[first].update(
+                second for second in unique if second != first
+            )
+
+    protected: Dict[int, bool] = {}
+    for item in items:
+        polygon_index = int(item[0])
+        protected[polygon_index] = _adaptive_terrain_item_is_protected(
+            terrain_model,
+            item,
+            anchor_points=anchor_points,
+            radius=radius,
+        )
+    # A small triangulation-normal wobble is expected on compiled terrain and
+    # is exactly what the fitted structural patch is meant to compress.  Keep
+    # genuine breaks exact, but do not classify every gently changing remote
+    # slope as a cliff.
+    sharp_cosine = math.cos(math.radians(75.0))
+    for polygon_index, adjacent_indices in neighbors.items():
+        item = by_polygon[polygon_index]
+        item_normal, _dist = _polygon_plane(
+            item[3],
+            tuple(range(len(item[3]))),
+        )
+        for neighbor_index in adjacent_indices:
+            neighbor = by_polygon.get(neighbor_index)
+            if neighbor is None:
+                continue
+            neighbor_normal, _neighbor_dist = _polygon_plane(
+                neighbor[3],
+                tuple(range(len(neighbor[3]))),
+            )
+            dot = sum(
+                item_normal[axis] * neighbor_normal[axis]
+                for axis in range(3)
+            )
+            if dot < sharp_cosine:
+                protected[polygon_index] = True
+                protected[neighbor_index] = True
+
+    used: set[int] = set()
+    groups: List[Tuple[Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]], ...]] = []
+    oracle = physics_oracle or terrain_reconstruction.TerrainCollisionOracle(
+        512.0,
+        {},
+        0,
+    )
+    for seed in items:
+        seed_index = int(seed[0])
+        if seed_index in used:
+            continue
+        if protected.get(seed_index, False):
+            # Protected terrain is never approximated, but it does not need
+            # one independent prism per source polygon.  A convex prism may
+            # retain every original top face (and therefore every texture
+            # projection) while sharing its boundary/bottom with adjacent
+            # protected faces.  This is the main source of Brush headroom for
+            # exact routes, slopes, cliffs, shorelines, and spawn surrounds.
+            group = [seed]
+            rejected: set[int] = set()
+            while len(group) < 12:
+                group_indices = {int(item[0]) for item in group}
+                frontier = sorted(
+                    {
+                        neighbor
+                        for polygon_index in group_indices
+                        for neighbor in neighbors.get(polygon_index, ())
+                        if neighbor not in used
+                        and neighbor not in group_indices
+                        and neighbor not in rejected
+                        and neighbor in by_polygon
+                        and protected.get(neighbor, False)
+                    },
+                    key=lambda polygon_index: (
+                        order.get(polygon_index, len(order)),
+                        polygon_index,
+                    ),
+                )
+                if not frontier:
+                    break
+                accepted = False
+                for candidate_index in frontier:
+                    candidate_group = tuple(
+                        group + [by_polygon[candidate_index]]
+                    )
+                    try:
+                        probe_brush, _summary = (
+                            _terrain_polygon_group_prism_brush(
+                                terrain_model,
+                                candidate_group,
+                                name="adaptive_exact_probe",
+                                patch_index=0,
+                                thickness=128.0,
+                                side_texture="Default",
+                            )
+                        )
+                    except ValueError:
+                        rejected.add(candidate_index)
+                        continue
+                    if not _legacy_brush_faces_enclose_points(probe_brush):
+                        rejected.add(candidate_index)
+                        continue
+                    group.append(by_polygon[candidate_index])
+                    accepted = True
+                    break
+                if not accepted:
+                    break
+            used.update(int(item[0]) for item in group)
+            groups.append(tuple(group))
+            continue
+        seed_distance = _terrain_item_anchor_distance(
+            seed,
+            anchor_points,
+        )
+        remote_threshold = max(1024.0, max(0.0, float(radius)) * 0.5)
+        remote = seed_distance > remote_threshold
+        max_group_size = 32 if remote else 16
+        material_key = _adaptive_terrain_material_key(
+            terrain_model,
+            seed,
+        )
+        group = [seed]
+        rejected: set[int] = set()
+        while len(group) < max_group_size:
+            group_indices = {int(item[0]) for item in group}
+            frontier = sorted(
+                {
+                    neighbor
+                    for polygon_index in group_indices
+                    for neighbor in neighbors.get(polygon_index, ())
+                    if neighbor not in used
+                    and neighbor not in group_indices
+                    and neighbor not in rejected
+                    and neighbor in by_polygon
+                    and not protected.get(neighbor, False)
+                },
+                key=lambda polygon_index: (
+                    order.get(polygon_index, len(order)),
+                    polygon_index,
+                ),
+            )
+            if not frontier:
+                break
+            accepted = False
+            for candidate_index in frontier:
+                candidate = by_polygon[candidate_index]
+                if (
+                    _adaptive_terrain_material_key(
+                        terrain_model,
+                        candidate,
+                    )
+                    != material_key
+                ):
+                    rejected.add(candidate_index)
+                    continue
+                candidate_group = tuple(group + [candidate])
+                probe = _adaptive_structural_terrain_prism_brush(
+                    terrain_model,
+                    candidate_group,
+                    anchor_points=anchor_points,
+                    radius=radius,
+                    physics_oracle=oracle,
+                    name="adaptive_structural_probe",
+                    patch_index=0,
+                    thickness=128.0,
+                    side_texture="Default",
+                )
+                if probe is None:
+                    rejected.add(candidate_index)
+                    continue
+                group.append(candidate)
+                accepted = True
+                break
+            if not accepted:
+                break
+        used.update(int(item[0]) for item in group)
+        groups.append(tuple(group))
+    return tuple(groups)
+
+
+def _adaptive_terrain_item_is_protected(
+    terrain_model: Optional[object],
+    item: Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]],
+    *,
+    anchor_points: Sequence[Vec3],
+    radius: float,
+) -> bool:
+    normal, _dist = _polygon_plane(
+        item[3],
+        tuple(range(len(item[3]))),
+    )
+    texture_name = (
+        _texture_name_for_polygon(terrain_model, item[1])
+        if terrain_model is not None
+        else ""
+    ).lower()
+    if any(
+        token in texture_name
+        for token in ("shore", "beach", "sand", "water", "ocean", "river")
+    ):
+        return True
+    protected_radius = max(256.0, min(640.0, max(0.0, float(radius)) * 0.15))
+    if _terrain_item_anchor_distance(item, anchor_points) <= protected_radius:
+        return True
+    route_width = 192.0
+    max_route_length = max(2048.0, max(0.0, float(radius)) * 1.5)
+    center = item[4]
+    for first_index, first in enumerate(anchor_points):
+        for second in anchor_points[first_index + 1:]:
+            dx = float(second[0]) - float(first[0])
+            dz = float(second[2]) - float(first[2])
+            length = math.hypot(dx, dz)
+            if length <= 1.0 or length > max_route_length:
+                continue
+            if (
+                _xz_point_segment_distance(
+                    center[0],
+                    center[2],
+                    first[0],
+                    first[2],
+                    second[0],
+                    second[2],
+                )
+                <= route_width
+            ):
+                return True
+    anchor_distance = _terrain_item_anchor_distance(item, anchor_points)
+    # True cliffs remain exact everywhere.  Ordinary sloped terrain is exact
+    # throughout the playable neighborhood, but may be plane-fitted farther
+    # away when both the source-error and PhysicsBSP checks accept it.
+    if float(normal[1]) < 0.45:
+        return True
+    if (
+        float(normal[1]) < 0.90
+        and anchor_distance <= max(
+            1024.0,
+            max(0.0, float(radius)) * 0.5,
+        )
+    ):
+        return True
+    return False
+
+
+def _terrain_item_anchor_distance(
+    item: Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]],
+    anchor_points: Sequence[Vec3],
+) -> float:
+    if not anchor_points:
+        return float("inf")
+    return math.sqrt(min(
+        terrain_reconstruction._xz_bounds_distance_sq(
+            item[5],
+            float(anchor[0]),
+            float(anchor[2]),
+        )
+        for anchor in anchor_points
+    ))
+
+
+def _xz_point_segment_distance(
+    x: float,
+    z: float,
+    first_x: float,
+    first_z: float,
+    second_x: float,
+    second_z: float,
+) -> float:
+    dx = float(second_x) - float(first_x)
+    dz = float(second_z) - float(first_z)
+    length_sq = dx * dx + dz * dz
+    if length_sq <= 1.0e-9:
+        return math.hypot(float(x) - float(first_x), float(z) - float(first_z))
+    amount = (
+        (float(x) - float(first_x)) * dx
+        + (float(z) - float(first_z)) * dz
+    ) / length_sq
+    amount = max(0.0, min(1.0, amount))
+    nearest_x = float(first_x) + amount * dx
+    nearest_z = float(first_z) + amount * dz
+    return math.hypot(float(x) - nearest_x, float(z) - nearest_z)
+
+
+def _adaptive_terrain_material_key(
+    terrain_model: Optional[object],
+    item: Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]],
+) -> Tuple[object, ...]:
+    if terrain_model is None:
+        return ("default",)
+    polygon = item[1]
+    surface = _surface_for_polygon(terrain_model, polygon)
+    texture_name = _texture_name_for_polygon(
+        terrain_model,
+        polygon,
+    ).lower()
+    if surface is None:
+        return (texture_name,)
+    uv_p = _finite_vec3(getattr(surface, "uv_p", (1.0, 0.0, 0.0)))
+    uv_q = _finite_vec3(getattr(surface, "uv_q", (0.0, 0.0, 1.0)))
+    return (
+        texture_name,
+        tuple(round(value, 4) for value in uv_p),
+        tuple(round(value, 4) for value in uv_q),
+        int(getattr(surface, "texture_flags", 0) or 0),
+    )
+
+
+def _adaptive_structural_terrain_prism_brush(
+    terrain_model: Optional[object],
+    items: Sequence[Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]]],
+    *,
+    anchor_points: Sequence[Vec3],
+    radius: float,
+    physics_oracle: terrain_reconstruction.TerrainCollisionOracle,
+    name: str,
+    patch_index: int,
+    thickness: float,
+    side_texture: str,
+) -> Optional[
+    Tuple[legacy_ed_writer.LegacyEdBrush, SurrogateEdModelSummary]
+]:
+    if not items:
+        return None
+    preserve_exact = len(items) == 1 or any(
+        _adaptive_terrain_item_is_protected(
+            terrain_model,
+            item,
+            anchor_points=anchor_points,
+            radius=radius,
+        )
+        for item in items
+    )
+    if preserve_exact:
+        try:
+            brush, summary = _terrain_polygon_group_prism_brush(
+                terrain_model,
+                items,
+                name=name,
+                patch_index=patch_index,
+                thickness=thickness,
+                side_texture=side_texture,
+            )
+        except ValueError:
+            return None
+        return brush, replace(
+            summary,
+            notes=tuple(summary.notes) + (
+                "adaptive exact terrain patch preserved without approximation; "
+                f"{len(items)} source polygon(s) share one convex structural Brush",
+            ),
+        )
+
+    source_boundary = _terrain_group_boundary_loop(items)
+    if len(source_boundary) < 3:
+        return None
+    source_points_by_index: Dict[int, Vec3] = {}
+    for item in items:
+        for source_index, point in zip(item[2], item[3]):
+            source_points_by_index[int(source_index)] = _finite_vec3(point)
+    if any(index not in source_points_by_index for index in source_boundary):
+        return None
+    boundary = _terrain_group_convex_hull_indices(source_points_by_index)
+    if len(boundary) < 3 or len(boundary) > 64:
+        return None
+
+    all_source_points = tuple(source_points_by_index.values())
+    plane = _fit_terrain_height_plane(all_source_points)
+    if plane is None:
+        return None
+    plane_x, plane_z, plane_offset = plane
+    source_errors = tuple(
+        abs(
+            float(point[1])
+            - (
+                plane_x * float(point[0])
+                + plane_z * float(point[2])
+                + plane_offset
+            )
+        )
+        for point in all_source_points
+    )
+    max_source_error = max(source_errors, default=0.0)
+    group_distance = min(
+        _terrain_item_anchor_distance(item, anchor_points)
+        for item in items
+    )
+    remote_threshold = max(1024.0, max(0.0, float(radius)) * 0.5)
+    remote = group_distance > remote_threshold
+    requested_tolerance = 24.0 if remote else 3.0
+    source_xz_area = sum(
+        _terrain_xz_polygon_area(item[3])
+        for item in items
+    )
+    hull_xz_area = _terrain_xz_polygon_area(
+        tuple(source_points_by_index[index] for index in boundary)
+    )
+    if hull_xz_area <= 1.0e-5:
+        return None
+    hull_fill_ratio = min(1.0, source_xz_area / hull_xz_area)
+    # A convex hull lets a structural Brush absorb small concave compilation
+    # seams.  Playable-neighborhood patches may fill only tiny seams; remote
+    # patches may bridge a larger indentation, but never a mostly empty hull.
+    minimum_hull_fill = 0.68 if remote else 0.90
+    if hull_fill_ratio + 1.0e-6 < minimum_hull_fill:
+        return None
+
+    oracle_samples = 0
+    oracle_max_error = 0.0
+    oracle_offsets: List[float] = []
+    oracle_probes = [
+        (
+            float(item[4][0]),
+            float(item[4][2]),
+            float(item[4][1]),
+        )
+        for item in items
+    ]
+    oracle_probes.extend(
+        (
+            float(source_points_by_index[index][0]),
+            float(source_points_by_index[index][2]),
+            float(source_points_by_index[index][1]),
+        )
+        for index in boundary
+    )
+    hull_center_x = sum(probe[0] for probe in oracle_probes) / len(
+        oracle_probes
+    )
+    hull_center_z = sum(probe[1] for probe in oracle_probes) / len(
+        oracle_probes
+    )
+    hull_center_y = (
+        plane_x * hull_center_x
+        + plane_z * hull_center_z
+        + plane_offset
+    )
+    oracle_probes.append(
+        (hull_center_x, hull_center_z, hull_center_y)
+    )
+    for probe_x, probe_z, source_y in oracle_probes:
+        oracle_y = terrain_reconstruction.terrain_collision_oracle_floor_y(
+            physics_oracle,
+            probe_x,
+            probe_z,
+            source_y=source_y,
+            max_vertical_distance=2048.0,
+        )
+        if oracle_y is None:
+            continue
+        fitted_y = (
+            plane_x * probe_x
+            + plane_z * probe_z
+            + plane_offset
+        )
+        oracle_samples += 1
+        oracle_offsets.append(fitted_y - float(oracle_y))
+    if oracle_offsets:
+        ordered_offsets = sorted(oracle_offsets)
+        oracle_reference_offset = ordered_offsets[
+            len(ordered_offsets) // 2
+        ]
+        oracle_max_error = max(
+            abs(offset - oracle_reference_offset)
+            for offset in oracle_offsets
+        )
+    effective_tolerance = requested_tolerance
+    if max_source_error > effective_tolerance + 1.0e-5:
+        return None
+    if oracle_samples >= 2 and oracle_max_error > max(
+        16.0,
+        requested_tolerance * 2.0,
+    ):
+        return None
+
+    top = tuple(
+        (
+            float(source_points_by_index[index][0]),
+            plane_x * float(source_points_by_index[index][0])
+            + plane_z * float(source_points_by_index[index][2])
+            + plane_offset,
+            float(source_points_by_index[index][2]),
+        )
+        for index in boundary
+    )
+    if not _convex_xz_polygon(top):
+        return None
+    safe_thickness = max(16.0, float(thickness))
+    bottom = tuple(
+        (point[0], point[1] - safe_thickness, point[2])
+        for point in top
+    )
+    points = top + bottom
+    count = len(top)
+    top_indices = tuple(range(count))
+    top_normal, top_dist = _polygon_plane(points, top_indices)
+    if top_normal[1] < 0.0:
+        top_indices = tuple(reversed(top_indices))
+        top_normal, top_dist = _polygon_plane(points, top_indices)
+    bottom_indices = tuple(
+        reversed(tuple(index + count for index in top_indices))
+    )
+    bottom_normal, bottom_dist = _polygon_plane(points, bottom_indices)
+
+    first_polygon = items[0][1]
+    source_surface = (
+        _surface_for_polygon(terrain_model, first_polygon)
+        if terrain_model is not None
+        else None
+    )
+    top_texture = (
+        _texture_name_for_polygon(terrain_model, first_polygon)
+        if terrain_model is not None
+        else "Default"
+    )
+    uv_o = _finite_vec3(
+        getattr(source_surface, "uv_o", points[top_indices[0]])
+        if source_surface is not None
+        else points[top_indices[0]]
+    )
+    uv_p = _finite_vec3(
+        getattr(source_surface, "uv_p", (1.0, 0.0, 0.0))
+        if source_surface is not None
+        else (1.0, 0.0, 0.0)
+    )
+    uv_q = _finite_vec3(
+        getattr(source_surface, "uv_q", (0.0, 0.0, 1.0))
+        if source_surface is not None
+        else (0.0, 0.0, 1.0)
+    )
+    texture_flags = (
+        int(getattr(source_surface, "texture_flags", 0) or 0)
+        if source_surface is not None
+        else 0
+    )
+    side_texture_name = str(
+        side_texture or "TEXTURES\\LevelTextures\\Misc\\Invisible.dtx"
+    )
+    side_texture_flags = _helper_texture_flags(side_texture_name)
+    surfaces: List[legacy_ed_writer.LegacyEdSurface] = [
+        legacy_ed_writer.LegacyEdSurface(
+            vertex_indices=top_indices,
+            plane_normal=top_normal,
+            plane_dist=top_dist,
+            texture_name=top_texture,
+            uv_o=uv_o,
+            uv_p=uv_p,
+            uv_q=uv_q,
+            texture_flags=texture_flags,
+            surface_flags=0,
+            shade_rgb=(0, 0, 0),
+        ),
+        legacy_ed_writer.LegacyEdSurface(
+            vertex_indices=bottom_indices,
+            plane_normal=bottom_normal,
+            plane_dist=bottom_dist,
+            texture_name=side_texture_name,
+            uv_o=points[bottom_indices[0]],
+            uv_p=(1.0, 0.0, 0.0),
+            uv_q=(0.0, 0.0, 1.0),
+            texture_flags=side_texture_flags,
+            surface_flags=0,
+            shade_rgb=(0, 0, 0),
+        ),
+    ]
+    for offset, first in enumerate(top_indices):
+        second = top_indices[(offset + 1) % len(top_indices)]
+        side_indices = (
+            first,
+            first + count,
+            second + count,
+            second,
+        )
+        normal, dist = _polygon_plane(points, side_indices)
+        surfaces.append(legacy_ed_writer.LegacyEdSurface(
+            vertex_indices=side_indices,
+            plane_normal=normal,
+            plane_dist=dist,
+            texture_name=side_texture_name,
+            uv_o=points[first],
+            uv_p=(1.0, 0.0, 0.0),
+            uv_q=(0.0, 1.0, 0.0),
+            texture_flags=side_texture_flags,
+            surface_flags=0,
+            shade_rgb=(0, 0, 0),
+        ))
+    brush = legacy_ed_writer.LegacyEdBrush(
+        points=points,
+        surfaces=tuple(surfaces),
+        color_rgb=(88, 152, 112),
+        name=str(name),
+    )
+    if not _legacy_brush_faces_enclose_points(brush):
+        return None
+    summary = SurrogateEdModelSummary(
+        name=str(name),
+        status="written",
+        source_model_name=str(
+            getattr(terrain_model, "name", "") or ""
+        ),
+        source_polygon_count=len(items),
+        point_count=len(points),
+        polygon_count=len(surfaces),
+        texture_count=len({top_texture, side_texture_name}),
+        byte_count=len(legacy_ed_writer.write_brush_record(brush)),
+        notes=(
+            "adaptive structural terrain patch merged source polygons "
+            + ",".join(str(item[0]) for item in items)
+            + f"; max source error={max_source_error:.4f}; "
+            f"tolerance={effective_tolerance:.4f}; convex-hull fill="
+            f"{hull_fill_ratio:.4f}",
+            f"PhysicsBSP oracle samples={oracle_samples}/{len(oracle_probes)}; "
+            f"max relative height deviation={oracle_max_error:.4f}; "
+            "visible slabs=0",
+            "source texture, texture flags, and primary UV projection were preserved",
+        ),
+    )
+    return brush, summary
+
+
+def _terrain_group_boundary_loop(
+    items: Sequence[Tuple[int, object, Tuple[int, ...], Tuple[Vec3, ...], Vec3, Tuple[float, float, float, float]]],
+) -> Tuple[int, ...]:
+    edge_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    directed_edges: List[Tuple[int, int]] = []
+    points_by_source: Dict[int, Vec3] = {}
+    for item in items:
+        indices = tuple(int(index) for index in item[2])
+        points = tuple(_finite_vec3(point) for point in item[3])
+        normal, _dist = _polygon_plane(
+            points,
+            tuple(range(len(points))),
+        )
+        if normal[1] < 0.0:
+            indices = tuple(reversed(indices))
+            points = tuple(reversed(points))
+        for source_index, point in zip(indices, points):
+            points_by_source[source_index] = point
+        for offset, first in enumerate(indices):
+            second = indices[(offset + 1) % len(indices)]
+            directed_edges.append((first, second))
+            edge_counts[tuple(sorted((first, second)))] += 1
+    boundary_edges = tuple(
+        (first, second)
+        for first, second in directed_edges
+        if edge_counts[tuple(sorted((first, second)))] == 1
+    )
+    if len(boundary_edges) < 3:
+        return ()
+    outgoing: Dict[int, List[int]] = defaultdict(list)
+    incoming: Dict[int, List[int]] = defaultdict(list)
+    for first, second in boundary_edges:
+        outgoing[first].append(second)
+        incoming[second].append(first)
+    vertices = set(outgoing) | set(incoming)
+    if any(
+        len(outgoing.get(vertex, ())) != 1
+        or len(incoming.get(vertex, ())) != 1
+        for vertex in vertices
+    ):
+        return ()
+    start = min(
+        vertices,
+        key=lambda index: (
+            points_by_source[index][0],
+            points_by_source[index][2],
+            index,
+        ),
+    )
+    loop = [start]
+    current = start
+    for _offset in range(len(boundary_edges)):
+        current = outgoing[current][0]
+        if current == start:
+            break
+        if current in loop:
+            return ()
+        loop.append(current)
+    if current != start or len(loop) != len(boundary_edges):
+        return ()
+
+    changed = True
+    while changed and len(loop) > 3:
+        changed = False
+        for offset, current_index in enumerate(tuple(loop)):
+            previous = points_by_source[loop[(offset - 1) % len(loop)]]
+            current_point = points_by_source[current_index]
+            following = points_by_source[loop[(offset + 1) % len(loop)]]
+            cross = (
+                (current_point[0] - previous[0])
+                * (following[2] - current_point[2])
+                - (current_point[2] - previous[2])
+                * (following[0] - current_point[0])
+            )
+            if abs(cross) <= 1.0e-5:
+                del loop[offset]
+                changed = True
+                break
+    return tuple(loop)
+
+
+def _terrain_group_convex_hull_indices(
+    points_by_source: Mapping[int, Vec3],
+) -> Tuple[int, ...]:
+    """Return a deterministic XZ convex hull as source-point indices."""
+    projected: Dict[Tuple[float, float], Tuple[float, int]] = {}
+    for source_index, point in points_by_source.items():
+        key = (float(point[0]), float(point[2]))
+        existing = projected.get(key)
+        if existing is not None:
+            # A vertical stack is not a height-field patch and must not be
+            # hidden by choosing one of its two source heights.
+            if abs(float(point[1]) - existing[0]) > 1.0e-4:
+                return ()
+            if int(source_index) >= existing[1]:
+                continue
+        projected[key] = (float(point[1]), int(source_index))
+    ordered = sorted(
+        (
+            (position[0], position[1], source_index)
+            for position, (_height, source_index) in projected.items()
+        ),
+        key=lambda item: (item[0], item[1], item[2]),
+    )
+    if len(ordered) < 3:
+        return ()
+
+    def cross(
+        origin: Tuple[float, float, int],
+        first: Tuple[float, float, int],
+        second: Tuple[float, float, int],
+    ) -> float:
+        return (
+            (first[0] - origin[0]) * (second[1] - origin[1])
+            - (first[1] - origin[1]) * (second[0] - origin[0])
+        )
+
+    lower: List[Tuple[float, float, int]] = []
+    for point in ordered:
+        while (
+            len(lower) >= 2
+            and cross(lower[-2], lower[-1], point) <= 1.0e-8
+        ):
+            lower.pop()
+        lower.append(point)
+    upper: List[Tuple[float, float, int]] = []
+    for point in reversed(ordered):
+        while (
+            len(upper) >= 2
+            and cross(upper[-2], upper[-1], point) <= 1.0e-8
+        ):
+            upper.pop()
+        upper.append(point)
+    return tuple(
+        point[2] for point in lower[:-1] + upper[:-1]
+    )
+
+
+def _terrain_xz_polygon_area(points: Sequence[Vec3]) -> float:
+    if len(points) < 3:
+        return 0.0
+    twice_area = 0.0
+    for offset, point in enumerate(points):
+        following = points[(offset + 1) % len(points)]
+        twice_area += (
+            float(point[0]) * float(following[2])
+            - float(following[0]) * float(point[2])
+        )
+    return abs(twice_area) * 0.5
+
+
+def _fit_terrain_height_plane(
+    points: Sequence[Vec3],
+) -> Optional[Tuple[float, float, float]]:
+    if len(points) < 3:
+        return None
+    count = float(len(points))
+    sum_x = sum(float(point[0]) for point in points)
+    sum_z = sum(float(point[2]) for point in points)
+    sum_y = sum(float(point[1]) for point in points)
+    matrix = (
+        (
+            sum(float(point[0]) ** 2 for point in points),
+            sum(float(point[0]) * float(point[2]) for point in points),
+            sum_x,
+        ),
+        (
+            sum(float(point[0]) * float(point[2]) for point in points),
+            sum(float(point[2]) ** 2 for point in points),
+            sum_z,
+        ),
+        (sum_x, sum_z, count),
+    )
+    values = (
+        sum(float(point[0]) * float(point[1]) for point in points),
+        sum(float(point[2]) * float(point[1]) for point in points),
+        sum_y,
+    )
+    return _solve_3x3(matrix, values)
+
+
+def _solve_3x3(
+    matrix: Sequence[Sequence[float]],
+    values: Sequence[float],
+) -> Optional[Tuple[float, float, float]]:
+    rows = [
+        [float(matrix[row][column]) for column in range(3)]
+        + [float(values[row])]
+        for row in range(3)
+    ]
+    for column in range(3):
+        pivot = max(
+            range(column, 3),
+            key=lambda row: abs(rows[row][column]),
+        )
+        if abs(rows[pivot][column]) <= 1.0e-9:
+            return None
+        rows[column], rows[pivot] = rows[pivot], rows[column]
+        divisor = rows[column][column]
+        rows[column] = [value / divisor for value in rows[column]]
+        for row in range(3):
+            if row == column:
+                continue
+            factor = rows[row][column]
+            rows[row] = [
+                rows[row][offset] - factor * rows[column][offset]
+                for offset in range(4)
+            ]
+    result = tuple(rows[row][3] for row in range(3))
+    if not all(math.isfinite(value) for value in result):
+        return None
+    return result  # type: ignore[return-value]
+
+
+def _convex_xz_polygon(points: Sequence[Vec3]) -> bool:
+    if len(points) < 3:
+        return False
+    sign = 0
+    for offset, current in enumerate(points):
+        following = points[(offset + 1) % len(points)]
+        after = points[(offset + 2) % len(points)]
+        cross = (
+            (following[0] - current[0]) * (after[2] - following[2])
+            - (following[2] - current[2]) * (after[0] - following[0])
+        )
+        if abs(cross) <= 1.0e-6:
+            continue
+        current_sign = 1 if cross > 0.0 else -1
+        if sign and current_sign != sign:
+            return False
+        sign = current_sign
+    return sign != 0
 
 
 def _legacy_brush_faces_enclose_points(brush: legacy_ed_writer.LegacyEdBrush) -> bool:
@@ -5639,6 +7187,10 @@ def _terrain_polygon_group_prism_brush(
     summary = SurrogateEdModelSummary(
         name=str(name),
         status="written",
+        source_model_name=str(
+            getattr(terrain_model, "name", "") or ""
+        ),
+        source_polygon_count=len(items),
         point_count=len(points),
         polygon_count=len(surfaces),
         texture_count=len(texture_names | {side_texture_name}),
@@ -5778,7 +7330,11 @@ def _model_to_legacy_brush(
 
 def _surface_for_polygon(model: object, polygon: object) -> Optional[object]:
     surfaces = list(getattr(model, "surfaces", []) or [])
-    index = int(getattr(polygon, "surface_index", -1) or -1)
+    raw_index = getattr(polygon, "surface_index", -1)
+    try:
+        index = int(raw_index)
+    except (TypeError, ValueError):
+        index = -1
     if 0 <= index < len(surfaces):
         return surfaces[index]
     return None

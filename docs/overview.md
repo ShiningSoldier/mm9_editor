@@ -1,10 +1,15 @@
 # MM9 Mod Editor Handoff
 
-This project is a three-dimensional visual editor for Might and Magic IX
+This project is a three-dimensional visual editor for Might and Magic IX (MM9)
 compiled world files (`.DAT`, version 66) directly from the game's REZ
 archives. It builds on the bundled `mm9_patcher` parser/serializer and lets
 modders open a level, place objects, edit properties, stage fresh NPC
 dialogue, and save patched replacement REZ archives.
+
+The editor is also capable to edit Legends of Might and Magic(LoMM) files,
+because these games share almost the same engine and `.DAT` version.
+Current limitatations regarding LoMM are described in
+[the related document](lomm_conversion.md).
 
 ## Current State
 
@@ -28,6 +33,25 @@ action that creates a separate install backup first. The LoMM-to-MM9
 conversion workflow is the explicit live-archive exception: it transactionally
 adds a converted level to `data/WORLDS.REZ` only after writing an automatic
 conversion backup.
+
+## Important files
+
+IMPORTANT: we shouldn't modify the game files directly when adding new functionality to the editor!
+
+- ```C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9``` - Might and Magic 9 installation folder
+- ```C:\games\Legends of Might and Magic``` - Legends of Might and Magic installation directory
+
+The following directories contain copied REZ archives from both games, and their extracted versions. The files in these directories
+can be used when adding new functionality to the editor.
+
+- ```C:\lithtech\mm9_editor\mm9_data``` - MM9 resources that can be used when adding new functionality to the editor
+- ```C:\lithtech\mm9_editor\lomm_data``` - LoMM resources that can be used when adding new functionality to the editor
+
+The following directory contains the DEDit utility used by the makers of the game to create levels:
+
+- ```C:\lithtech\Lith21tools```
+
+The utility should not be called from the command line, because it requires user interactions by modal windows.
 
 ## Runtime Layout
 
@@ -117,6 +141,13 @@ Import/refactor rules:
   render with 3-D models. Use `View -> Toggle world helpers` to show
   trigger/sound/marker/world handles, AI rails/barriers, doors, lights,
   weather helpers, and `BlueWater` markers while debugging level logic.
+
+## A note regarding levels geometry
+
+The levels for both games are stored as DAT files in the data/worlds directory.
+Each DAT file represents a separate level.
+MM9 also contains 8 ED files. They can be edited with the DEDit tool, and then converted to the game-ready DAT files.
+The ED files were shipped with the released game by mistake.
 
 ## Suggested Next Work
 

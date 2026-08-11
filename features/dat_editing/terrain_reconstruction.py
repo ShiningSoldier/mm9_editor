@@ -28,6 +28,40 @@ class TerrainSupportPlacement(NamedTuple):
     top_y: float
 
 
+class TerrainPlayableAreaAllocation(NamedTuple):
+    """One connected terrain neighborhood associated with gameplay anchors."""
+
+    area_index: int
+    seed_polygon_index: int
+    anchor_count: int
+    center: Vec3
+    bounds: Tuple[float, float, float, float]
+    candidate_polygon_count: int
+    walkable_polygon_count: int
+    walkable_xz_area: float
+    allocation_weight: float
+    allocated_polygon_budget: int
+
+
+class _TerrainPlayableAreaContext(NamedTuple):
+    allocation: TerrainPlayableAreaAllocation
+    candidate_items: Tuple[TerrainSupportItem, ...]
+
+
+class TerrainCollisionOracleTriangle(NamedTuple):
+    bounds: Tuple[float, float, float, float]
+    points: Tuple[Vec3, Vec3, Vec3]
+
+
+class TerrainCollisionOracle(NamedTuple):
+    cell_size: float
+    cells: Mapping[
+        Tuple[int, int],
+        Tuple[TerrainCollisionOracleTriangle, ...],
+    ]
+    triangle_count: int
+
+
 class TerrainCoverageItem(NamedTuple):
     polygon_index: int
     bounds_min: Vec3
@@ -252,6 +286,131 @@ def terrain_support_items(terrain: object) -> Tuple[TerrainSupportItem, ...]:
             (poly_min_x, poly_max_x, poly_min_z, poly_max_z),
         ))
     return tuple(result)
+
+
+def build_terrain_collision_oracle(
+    physics_model: Optional[object],
+    *,
+    cell_size: float = 512.0,
+) -> TerrainCollisionOracle:
+    """Index PhysicsBSP floor-like triangles for read-only terrain checks."""
+    safe_cell_size = max(64.0, float(cell_size))
+    if physics_model is None:
+        return TerrainCollisionOracle(safe_cell_size, {}, 0)
+    model_points = tuple(getattr(physics_model, "points", ()) or ())
+    cells: Dict[
+        Tuple[int, int],
+        List[TerrainCollisionOracleTriangle],
+    ] = defaultdict(list)
+    triangle_count = 0
+    for polygon in tuple(getattr(physics_model, "polygons", ()) or ()):
+        raw_indices = tuple(
+            int(index)
+            for index in tuple(
+                getattr(polygon, "vertex_indices", ()) or ()
+            )
+        )
+        if len(raw_indices) < 3:
+            continue
+        try:
+            indices = canonical_terrain_polygon_indices(raw_indices)
+            indices = simplify_collinear_terrain_polygon_indices(
+                indices,
+                model_points,
+            )
+            points = tuple(_finite_vec3(model_points[index]) for index in indices)
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(points) < 3:
+            continue
+        normal, _dist = polygon_plane(
+            points,
+            tuple(range(len(points))),
+        )
+        if abs(float(normal[1])) < 0.35:
+            continue
+        for offset in range(1, len(points) - 1):
+            triangle_points = (
+                points[0],
+                points[offset],
+                points[offset + 1],
+            )
+            bounds = (
+                min(point[0] for point in triangle_points),
+                max(point[0] for point in triangle_points),
+                min(point[2] for point in triangle_points),
+                max(point[2] for point in triangle_points),
+            )
+            triangle = TerrainCollisionOracleTriangle(
+                bounds,
+                triangle_points,
+            )
+            min_cell_x = math.floor(bounds[0] / safe_cell_size)
+            max_cell_x = math.floor(bounds[1] / safe_cell_size)
+            min_cell_z = math.floor(bounds[2] / safe_cell_size)
+            max_cell_z = math.floor(bounds[3] / safe_cell_size)
+            for cell_x in range(min_cell_x, max_cell_x + 1):
+                for cell_z in range(min_cell_z, max_cell_z + 1):
+                    cells[(cell_x, cell_z)].append(triangle)
+            triangle_count += 1
+    return TerrainCollisionOracle(
+        safe_cell_size,
+        {
+            key: tuple(value)
+            for key, value in cells.items()
+        },
+        triangle_count,
+    )
+
+
+def terrain_collision_oracle_floor_y(
+    oracle: TerrainCollisionOracle,
+    x: float,
+    z: float,
+    *,
+    source_y: float,
+    max_vertical_distance: float = 128.0,
+) -> Optional[float]:
+    """Return the PhysicsBSP floor nearest a source terrain height."""
+    if oracle.triangle_count <= 0:
+        return None
+    cell = (
+        math.floor(float(x) / oracle.cell_size),
+        math.floor(float(z) / oracle.cell_size),
+    )
+    hits: List[float] = []
+    for triangle in oracle.cells.get(cell, ()):
+        if not _xz_bounds_overlap(
+            triangle.bounds,
+            float(x),
+            float(x),
+            float(z),
+            float(z),
+        ):
+            continue
+        y = _point_in_triangle_xz_y(
+            float(x),
+            float(z),
+            triangle.points[0],
+            triangle.points[1],
+            triangle.points[2],
+        )
+        if y is None:
+            continue
+        if abs(float(y) - float(source_y)) <= max(
+            0.0,
+            float(max_vertical_distance),
+        ):
+            hits.append(float(y))
+    if not hits:
+        return None
+    return min(
+        hits,
+        key=lambda value: (
+            abs(value - float(source_y)),
+            -value,
+        ),
+    )
 
 
 def terrain_coverage_items(
@@ -2002,6 +2161,31 @@ def select_terrain_support_items(
             radius=radius,
             max_items=max_items,
         )
+    if mode == "playable_anchor_budget":
+        return _playable_anchor_terrain_support_items(
+            items,
+            anchor_points,
+            margin=safe_margin,
+            radius=radius,
+            max_items=max_items,
+        )
+    if mode == "playable_area_budget":
+        return _playable_area_terrain_support_items(
+            items,
+            anchor_points,
+            margin=safe_margin,
+            radius=radius,
+            max_items=max_items,
+        )
+    if mode == "adaptive_playable_area_budget":
+        return _playable_area_terrain_support_items(
+            items,
+            anchor_points,
+            margin=safe_margin,
+            radius=radius,
+            max_items=max_items,
+            include_remote=True,
+        )
     if mode not in {"connected_radius", "connected_budget"}:
         raise ValueError(f"unsupported terrain support selection mode: {selection_mode}")
 
@@ -2059,7 +2243,600 @@ def normalize_terrain_support_selection_mode(value: object) -> str:
         "multi_component_budget",
     }:
         return "multi_anchor_budget"
+    if mode in {
+        "playable_anchor",
+        "playable_anchor_budget",
+        "anchor_connected",
+        "anchor_connected_budget",
+        "anchor_neighborhood",
+        "anchor_neighborhood_budget",
+        "contiguous_anchor_budget",
+    }:
+        return "playable_anchor_budget"
+    if mode in {
+        "playable_area",
+        "playable_area_budget",
+        "gameplay_area",
+        "gameplay_area_budget",
+        "weighted_playable_area",
+        "weighted_playable_area_budget",
+        "region_allocation",
+        "playable_region_allocation",
+    }:
+        return "playable_area_budget"
+    if mode in {
+        "adaptive_playable_area",
+        "adaptive_playable_area_budget",
+        "structural_playable_area",
+        "structural_playable_area_budget",
+        "playable_area_remote_fill",
+        "adaptive_region_allocation",
+    }:
+        return "adaptive_playable_area_budget"
     return mode
+
+
+def playable_terrain_area_allocations(
+    items: Sequence[TerrainSupportItem],
+    anchor_points: Sequence[Vec3],
+    *,
+    margin: float,
+    radius: float,
+    total_polygon_budget: int,
+) -> Tuple[TerrainPlayableAreaAllocation, ...]:
+    """Measure and budget connected, anchor-associated playable terrain areas."""
+    return tuple(
+        context.allocation
+        for context in _playable_terrain_area_contexts(
+            items,
+            anchor_points,
+            margin=margin,
+            radius=radius,
+            total_polygon_budget=total_polygon_budget,
+        )
+    )
+
+
+def _playable_area_terrain_support_items(
+    items: Sequence[TerrainSupportItem],
+    anchor_points: Sequence[Vec3],
+    *,
+    margin: float,
+    radius: float,
+    max_items: int,
+    include_remote: bool = False,
+) -> Tuple[TerrainSupportItem, ...]:
+    """Spend a source-polygon budget in weighted playable-area neighborhoods."""
+    limit = max(0, int(max_items))
+    if limit <= 0:
+        return ()
+    contexts = _playable_terrain_area_contexts(
+        items,
+        anchor_points,
+        margin=margin,
+        radius=radius,
+        total_polygon_budget=limit,
+    )
+    if not contexts:
+        return ()
+
+    ordered_by_area: List[Tuple[TerrainSupportItem, ...]] = []
+    for context in contexts:
+        allocation = context.allocation
+        ordered = tuple(_connected_terrain_support_items_within_radius(
+            items,
+            seed_polygon_index=allocation.seed_polygon_index,
+            center_x=float(allocation.center[0]),
+            center_z=float(allocation.center[2]),
+            radius=radius,
+            max_items=max(1, allocation.candidate_polygon_count),
+        ))
+        ordered_by_area.append(ordered)
+
+    selected: List[TerrainSupportItem] = []
+    selected_indices: set[int] = set()
+    cursors = [0 for _context in contexts]
+    for area_index, context in enumerate(contexts):
+        quota = int(context.allocation.allocated_polygon_budget)
+        ordered = ordered_by_area[area_index]
+        added = 0
+        while cursors[area_index] < len(ordered) and added < quota:
+            item = ordered[cursors[area_index]]
+            cursors[area_index] += 1
+            if item.polygon_index in selected_indices:
+                continue
+            selected_indices.add(item.polygon_index)
+            selected.append(item)
+            added += 1
+            if len(selected) >= limit:
+                return tuple(selected)
+
+    # Overlapping neighborhoods can leave part of the shared budget unused.
+    # Continue each area's connected order round-robin instead of jumping to
+    # unrelated remote polygons.
+    made_progress = True
+    while len(selected) < limit and made_progress:
+        made_progress = False
+        for area_index, ordered in enumerate(ordered_by_area):
+            while cursors[area_index] < len(ordered):
+                item = ordered[cursors[area_index]]
+                cursors[area_index] += 1
+                if item.polygon_index in selected_indices:
+                    continue
+                selected_indices.add(item.polygon_index)
+                selected.append(item)
+                made_progress = True
+                break
+            if len(selected) >= limit:
+                break
+    if include_remote and len(selected) < limit:
+        remote_ordered_by_area = tuple(
+            tuple(_connected_terrain_support_items_within_radius(
+                items,
+                seed_polygon_index=context.allocation.seed_polygon_index,
+                center_x=float(context.allocation.center[0]),
+                center_z=float(context.allocation.center[2]),
+                radius=max(float(radius), 1.0) * 8.0,
+                max_items=min(len(items), limit),
+            ))
+            for context in contexts
+        )
+        remote_cursors = [0 for _context in contexts]
+        made_progress = True
+        while len(selected) < limit and made_progress:
+            made_progress = False
+            for area_index, ordered in enumerate(remote_ordered_by_area):
+                while remote_cursors[area_index] < len(ordered):
+                    item = ordered[remote_cursors[area_index]]
+                    remote_cursors[area_index] += 1
+                    if item.polygon_index in selected_indices:
+                        continue
+                    selected_indices.add(item.polygon_index)
+                    selected.append(item)
+                    made_progress = True
+                    break
+                if len(selected) >= limit:
+                    break
+    return tuple(selected)
+
+
+def _playable_terrain_area_contexts(
+    items: Sequence[TerrainSupportItem],
+    anchor_points: Sequence[Vec3],
+    *,
+    margin: float,
+    radius: float,
+    total_polygon_budget: int,
+) -> Tuple[_TerrainPlayableAreaContext, ...]:
+    safe_radius = max(0.0, float(radius))
+    if safe_radius <= 0.0:
+        raise ValueError("playable-area terrain support requires a positive radius")
+    if not items or not anchor_points:
+        return ()
+
+    finite_anchors = tuple(_finite_vec3(point) for point in anchor_points)
+    radius_sq = safe_radius * safe_radius
+    safe_margin = max(0.0, float(margin))
+    component_ids = _terrain_support_component_ids(items)
+    anchor_seeds: List[Tuple[int, Vec3, int, float]] = []
+    for anchor_order, anchor in enumerate(finite_anchors):
+        x, z = float(anchor[0]), float(anchor[2])
+        candidates = tuple(
+            item
+            for item in items
+            if (
+                _xz_bounds_overlap(
+                    item.bounds,
+                    x - safe_margin,
+                    x + safe_margin,
+                    z - safe_margin,
+                    z + safe_margin,
+                )
+                if safe_margin > 0.0
+                else _xz_bounds_distance_sq(item.bounds, x, z) <= radius_sq
+            )
+        )
+        if not candidates:
+            candidates = tuple(items)
+        seed = min(
+            candidates,
+            key=lambda item: (
+                _xz_bounds_distance_sq(item.bounds, x, z),
+                -terrain_support_start_score(item),
+                item.polygon_index,
+            ),
+        )
+        distance_sq = _xz_bounds_distance_sq(seed.bounds, x, z)
+        anchor_seeds.append((
+            anchor_order,
+            anchor,
+            int(seed.polygon_index),
+            float(distance_sq),
+        ))
+
+    relevant = [
+        record for record in anchor_seeds if record[3] <= radius_sq
+    ]
+    if not relevant:
+        relevant = [min(
+            anchor_seeds,
+            key=lambda record: (
+                record[3],
+                record[0],
+                record[2],
+            ),
+        )]
+
+    cluster_distance = max(256.0, min(2048.0, safe_radius * 0.5))
+    cluster_distance_sq = cluster_distance * cluster_distance
+    unused = set(range(len(relevant)))
+    clusters: List[Tuple[Tuple[int, Vec3, int, float], ...]] = []
+    while unused:
+        start = min(unused)
+        unused.remove(start)
+        cluster_indices = {start}
+        queue = deque([start])
+        while queue:
+            current = queue.popleft()
+            current_record = relevant[current]
+            current_component = component_ids.get(current_record[2], -1)
+            for other in tuple(sorted(unused)):
+                other_record = relevant[other]
+                if component_ids.get(other_record[2], -2) != current_component:
+                    continue
+                dx = current_record[1][0] - other_record[1][0]
+                dz = current_record[1][2] - other_record[1][2]
+                if dx * dx + dz * dz > cluster_distance_sq:
+                    continue
+                unused.remove(other)
+                cluster_indices.add(other)
+                queue.append(other)
+        clusters.append(tuple(
+            relevant[index] for index in sorted(cluster_indices)
+        ))
+
+    contexts: List[_TerrainPlayableAreaContext] = []
+    for area_index, cluster in enumerate(clusters):
+        center = (
+            sum(record[1][0] for record in cluster) / len(cluster),
+            sum(record[1][1] for record in cluster) / len(cluster),
+            sum(record[1][2] for record in cluster) / len(cluster),
+        )
+        seed_record = min(
+            cluster,
+            key=lambda record: (
+                (record[1][0] - center[0]) ** 2
+                + (record[1][2] - center[2]) ** 2,
+                record[0],
+                record[2],
+            ),
+        )
+        seed_item = next(
+            item
+            for item in items
+            if int(item.polygon_index) == int(seed_record[2])
+        )
+        growth_center = (
+            center
+            if _xz_bounds_distance_sq(
+                seed_item.bounds,
+                float(center[0]),
+                float(center[2]),
+            )
+            <= radius_sq
+            else seed_item.center
+        )
+        candidates = tuple(_connected_terrain_support_items_within_radius(
+            items,
+            seed_polygon_index=seed_record[2],
+            center_x=float(growth_center[0]),
+            center_z=float(growth_center[2]),
+            radius=safe_radius,
+            max_items=0,
+        ))
+        if not candidates:
+            continue
+        min_x = min(item.bounds[0] for item in candidates)
+        max_x = max(item.bounds[1] for item in candidates)
+        min_z = min(item.bounds[2] for item in candidates)
+        max_z = max(item.bounds[3] for item in candidates)
+        walkable_items = tuple(
+            item for item in candidates if terrain_support_item_is_walkable(item)
+        )
+        walkable_xz_area = sum(
+            terrain_support_item_walkable_xz_area(item)
+            for item in walkable_items
+        )
+        anchor_multiplier = 1.0 + 0.15 * float(len(cluster) - 1)
+        weight = max(
+            1.0,
+            walkable_xz_area
+            if walkable_xz_area > 0.0
+            else float(len(candidates)),
+        ) * anchor_multiplier
+        contexts.append(_TerrainPlayableAreaContext(
+            TerrainPlayableAreaAllocation(
+                area_index=len(contexts),
+                seed_polygon_index=int(seed_record[2]),
+                anchor_count=len(cluster),
+                center=growth_center,
+                bounds=(min_x, max_x, min_z, max_z),
+                candidate_polygon_count=len(candidates),
+                walkable_polygon_count=len(walkable_items),
+                walkable_xz_area=float(walkable_xz_area),
+                allocation_weight=float(weight),
+                allocated_polygon_budget=0,
+            ),
+            candidates,
+        ))
+
+    if not contexts:
+        return ()
+    allocations = _bounded_playable_area_allocations(
+        tuple(
+            context.allocation.candidate_polygon_count
+            for context in contexts
+        ),
+        tuple(context.allocation.allocation_weight for context in contexts),
+        total_budget=max(0, int(total_polygon_budget)),
+    )
+    return tuple(
+        _TerrainPlayableAreaContext(
+            context.allocation._replace(
+                allocated_polygon_budget=int(allocations[index]),
+            ),
+            context.candidate_items,
+        )
+        for index, context in enumerate(contexts)
+    )
+
+
+def _bounded_playable_area_allocations(
+    capacities: Sequence[int],
+    weights: Sequence[float],
+    *,
+    total_budget: int,
+) -> Tuple[int, ...]:
+    budget = min(
+        max(0, int(total_budget)),
+        sum(max(0, int(capacity)) for capacity in capacities),
+    )
+    allocations = [0 for _capacity in capacities]
+    active = [
+        index for index, capacity in enumerate(capacities)
+        if int(capacity) > 0
+    ]
+    if not active or budget <= 0:
+        return tuple(allocations)
+    if budget < len(active):
+        ranked = sorted(
+            active,
+            key=lambda index: (
+                -max(1.0, float(weights[index])),
+                index,
+            ),
+        )
+        for index in ranked[:budget]:
+            allocations[index] = 1
+        return tuple(allocations)
+
+    reserve = min(
+        16,
+        max(1, budget // max(1, len(active) * 8)),
+    )
+    for index in active:
+        grant = min(int(capacities[index]), reserve, budget)
+        allocations[index] += grant
+        budget -= grant
+        if budget <= 0:
+            return tuple(allocations)
+
+    while budget > 0:
+        available = [
+            index for index in active
+            if allocations[index] < int(capacities[index])
+        ]
+        if not available:
+            break
+        weight_total = sum(max(1.0, float(weights[index])) for index in available)
+        quotas = {
+            index: budget * max(1.0, float(weights[index])) / weight_total
+            for index in available
+        }
+        granted = 0
+        for index in available:
+            room = int(capacities[index]) - allocations[index]
+            grant = min(room, int(math.floor(quotas[index])))
+            allocations[index] += grant
+            granted += grant
+        budget -= granted
+        if budget <= 0:
+            break
+        ranked = sorted(
+            (
+                index for index in available
+                if allocations[index] < int(capacities[index])
+            ),
+            key=lambda index: (
+                -(quotas[index] - math.floor(quotas[index])),
+                index,
+            ),
+        )
+        if not ranked:
+            break
+        for index in ranked:
+            if budget <= 0:
+                break
+            allocations[index] += 1
+            budget -= 1
+    return tuple(allocations)
+
+
+def _terrain_support_component_ids(
+    items: Sequence[TerrainSupportItem],
+) -> Dict[int, int]:
+    by_vertex: Dict[int, List[int]] = defaultdict(list)
+    for local_index, item in enumerate(items):
+        for vertex_index in item.indices:
+            by_vertex[int(vertex_index)].append(local_index)
+    component_ids: Dict[int, int] = {}
+    remaining = set(range(len(items)))
+    component_index = 0
+    while remaining:
+        start = min(remaining)
+        remaining.remove(start)
+        queue = deque([start])
+        while queue:
+            current = queue.popleft()
+            item = items[current]
+            component_ids[int(item.polygon_index)] = component_index
+            for vertex_index in item.indices:
+                for neighbor in by_vertex.get(int(vertex_index), ()):
+                    if neighbor not in remaining:
+                        continue
+                    remaining.remove(neighbor)
+                    queue.append(neighbor)
+        component_index += 1
+    return component_ids
+
+
+def terrain_support_item_walkable_xz_area(item: TerrainSupportItem) -> float:
+    """Return upward-projected XZ surface area for one support polygon."""
+    normal, _dist = polygon_plane(
+        item.points,
+        tuple(range(len(item.points))),
+    )
+    return polygon_area(item.points) * max(0.0, float(normal[1]))
+
+
+def terrain_support_item_is_walkable(item: TerrainSupportItem) -> bool:
+    """Return whether a support polygon is a plausible traversable surface."""
+    normal, _dist = polygon_plane(
+        item.points,
+        tuple(range(len(item.points))),
+    )
+    return (
+        float(normal[1]) >= 0.45
+        and terrain_support_item_walkable_xz_area(item) > 0.25
+    )
+
+
+def _playable_anchor_terrain_support_items(
+    items: Sequence[TerrainSupportItem],
+    anchor_points: Sequence[Vec3],
+    *,
+    margin: float,
+    radius: float,
+    max_items: int,
+) -> Tuple[TerrainSupportItem, ...]:
+    """Grow contiguous neighborhoods from DAT gameplay anchors only."""
+    safe_radius = max(0.0, float(radius))
+    limit = max(0, int(max_items))
+    if safe_radius <= 0.0:
+        raise ValueError("playable-anchor terrain support requires a positive radius")
+    if limit <= 0 or not items or not anchor_points:
+        return ()
+
+    safe_margin = max(0.0, float(margin))
+    radius_sq = safe_radius * safe_radius
+    seeds: List[Tuple[int, Vec3]] = []
+    seen_seed_polygons: set[int] = set()
+    item_by_polygon = {
+        int(item.polygon_index): item for item in items
+    }
+    for raw_anchor in anchor_points:
+        anchor = _finite_vec3(raw_anchor)
+        x, z = anchor[0], anchor[2]
+        local_candidates = [
+            item
+            for item in items
+            if _xz_bounds_overlap(
+                item.bounds,
+                x - safe_margin,
+                x + safe_margin,
+                z - safe_margin,
+                z + safe_margin,
+            )
+        ]
+        if not local_candidates:
+            local_candidates = [
+                item
+                for item in items
+                if _xz_bounds_distance_sq(item.bounds, x, z) <= radius_sq
+            ]
+        if not local_candidates:
+            local_candidates = list(items)
+        seed_item = min(
+            local_candidates,
+            key=lambda item: (
+                _xz_bounds_distance_sq(item.bounds, x, z),
+                -terrain_support_start_score(item),
+                item.polygon_index,
+            ),
+        )
+        polygon_index = int(seed_item.polygon_index)
+        if polygon_index in seen_seed_polygons:
+            continue
+        seen_seed_polygons.add(polygon_index)
+        distance_sq = _xz_bounds_distance_sq(seed_item.bounds, x, z)
+        growth_center = (
+            anchor
+            if distance_sq <= radius_sq
+            else seed_item.center
+        )
+        seeds.append((polygon_index, growth_center))
+
+    if not seeds:
+        return ()
+    if len(seeds) > limit:
+        seeds = seeds[:limit]
+
+    base_quota, remainder = divmod(limit, len(seeds))
+    selected: List[TerrainSupportItem] = []
+    selected_polygon_indices: set[int] = set()
+    for seed_order, (seed_index, center) in enumerate(seeds):
+        quota = base_quota + (1 if seed_order < remainder else 0)
+        neighborhood = _connected_terrain_support_items_within_radius(
+            items,
+            seed_polygon_index=seed_index,
+            center_x=float(center[0]),
+            center_z=float(center[2]),
+            radius=safe_radius,
+            max_items=quota,
+        )
+        for item in neighborhood:
+            if item.polygon_index in selected_polygon_indices:
+                continue
+            selected_polygon_indices.add(item.polygon_index)
+            selected.append(item)
+            if len(selected) >= limit:
+                return tuple(selected)
+
+    if len(selected) < limit:
+        seed_centers = tuple(
+            item_by_polygon[index].center for index, _center in seeds
+        )
+        remaining = [
+            item
+            for item in items
+            if item.polygon_index not in selected_polygon_indices
+        ]
+        remaining.sort(
+            key=lambda item: (
+                min(
+                    (item.center[0] - center[0]) ** 2
+                    + (item.center[2] - center[2]) ** 2
+                    for center in seed_centers
+                ),
+                -terrain_support_start_score(item),
+                item.polygon_index,
+            )
+        )
+        for item in remaining:
+            selected.append(item)
+            if len(selected) >= limit:
+                break
+    return tuple(selected)
 
 
 def _multi_anchor_terrain_support_items(
@@ -2212,6 +2989,24 @@ def normalize_terrain_support_brush_mode(value: object) -> str:
         return "single_polygon"
     if mode in {"paired", "paired_triangles", "triangle_pairs", "cell", "cell_prisms", "terrain_cells"}:
         return "paired_triangles"
+    if mode in {
+        "adjacent",
+        "adjacent_convex",
+        "adjacent_regions",
+        "convex_regions",
+        "connected_regions",
+        "continuous_regions",
+    }:
+        return "adjacent_convex"
+    if mode in {
+        "adaptive",
+        "adaptive_structural",
+        "adaptive_patches",
+        "structural_patches",
+        "compressed_structural",
+        "terrain_compression",
+    }:
+        return "adaptive_structural"
     if mode in {
         "triangulated",
         "triangulated_ngons",
@@ -2675,6 +3470,33 @@ def _xz_bounds_distance_sq(bounds: Tuple[float, float, float, float], x: float, 
     elif z > max_z:
         dz = z - max_z
     return dx * dx + dz * dz
+
+
+def _point_in_triangle_xz_y(
+    x: float,
+    z: float,
+    first: Vec3,
+    second: Vec3,
+    third: Vec3,
+) -> Optional[float]:
+    ax, az = float(first[0]), float(first[2])
+    bx, bz = float(second[0]), float(second[2])
+    cx, cz = float(third[0]), float(third[2])
+    v0 = (cx - ax, cz - az)
+    v1 = (bx - ax, bz - az)
+    v2 = (float(x) - ax, float(z) - az)
+    denominator = v0[0] * v1[1] - v1[0] * v0[1]
+    if abs(denominator) <= 1.0e-7:
+        return None
+    u = (v2[0] * v1[1] - v1[0] * v2[1]) / denominator
+    v = (v0[0] * v2[1] - v2[0] * v0[1]) / denominator
+    if u < -1.0e-5 or v < -1.0e-5 or u + v > 1.00001:
+        return None
+    return (
+        float(first[1])
+        + u * (float(third[1]) - float(first[1]))
+        + v * (float(second[1]) - float(first[1]))
+    )
 
 
 def _point_on_xz_segment(

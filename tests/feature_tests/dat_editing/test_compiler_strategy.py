@@ -2067,7 +2067,7 @@ class CompilerStrategyTests(unittest.TestCase):
             self.assertTrue(os.path.exists(report.generated_ed_path))
             self.assertTrue(any("Door behavior validation context" in item for item in report.notes))
             self.assertFalse(any("Door behavior validation is sparse" in item for item in report.cautions))
-            self.assertTrue(any("Activate each copied Door/RotatingDoor" in item for item in report.manual_steps))
+            self.assertTrue(any("Activate each generated Door/RotatingDoor" in item for item in report.manual_steps))
             text = compiler_strategy.format_full_world_skeleton_acceptance_report(report)
             self.assertIn("terrain support patch: included", text)
             self.assertIn("door behavior context: source_terrain_support_patch", text)
@@ -3162,6 +3162,213 @@ class CompilerStrategyTests(unittest.TestCase):
         )
         self.assertGreater(report.terrain_support_source_coverage.missing_sample_count, 0)
         self.assertTrue(any("Terrain support patches" in item for item in report.cautions))
+
+    def test_isleofashes_multiterrain_budget_plan_is_deterministic(self):
+        isle = os.path.join(ROOT, "mm9_data", "WORLDS", "ISLEOFASHES.DAT")
+        if not os.path.exists(isle):
+            self.skipTest(f"missing test level: {isle}")
+
+        with open(isle, "rb") as handle:
+            parsed = bsp.parse(handle.read())
+        plan = compiler_strategy.build_terrain_support_model_budget_plan(
+            parsed,
+            anchor_points=(
+                (-2308.0, 648.0, 1611.0),
+                (-7415.5498046875, 192.0, 192.0),
+                (-19520.0, -64.0, 8912.0),
+                (-2296.0, 380.3070068359375, 1440.0),
+                (-1488.0, 136.0, 1956.0),
+            ),
+            total_polygon_budget=1434,
+            minimum_per_model=32,
+            anchor_radius=4096.0,
+        )
+
+        self.assertEqual(
+            tuple(item.model_name for item in plan),
+            ("Terrain0", "Terrain1", "Terrain3", "Terrain4", "Terrain5", "Terrain6"),
+        )
+        self.assertEqual(
+            tuple(item.allocated_polygon_budget for item in plan),
+            (36, 125, 206, 150, 843, 74),
+        )
+        self.assertEqual(
+            tuple(item.playable_area_count for item in plan),
+            (2, 1, 1, 1, 2, 1),
+        )
+        self.assertEqual(
+            tuple(item.playable_polygon_count for item in plan),
+            (36, 180, 386, 404, 1357, 102),
+        )
+        self.assertEqual(sum(item.allocated_polygon_budget for item in plan), 1434)
+        self.assertTrue(all(item.allocated_polygon_budget >= 32 for item in plan))
+
+    @slow_dat_to_ed_test
+    def test_isleofashes_oracle_free_adaptive_structural_terrain_is_deterministic(self):
+        isle = os.path.join(ROOT, "mm9_data", "WORLDS", "ISLEOFASHES.DAT")
+        if not os.path.exists(isle):
+            self.skipTest(f"missing test level: {isle}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = compiler_strategy.build_oracle_free_dat_to_ed_baseline_report(
+                source_dat_path=isle,
+                work_dir=os.path.join(tmp, "run"),
+            )
+            manifest = (
+                compiler_strategy.build_oracle_free_dat_to_ed_baseline_manifest(
+                    report
+                )
+            )
+            with open(report.generated_ed_path, "rb") as handle:
+                generated_ed = handle.read()
+            layout = legacy_ed.scan_legacy_ed_node_layout(
+                generated_ed,
+                source_path=report.generated_ed_path,
+            )
+            wrapper = legacy_ed._try_decompress_full_level_wrapper(generated_ed)
+            self.assertIsNotNone(wrapper)
+            assert wrapper is not None
+            hierarchy, _end = surrogate_ed._read_source_ed_node_snippet(
+                wrapper["decompressed"],
+                int(layout.node_start),
+                include_entry=False,
+            )
+
+            def _walk_nodes(node):
+                yield node
+                for child in node.children:
+                    yield from _walk_nodes(child)
+
+            movable_child_counts = {
+                str(node.properties.get("Name", "")): len(node.children)
+                for node in _walk_nodes(hierarchy)
+                if node.class_name in {"Door", "RotatingDoor"}
+            }
+            generated_start_point = next(
+                tuple(node.properties.get("Pos", ()))
+                for node in _walk_nodes(hierarchy)
+                if node.class_name == "StartPoint"
+            )
+            movable_names = set(movable_child_counts)
+            static_group_movable_count = sum(
+                any(
+                    name in str(child.properties.get("Name", ""))
+                    for name in movable_names
+                )
+                for child in hierarchy.children[0].children
+            )
+
+        self.assertEqual(
+            report.status,
+            "oracle_free_baseline_ready_for_manual_test",
+        )
+        self.assertTrue(report.oracle_free)
+        self.assertEqual(report.source_ed_dependencies, ())
+        self.assertEqual(
+            report.source_sha256,
+            "29c5202c43e4d1d29bb992535491e92751c34f67fabd481cecd5c7c92e7ddbbe",
+        )
+        self.assertEqual(report.total_world_model_count, 414)
+        self.assertEqual(report.total_world_polygon_count, 17332)
+        self.assertEqual(report.selected_model_count, 66)
+        self.assertEqual(report.selected_model_polygon_count, 1780)
+        self.assertEqual(report.terrain_model_count, 6)
+        self.assertEqual(report.reconstructed_terrain_model_count, 6)
+        self.assertEqual(report.terrain_source_polygon_count, 9415)
+        self.assertEqual(report.terrain_sample_count, 9414)
+        self.assertEqual(report.terrain_covered_sample_count, 2028)
+        self.assertEqual(report.terrain_missing_sample_count, 7386)
+        self.assertEqual(report.terrain_support_budget, 1434)
+        self.assertEqual(len(report.terrain_support_anchor_points), 5)
+        self.assertEqual(
+            tuple(
+                item.allocated_polygon_budget
+                for item in report.terrain_support_budget_plan
+            ),
+            (36, 125, 206, 150, 843, 74),
+        )
+        self.assertEqual(
+            tuple(
+                item.allocated_source_polygon_budget
+                for item in report.terrain_playable_area_budget_plan
+            ),
+            (18, 18, 180, 386, 300, 126, 1231, 102),
+        )
+        self.assertEqual(report.physics_bsp_polygon_count, 2658)
+        self.assertEqual(report.dat_object_count, 780)
+        self.assertEqual(report.generated_brush_count, 1494)
+        self.assertEqual(report.generated_polygon_count, 9659)
+        self.assertEqual(report.processor_brush_headroom, 6)
+        self.assertEqual(report.processor_polygon_headroom, 2341)
+        self.assertEqual(
+            tuple(item.model_name for item in report.terrain_models),
+            ("Terrain0", "Terrain1", "Terrain3", "Terrain4", "Terrain5", "Terrain6"),
+        )
+        self.assertEqual(
+            report.unmatched_terrain_object_names,
+            ("Earthquake", "Earthquake0"),
+        )
+        self.assertTrue(
+            all(
+                item.generated_support_brush_count > 0
+                for item in report.terrain_models
+            )
+        )
+        self.assertEqual(
+            tuple(
+                item.generated_support_source_polygon_count
+                for item in report.terrain_models
+            ),
+            (36, 248, 331, 168, 1013, 109),
+        )
+        self.assertGreater(
+            sum(
+                item.generated_support_source_polygon_count
+                for item in report.terrain_models
+            ),
+            sum(
+                item.generated_support_brush_count
+                for item in report.terrain_models
+            ),
+        )
+        generated_classes = dict(report.generated_object_class_counts)
+        self.assertEqual(generated_classes["Door"], 1)
+        self.assertEqual(generated_classes["RotatingDoor"], 3)
+        self.assertEqual(
+            movable_child_counts,
+            {
+                "Terrain3": 206,
+                "BunkerDoor1": 1,
+                "BunkerDoor2": 1,
+                "RotatingDoor8": 1,
+            },
+        )
+        self.assertEqual(static_group_movable_count, 0)
+        self.assertEqual(
+            generated_start_point,
+            (-7415.5498046875, 192.0, 192.0),
+        )
+        self.assertEqual(
+            sum(
+                item.generated_support_brush_count
+                for item in report.terrain_models
+            ),
+            report.generated_brush_count - report.selected_model_count,
+        )
+        self.assertEqual(manifest["kind"], "mm9_dat_to_ed_oracle_free_baseline")
+        self.assertTrue(manifest["oracle_proof"]["oracle_free"])
+        self.assertEqual(
+            manifest["oracle_proof"]["source_ed_dependency_count"],
+            0,
+        )
+        self.assertEqual(
+            len(manifest["terrain"]["playable_area_budget_plan"]),
+            8,
+        )
+        self.assertIn(
+            "source_ED_dependencies=0",
+            compiler_strategy.format_oracle_free_dat_to_ed_baseline_report(report),
+        )
 
     def test_gameplay_trigger_reconstruction_report_identifies_anskramkeep_sources(self):
         anskramkeep = os.path.join(ROOT, "mm9_data", "WORLDS", "ANSKRAMKEEP.DAT")

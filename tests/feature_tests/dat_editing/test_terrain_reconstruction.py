@@ -57,6 +57,24 @@ class TerrainReconstructionTests(unittest.TestCase):
             "bounds",
         )
         self.assertEqual(
+            terrain_reconstruction.normalize_terrain_support_selection_mode(
+                "anchor-neighborhood-budget"
+            ),
+            "playable_anchor_budget",
+        )
+        self.assertEqual(
+            terrain_reconstruction.normalize_terrain_support_selection_mode(
+                "playable-region-allocation"
+            ),
+            "playable_area_budget",
+        )
+        self.assertEqual(
+            terrain_reconstruction.normalize_terrain_support_selection_mode(
+                "adaptive-region-allocation"
+            ),
+            "adaptive_playable_area_budget",
+        )
+        self.assertEqual(
             terrain_reconstruction.normalize_terrain_support_brush_mode("triangle-ngons"),
             "triangulated_ngons",
         )
@@ -68,6 +86,60 @@ class TerrainReconstructionTests(unittest.TestCase):
             terrain_reconstruction.normalize_terrain_support_brush_mode("single"),
             "single_polygon",
         )
+        self.assertEqual(
+            terrain_reconstruction.normalize_terrain_support_brush_mode(
+                "continuous-regions"
+            ),
+            "adjacent_convex",
+        )
+        self.assertEqual(
+            terrain_reconstruction.normalize_terrain_support_brush_mode(
+                "terrain-compression"
+            ),
+            "adaptive_structural",
+        )
+
+    def test_physics_bsp_terrain_oracle_indexes_height_without_emitting_geometry(self):
+        physics_model = types.SimpleNamespace(
+            points=(
+                (0.0, 12.0, 0.0),
+                (0.0, 12.0, 10.0),
+                (10.0, 12.0, 10.0),
+                (10.0, 12.0, 0.0),
+            ),
+            polygons=(
+                types.SimpleNamespace(
+                    vertex_indices=(0, 1, 2, 3),
+                ),
+            ),
+        )
+
+        oracle = terrain_reconstruction.build_terrain_collision_oracle(
+            physics_model,
+            cell_size=64.0,
+        )
+
+        self.assertEqual(oracle.triangle_count, 2)
+        self.assertAlmostEqual(
+            terrain_reconstruction.terrain_collision_oracle_floor_y(
+                oracle,
+                5.0,
+                5.0,
+                source_y=15.0,
+                max_vertical_distance=8.0,
+            ),
+            12.0,
+        )
+        self.assertIsNone(
+            terrain_reconstruction.terrain_collision_oracle_floor_y(
+                oracle,
+                20.0,
+                20.0,
+                source_y=15.0,
+                max_vertical_distance=8.0,
+            )
+        )
+        self.assertFalse(hasattr(oracle, "brushes"))
 
     def test_classifies_walkable_upward_facing_vertices(self):
         normal = terrain_reconstruction.polygon_normal((
@@ -1184,6 +1256,86 @@ class TerrainReconstructionTests(unittest.TestCase):
             "multi_anchor_budget",
         )
         self.assertEqual([item.polygon_index for item in selected], [0, 1])
+
+    def test_playable_area_allocation_clusters_anchors_and_weights_surface(self):
+        points = tuple(
+            (float(x), 0.0, float(z))
+            for z in (0, 10)
+            for x in (0, 10, 20, 30, 40)
+        ) + (
+            (1000.0, 0.0, 0.0),
+            (1010.0, 0.0, 0.0),
+            (1000.0, 0.0, 10.0),
+            (1010.0, 0.0, 10.0),
+        )
+        indices = (
+            (0, 5, 6, 1),
+            (1, 6, 7, 2),
+            (2, 7, 8, 3),
+            (3, 8, 9, 4),
+            (10, 12, 13, 11),
+        )
+        items = tuple(
+            terrain_reconstruction.TerrainSupportItem(
+                polygon_index,
+                types.SimpleNamespace(vertex_indices=polygon_indices),
+                polygon_indices,
+                tuple(points[index] for index in polygon_indices),
+                (
+                    sum(points[index][0] for index in polygon_indices) / 4.0,
+                    0.0,
+                    sum(points[index][2] for index in polygon_indices) / 4.0,
+                ),
+                (
+                    min(points[index][0] for index in polygon_indices),
+                    max(points[index][0] for index in polygon_indices),
+                    min(points[index][2] for index in polygon_indices),
+                    max(points[index][2] for index in polygon_indices),
+                ),
+            )
+            for polygon_index, polygon_indices in enumerate(indices)
+        )
+        anchors = (
+            (5.0, 0.0, 5.0),
+            (15.0, 0.0, 5.0),
+            (1005.0, 0.0, 5.0),
+        )
+
+        areas = terrain_reconstruction.playable_terrain_area_allocations(
+            items,
+            anchors,
+            margin=0.0,
+            radius=32.0,
+            total_polygon_budget=4,
+        )
+        selected = terrain_reconstruction.select_terrain_support_items(
+            items,
+            anchors,
+            margin=0.0,
+            selection_mode="playable-area-budget",
+            radius=32.0,
+            max_items=4,
+        )
+
+        self.assertEqual(len(areas), 2)
+        self.assertEqual(
+            tuple(area.anchor_count for area in areas),
+            (2, 1),
+        )
+        self.assertEqual(
+            tuple(area.candidate_polygon_count for area in areas),
+            (4, 1),
+        )
+        self.assertEqual(
+            tuple(area.allocated_polygon_budget for area in areas),
+            (3, 1),
+        )
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(
+            sum(item.polygon_index < 4 for item in selected),
+            3,
+        )
+        self.assertIn(4, {item.polygon_index for item in selected})
 
     def test_triangulates_convex_and_degenerate_boundaries(self):
         square = (
