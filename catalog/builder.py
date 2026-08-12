@@ -31,6 +31,11 @@ catalog.json shape
               "property_names": ["Name","Pos",...],
               "filenames":      ["models\\\\peasantmale.abc", ...],
               "skins":          ["skins\\\\peasantm2a.dtx", ...],
+              "world_helper": {
+                  "is_helper": false,
+                  "reason": "actor_hierarchy",
+                  "source": "object.lto"
+              },
               "template": {
                   "source_level":    "BOOTCAMP.DAT",
                   "source_instance": "CommonerHuman2MaleA0",
@@ -66,6 +71,7 @@ import re
 import subprocess
 import struct
 import sys
+import tempfile
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import _path_setup  # noqa: F401  (adds mm9_patcher/ to sys.path)
@@ -75,6 +81,7 @@ from .actor_visuals import (
     load_actor_visuals_from_data_rez,
     resolve_actor_visual,
 )
+from .world_helpers import annotate_catalog_world_helpers, is_model_resource
 import mm9_patch as patcher
 
 
@@ -409,7 +416,8 @@ def _add_model_variant(
 
 _INFERRED_VARIANT_SUFFIXES = (
     "chief", "elite", "warrior", "red", "blue", "green", "black", "white",
-    "gold", "silver", "dark", "light",
+    "gold", "silver", "pink", "purple", "orange", "yellow", "brown",
+    "dark", "light",
 )
 
 
@@ -438,8 +446,6 @@ def _add_inferred_model_variants(
             skins_by_stem.setdefault(os.path.splitext(os.path.basename(path))[0].casefold(), []).append(path)
     for model_path in model_paths:
         stem = os.path.splitext(os.path.basename(model_path))[0].casefold()
-        if stem not in skins_by_stem:
-            continue
         candidates: List[Tuple[str, str]] = []
         for skin_stem, paths in skins_by_stem.items():
             suffix = _inferred_variant_suffix(stem, skin_stem)
@@ -760,6 +766,7 @@ def build_catalog(
     actor_visual_rules: Optional[Iterable[object]] = None,
     object_lto_dump: Optional[Dict[str, Any]] = None,
     skin_paths: Optional[Iterable[str]] = None,
+    model_paths: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Scan all *.DAT files in *worlds_dir* and return a catalog dict.
 
@@ -811,7 +818,12 @@ def build_catalog(
                 str(obj.get("ScriptName") or ""),
                 actor_visual_rules,
             )
-            fname = actor_visual.model if actor_visual else obj.get("Filename")
+            dat_fname = obj.get("Filename")
+            if is_model_resource(dat_fname):
+                entry.setdefault("dat_model_filenames", set()).add(
+                    str(dat_fname).lower()
+                )
+            fname = actor_visual.model if actor_visual else dat_fname
             if isinstance(fname, str) and fname.endswith((".abc", ".ABC", ".lta", ".ltb")):
                 fname_key = fname.lower()
                 entry["filenames"].add(fname_key)
@@ -899,6 +911,8 @@ def build_catalog(
             entry["accessory_skins"] = sorted(entry["accessory_skins"])
         if "actor_visual_sources" in entry:
             entry["actor_visual_sources"] = sorted(entry["actor_visual_sources"])
+        if "dat_model_filenames" in entry:
+            entry["dat_model_filenames"] = sorted(entry["dat_model_filenames"])
     for fn, entry in filenames.items():
         entry["levels"]  = sorted(entry["levels"])
         entry["classes"] = sorted(entry["classes"])
@@ -920,7 +934,14 @@ def build_catalog(
                 source_key=f"object.lto:{class_name}",
             )
 
-    all_model_paths = set(filenames)
+    normalized_model_resources = {
+        path
+        for value in (model_paths or ())
+        if (path := _normalise_resource_path(
+            value, "models", (".abc", ".lta", ".ltb")
+        ))
+    }
+    all_model_paths = set(filenames) | normalized_model_resources
     for entry in classes.values():
         all_model_paths.update(entry.get("filenames") or ())
     _add_inferred_model_variants(model_variants, all_model_paths, skin_paths or ())
@@ -930,6 +951,7 @@ def build_catalog(
         "filenames": filenames,
         "actor_visuals": _json_actor_visuals(actor_visuals),
         "model_variants": _json_model_variants(model_variants),
+        "model_resources": sorted(normalized_model_resources),
         "summary": {
             "total_levels":            len(dat_paths),
             "total_classes":           len(classes),
@@ -939,13 +961,14 @@ def build_catalog(
     }
     if object_lto_dump is not None:
         catalog["object_lto"] = object_lto_dump
-    return catalog
+    return dict(annotate_catalog_world_helpers(catalog))
 
 
 def load_catalog(path: str) -> Dict[str, Any]:
     """Load and return a previously built catalog.json."""
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        catalog = json.load(f)
+    return dict(annotate_catalog_world_helpers(catalog))
     
 def save_catalog(catalog: Dict[str, Any], path: str = DEFAULT_CATALOG_PATH) -> None:
     """Write *catalog* to *path*, creating parent directories if needed."""
@@ -954,6 +977,35 @@ def save_catalog(catalog: Dict[str, Any], path: str = DEFAULT_CATALOG_PATH) -> N
         os.makedirs(out_dir, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(catalog, f, indent=2)
+
+
+def save_catalog_atomic(
+    catalog: Dict[str, Any],
+    path: str = DEFAULT_CATALOG_PATH,
+    *,
+    validator=None,
+) -> None:
+    """Validate and atomically replace *path* with a complete catalog JSON."""
+    out_dir = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(
+        prefix=".catalog_",
+        suffix=".tmp",
+        dir=out_dir,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(catalog, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        with open(temp_path, "r", encoding="utf-8") as f:
+            reloaded = json.load(f)
+        if validator is not None:
+            validator(reloaded)
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 # --------------------------------------------------------------------------
@@ -970,6 +1022,8 @@ def build_catalog_from_rez(
     actor_visual_rules: Optional[Iterable[object]] = None,
     skins_rez_path: Optional[str] = None,
     skins_dir: Optional[str] = None,
+    models_rez_path: Optional[str] = None,
+    models_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the catalog by extracting .DAT levels from *worlds_rez_path*.
 
@@ -1010,6 +1064,29 @@ def build_catalog_from_rez(
         elif os.path.isfile(candidate_rez):
             skins_rez_path = candidate_rez
 
+    if not models_rez_path and not models_dir:
+        sibling_dir = os.path.dirname(os.path.abspath(worlds_rez_path))
+        candidate_dir = os.path.join(sibling_dir, "MODELS")
+        candidate_rez = os.path.join(sibling_dir, "MODELS.REZ")
+        if os.path.isdir(candidate_dir):
+            models_dir = candidate_dir
+        elif os.path.isfile(candidate_rez):
+            models_rez_path = candidate_rez
+
+    def rez_inventory(path: str, root: str, extensions: Tuple[str, ...]) -> List[str]:
+        inventory: List[str] = []
+        with RezReader(path) as inventory_reader:
+            for virtual_path in inventory_reader.list_paths():
+                entry = inventory_reader.find(virtual_path)
+                type_ext = "." + str(getattr(entry, "type_str", "") or "").lower()
+                value = virtual_path.replace("/", "\\")
+                if not value.lower().endswith(extensions) and type_ext in extensions:
+                    value += type_ext
+                normalized = _normalise_resource_path(value, root, extensions)
+                if normalized:
+                    inventory.append(normalized)
+        return sorted(set(inventory))
+
     skin_paths: List[str] = []
     if skins_dir and os.path.isdir(skins_dir):
         for current, _dirs, names in os.walk(skins_dir):
@@ -1018,16 +1095,25 @@ def build_catalog_from_rez(
                     relative = os.path.relpath(os.path.join(current, name), skins_dir)
                     skin_paths.append("skins\\" + relative.replace("/", "\\"))
     elif skins_rez_path and os.path.isfile(skins_rez_path):
-        skin_reader = RezReader(skins_rez_path).open()
-        try:
-            skin_paths = [
-                path for path in skin_reader.list_paths()
-                if path.lower().endswith(".dtx")
-            ]
-        finally:
-            skin_reader.close()
+        skin_paths = rez_inventory(skins_rez_path, "skins", (".dtx",))
     if skin_paths:
         print(f"  {len(skin_paths)} skin resources indexed")
+
+    model_paths: List[str] = []
+    if models_dir and os.path.isdir(models_dir):
+        for current, _dirs, names in os.walk(models_dir):
+            for name in names:
+                if name.lower().endswith((".abc", ".lta", ".ltb")):
+                    relative = os.path.relpath(
+                        os.path.join(current, name), models_dir
+                    )
+                    model_paths.append("models\\" + relative.replace("/", "\\"))
+    elif models_rez_path and os.path.isfile(models_rez_path):
+        model_paths = rez_inventory(
+            models_rez_path, "models", (".abc", ".lta", ".ltb")
+        )
+    if model_paths:
+        print(f"  {len(model_paths)} model resources indexed")
 
     object_lto_dump: Optional[Dict[str, Any]] = None
     try:
@@ -1074,6 +1160,7 @@ def build_catalog_from_rez(
             actor_visual_rules=actor_visual_rules,
             object_lto_dump=object_lto_dump,
             skin_paths=skin_paths,
+            model_paths=model_paths,
         )
     finally:
         if reader is not None:
@@ -1159,6 +1246,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
 
+    # build-lomm -- source-aware install-root path. LoMM intentionally does not
+    # use MM9's ACTOR.TXT/MONSTERS.TXT visual-table resolver.
+    plomm = sub.add_parser(
+        "build-lomm",
+        help="build a LoMM catalog from a Legends of Might and Magic install",
+    )
+    plomm.add_argument(
+        "lomm_root",
+        metavar="LOMM_ROOT",
+        help="path to the Legends of Might and Magic install folder",
+    )
+    plomm.add_argument(
+        "--out",
+        default=os.path.join(HERE, "data", "catalog_lomm.json"),
+        help="output path (default: catalog/data/catalog_lomm.json)",
+    )
+    plomm.add_argument(
+        "--object-lto-helper",
+        default=None,
+        help=(
+            "optional path to object_lto_dump.exe "
+            f"(default: {DEFAULT_OBJECT_LTO_DUMP_HELPER})"
+        ),
+    )
+
     # info -- summarise an existing catalog
     pi = sub.add_parser("info", help="print a summary of an existing catalog.json")
     pi.add_argument("path", metavar="catalog.json")
@@ -1195,6 +1307,34 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         print(f"  max NPCNbr seen: {s['max_npc_nbr']}")
         print(f"  next free NPCs:  {s['free_npc_nbrs_above_max'][:5]} ...")
+        return 0
+
+    if args.cmd == "build-lomm":
+        from .lomm import build_lomm_catalog_from_root, validate_lomm_catalog
+
+        try:
+            cat = build_lomm_catalog_from_root(
+                args.lomm_root,
+                object_lto_helper_path=args.object_lto_helper,
+            )
+            save_catalog_atomic(cat, args.out, validator=validate_lomm_catalog)
+        except Exception as exc:
+            print(f"ERROR: could not build LoMM catalog: {exc}", file=sys.stderr)
+            return 1
+        s = cat["summary"]
+        print(f"Wrote {args.out}")
+        print(f"  game:            LoMM")
+        print(f"  levels:          {s['total_levels']}")
+        print(f"  classes:         {s['total_classes']}")
+        print(
+            "  model variants:  "
+            f"{sum(len(rows) for rows in cat.get('model_variants', {}).values())}"
+        )
+        if cat.get("object_lto", {}).get("available"):
+            print(
+                "  object.lto:      "
+                f"{cat['object_lto'].get('class_count', '?')} classes"
+            )
         return 0
 
     if args.cmd == "info":

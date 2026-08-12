@@ -116,7 +116,8 @@ class RestoreResult:
 
 
 def install_batch(batch_dir: str, game_data_dir: str,
-                  backup_root: Optional[str] = None) -> InstallResult:
+                  backup_root: Optional[str] = None,
+                  allow_blocking_issues: bool = False) -> InstallResult:
     batch_dir = os.path.abspath(batch_dir)
     game_data_dir = os.path.abspath(game_data_dir)
 
@@ -124,6 +125,19 @@ def install_batch(batch_dir: str, game_data_dir: str,
         raise InstallError(f"Output batch folder not found: {batch_dir}")
     if not os.path.isdir(game_data_dir):
         raise InstallError(f"Game data folder not found: {game_data_dir}")
+
+    blocking_issues = batch_blocking_issues(batch_dir)
+    if blocking_issues and not allow_blocking_issues:
+        details = "\n".join(
+            f"- {issue.get('message') or issue.get('code') or 'Unresolved issue'}"
+            for issue in blocking_issues
+        )
+        raise InstallError(
+            "This output batch is marked unsafe for installation:\n"
+            f"{details}\n"
+            "Remove or replace the incompatible objects, or use the explicit "
+            "advanced override."
+        )
 
     archives = archives_to_install(batch_dir)
     loose_files = loose_files_to_install(batch_dir)
@@ -388,6 +402,22 @@ def restore_backup(backup_path: str, game_data_dir: Optional[str] = None,
 def archives_to_install(batch_dir: str) -> List[str]:
     """Return patched REZ archives that would be installed from *batch_dir*."""
     return _archives_to_install(os.path.abspath(batch_dir))
+
+
+def batch_blocking_issues(batch_dir: str) -> List[dict]:
+    """Return structured issues that block installation by default."""
+    manifest_path = os.path.join(os.path.abspath(batch_dir), "manifest.json")
+    if not os.path.isfile(manifest_path):
+        return []
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as exc:
+        raise InstallError(f"Could not read output manifest: {exc}") from exc
+    issues = manifest.get("blocking_issues", [])
+    if not isinstance(issues, list):
+        raise InstallError("Output manifest 'blocking_issues' must be a list")
+    return [issue for issue in issues if isinstance(issue, dict)]
 
 
 def loose_files_to_install(batch_dir: str) -> List[dict]:

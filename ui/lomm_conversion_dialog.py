@@ -14,6 +14,14 @@ from typing import Callable, Optional
 
 import _path_setup  # noqa: F401
 from conversion import lomm_to_mm9_service as service
+from conversion import lomm_to_mm9 as converter
+
+
+ACTOR_POLICY_LABELS = {
+    "Preserve incompatible actors (recommended)": converter.ACTOR_POLICY_PRESERVE,
+    "Use legacy MM9 substitutions": converter.ACTOR_POLICY_LEGACY,
+    "Remove actors unsupported by MM9": converter.ACTOR_POLICY_REMOVE,
+}
 
 
 def default_converted_name(level_name: str) -> str:
@@ -26,10 +34,28 @@ def default_converted_name(level_name: str) -> str:
 
 
 def format_success_message(result: service.InsertConvertedLevelResult) -> str:
+    stats = getattr(getattr(result, "conversion", None), "stats", None)
+    compatibility = getattr(stats, "compatibility", None)
+    unresolved = getattr(compatibility, "unresolved_actor_count", 0)
+    destination = "Staged" if getattr(result, "staged", False) else "Added"
+    location_label = "Staging archive" if getattr(result, "staged", False) else "MM9 archive"
+    extra = ""
+    if unresolved:
+        extra = (
+            f"\n\nWarning: {unresolved} actor(s) are not supported by MM9. "
+            "They remain in the level for manual removal or replacement, and "
+            "installation is blocked by default."
+        )
+    if getattr(result, "staged", False):
+        return (
+            f"{destination} {result.added_virtual_path}.\n\n"
+            f"{location_label}:\n{result.worlds_rez}\n\n"
+            f"Batch:\n{result.stage_dir}{extra}"
+        )
     return (
-        f"Added {result.added_virtual_path} to:\n"
+        f"{destination} {result.added_virtual_path} to:\n"
         f"{result.worlds_rez}\n\n"
-        f"Backup:\n{result.backup_path}"
+        f"Backup:\n{result.backup_path}{extra}"
     )
 
 
@@ -39,7 +65,9 @@ class LommConversionDialog(tk.Toplevel):
         parent: tk.Misc,
         mm9_root: str,
         backup_root: Optional[str] = None,
+        staging_root: Optional[str] = None,
         catalog_json: Optional[str] = None,
+        lomm_catalog_json: Optional[str] = None,
         initial_lomm_root: str = "",
         on_success: Optional[Callable[[service.InsertConvertedLevelResult, str], None]] = None,
     ) -> None:
@@ -47,7 +75,9 @@ class LommConversionDialog(tk.Toplevel):
         self._parent_window = parent.winfo_toplevel()
         self.mm9_root = mm9_root
         self.backup_root = backup_root
+        self.staging_root = staging_root or backup_root or os.getcwd()
         self.catalog_json = catalog_json
+        self.lomm_catalog_json = lomm_catalog_json
         self.on_success = on_success
         self._levels: list[service.LommLevelEntry] = []
         self.result: Optional[service.InsertConvertedLevelResult] = None
@@ -55,13 +85,16 @@ class LommConversionDialog(tk.Toplevel):
 
         self.title("LoMM to MM9 conversion")
         self.configure(bg="#1a1d22")
-        self.geometry("720x360")
-        self.minsize(640, 320)
+        self.geometry("720x430")
+        self.minsize(640, 390)
         self.transient(self._parent_window)
 
         self.lomm_root_var = tk.StringVar(value=initial_lomm_root)
         self.level_var = tk.StringVar()
         self.converted_name_var = tk.StringVar()
+        self.actor_policy_label_var = tk.StringVar(
+            value=next(iter(ACTOR_POLICY_LABELS)),
+        )
         self.status_var = tk.StringVar(value="")
 
         self._build_ui()
@@ -138,6 +171,18 @@ class LommConversionDialog(tk.Toplevel):
         )
         self.name_entry.grid(row=4, column=1, columnspan=2, sticky="ew", pady=5, padx=(8, 0))
 
+        tk.Label(outer, text="LoMM actors:", bg="#1a1d22", fg="#aaaaaa").grid(
+            row=5, column=0, sticky="w", pady=5)
+        self.actor_policy_combo = ttk.Combobox(
+            outer,
+            textvariable=self.actor_policy_label_var,
+            state="readonly",
+            values=list(ACTOR_POLICY_LABELS),
+        )
+        self.actor_policy_combo.grid(
+            row=5, column=1, columnspan=2, sticky="ew", pady=5, padx=(8, 0),
+        )
+
         self.status_label = tk.Label(
             outer,
             textvariable=self.status_var,
@@ -147,10 +192,10 @@ class LommConversionDialog(tk.Toplevel):
             justify="left",
             wraplength=650,
         )
-        self.status_label.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.status_label.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(10, 0))
 
         buttons = tk.Frame(outer, bg="#1a1d22")
-        buttons.grid(row=6, column=0, columnspan=3, sticky="e", pady=(18, 0))
+        buttons.grid(row=7, column=0, columnspan=3, sticky="e", pady=(18, 0))
         tk.Button(
             buttons,
             text="Cancel",
@@ -248,6 +293,7 @@ class LommConversionDialog(tk.Toplevel):
         ):
             widget.configure(state=state)
         self.level_combo.configure(state=combo_state)
+        self.actor_policy_combo.configure(state=combo_state)
         self.configure(cursor="watch" if busy else "")
         self.update_idletasks()
 
@@ -266,9 +312,11 @@ class LommConversionDialog(tk.Toplevel):
             return
         if not messagebox.askyesno(
             "Convert LoMM level?",
-            "This will back up and replace MM9 data/WORLDS.REZ.\n\n"
+            "This creates an installable staging batch and does not modify the "
+            "live MM9 archives.\n\n"
             f"LoMM level: {level_name}\n"
-            f"New MM9 level: {converted_name}",
+            f"New MM9 level: {converted_name}\n"
+            f"Actor handling: {self.actor_policy_label_var.get()}",
             parent=self,
         ):
             return
@@ -279,13 +327,15 @@ class LommConversionDialog(tk.Toplevel):
             level_to_convert=level_name,
             converted_level_name=converted_name,
             catalog_json=self.catalog_json,
+            lomm_catalog_json=self.lomm_catalog_json,
+            actor_policy=ACTOR_POLICY_LABELS[self.actor_policy_label_var.get()],
         )
         self.status_var.set("Converting level...")
         self._set_busy(True)
         try:
-            result = service.convert_and_insert_level(
+            result = service.convert_and_stage_level(
                 request,
-                backup_root=self.backup_root,
+                staging_root=self.staging_root,
             )
         except Exception as exc:
             self.status_var.set("")
@@ -311,7 +361,9 @@ class LommConversionDialog(tk.Toplevel):
         parent: tk.Misc,
         mm9_root: str,
         backup_root: Optional[str] = None,
+        staging_root: Optional[str] = None,
         catalog_json: Optional[str] = None,
+        lomm_catalog_json: Optional[str] = None,
         initial_lomm_root: str = "",
         on_success: Optional[Callable[[service.InsertConvertedLevelResult, str], None]] = None,
     ) -> "LommConversionDialog":
@@ -319,7 +371,9 @@ class LommConversionDialog(tk.Toplevel):
             parent,
             mm9_root=mm9_root,
             backup_root=backup_root,
+            staging_root=staging_root,
             catalog_json=catalog_json,
+            lomm_catalog_json=lomm_catalog_json,
             initial_lomm_root=initial_lomm_root,
             on_success=on_success,
         )

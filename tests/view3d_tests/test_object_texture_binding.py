@@ -3,11 +3,14 @@ import sys
 import math
 import unittest
 
+import numpy as np
+
 
 from tests._path import ROOT  # noqa: F401
 
 from view3d.gl_object_models import (
     _floor_y_override,
+    _light_dir_for_model,
     _object_model_filename,
     _object_skin_names,
     _object_is_visible,
@@ -220,6 +223,7 @@ class ObjectTextureBindingTests(unittest.TestCase):
                     ])
             mesh = FakeMesh()
             mesh.tri_positions = np.array(tri_positions, dtype=np.float32)
+            mesh.model_user_dims = model.default_user_dims()
             return mesh
 
         world = World.load(dat_path)
@@ -231,7 +235,7 @@ class ObjectTextureBindingTests(unittest.TestCase):
                 mesh_for("models\\Props\\pewNS.ABC", bake=False),
                 bsp_world=bsp_world,
             ),
-            7743.4247837,
+            7745.1,
             places=4,
         )
         self.assertAlmostEqual(
@@ -240,7 +244,7 @@ class ObjectTextureBindingTests(unittest.TestCase):
                 mesh_for("models\\PeasantF6.ABC"),
                 bsp_world=bsp_world,
             ),
-            7764.3303528,
+            7746.1,
             places=4,
         )
         self.assertAlmostEqual(
@@ -249,9 +253,107 @@ class ObjectTextureBindingTests(unittest.TestCase):
                 mesh_for("models\\Props\\Training_Archery1.ABC", bake=False),
                 bsp_world=bsp_world,
             ),
-            7722.3741169,
+            7741.6,
             places=4,
         )
+
+    def test_static_no_animation_prop_uses_floor_anchored_dat_position(self):
+        from core.bsp import BspWorld, Polygon, Surface, WorldModelMesh
+
+        surface = Surface(
+            uv_o=(0.0, 0.0, 0.0),
+            uv_p=(1.0, 0.0, 0.0),
+            uv_q=(0.0, 0.0, 1.0),
+            texture_index=0,
+            flags=1,
+            texture_flags=0,
+        )
+        model = WorldModelMesh(
+            name="PhysicsBSP",
+            min_box=(-10.0, 0.0, -10.0),
+            max_box=(10.0, 0.0, 10.0),
+            translation=(0.0, 0.0, 0.0),
+            points=[
+                (-10.0, 0.0, -10.0),
+                (10.0, 0.0, 10.0),
+                (10.0, 0.0, -10.0),
+            ],
+            polygons=[Polygon([0, 1, 2], 0, 0)],
+            surfaces=[surface],
+        )
+        world = BspWorld(version=66, world_info="", world_models=[model])
+
+        class FakeMesh:
+            tri_positions = np.array([[[-1.0, -2.0, -1.0],
+                                       [1.0, -2.0, -1.0],
+                                       [0.0, 3.0, 1.0]]], dtype=np.float32)
+            model_user_dims = (1.0, 2.0, 1.0)
+            model_no_animation = True
+
+        prop = FakeObject(
+            "Prop",
+            Pos=(0.0, 0.0, 0.0),
+            MoveToFloor=0,
+            Scale=1.0,
+        )
+
+        self.assertEqual(_floor_y_override(prop, FakeMesh(), world), 2.0)
+
+    def test_bottom_pivot_prop_preserves_dat_ground_reference_without_bsp(self):
+        class FakeMesh:
+            model_bottom_pivot_offset_y = 279.630981
+
+        prop = FakeObject(
+            "Prop",
+            Pos=(10475.0, 574.0, -1501.0),
+            MoveToFloor=0,
+            Scale=1.4,
+        )
+
+        self.assertAlmostEqual(
+            _floor_y_override(prop, FakeMesh(), bsp_world=None),
+            965.4833734,
+            places=5,
+        )
+
+    def test_move_to_floor_takes_precedence_over_source_pivot(self):
+        from core.bsp import BspWorld, Polygon, Surface, WorldModelMesh
+
+        surface = Surface(
+            uv_o=(0.0, 0.0, 0.0),
+            uv_p=(1.0, 0.0, 0.0),
+            uv_q=(0.0, 0.0, 1.0),
+            texture_index=0,
+            flags=1,
+            texture_flags=0,
+        )
+        model = WorldModelMesh(
+            name="PhysicsBSP",
+            min_box=(-10.0, 0.0, -10.0),
+            max_box=(10.0, 0.0, 10.0),
+            translation=(0.0, 0.0, 0.0),
+            points=[
+                (-10.0, 0.0, -10.0),
+                (10.0, 0.0, 10.0),
+                (10.0, 0.0, -10.0),
+            ],
+            polygons=[Polygon([0, 1, 2], 0, 0)],
+            surfaces=[surface],
+        )
+        world = BspWorld(version=66, world_info="", world_models=[model])
+
+        class FakeMesh:
+            model_bottom_pivot_offset_y = 100.0
+            model_user_dims = (1.0, 2.0, 1.0)
+
+        prop = FakeObject(
+            "Prop",
+            Pos=(0.0, 10.0, 0.0),
+            MoveToFloor=1,
+            Scale=1.0,
+        )
+
+        self.assertAlmostEqual(_floor_y_override(prop, FakeMesh(), world), 2.1)
 
     def test_object_model_yaw_uses_game_model_basis(self):
         self.assertAlmostEqual(_rotation_y((0.0, math.pi, 0.0, 0.0)), math.pi)
@@ -270,6 +372,38 @@ class ObjectTextureBindingTests(unittest.TestCase):
                 Rotation=(0.0, 0.0, 0.0, 0.0),
             )),
             0.0,
+        )
+
+    def test_object_light_direction_accounts_for_rotation_and_reflection(self):
+        angle = math.pi * 0.5
+        c = math.cos(angle)
+        s = math.sin(angle)
+        rotation = np.array([
+            [c, 0.0, s],
+            [0.0, 1.0, 0.0],
+            [-s, 0.0, c],
+        ], dtype=np.float32)
+        reflection = np.diag([-1.0, 1.0, 1.0]).astype(np.float32)
+        model = np.eye(4, dtype=np.float32)
+        model[:3, :3] = reflection @ rotation * 2.0
+        world_light = np.array((0.4, 0.9, 0.3), dtype=np.float64)
+
+        local_light = np.array(
+            _light_dir_for_model(tuple(world_light), model),
+            dtype=np.float64,
+        )
+        local_normal = np.array((0.25, 0.5, 0.75), dtype=np.float64)
+        local_normal /= np.linalg.norm(local_normal)
+        normal_matrix = np.linalg.inv(model[:3, :3]).T
+        display_normal = normal_matrix @ local_normal
+        display_normal /= np.linalg.norm(display_normal)
+        world_light /= np.linalg.norm(world_light)
+
+        self.assertAlmostEqual(float(np.linalg.norm(local_light)), 1.0)
+        self.assertAlmostEqual(
+            float(np.dot(local_normal, local_light)),
+            float(np.dot(display_normal, world_light)),
+            places=6,
         )
 
     def test_model_skin_beats_generic_body_piece_skin(self):

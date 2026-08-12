@@ -65,10 +65,9 @@ animated character/creature previews it can fall back to a relaxed LOD0-only
 parse when later LOD totals do not match the rigid prop layout.
 
 It also parses the model node tree and the old MM9 uncompressed animation
-node layout used by many NPCs.  A conservative, opt-in static-pose bake
-helper exists for character previews.  The normal prop path leaves vertices
-unbaked; the viewer enables the bake for top-level animated character/NPC
-models so their bone-local vertices are shown in a usable static pose.
+node layout used by many NPCs and props.  A conservative, opt-in static-pose
+bake helper produces model-space geometry for both rigid props and top-level
+animated character/NPC previews.
 
 Ambiguous piece boundaries and unsupported animation/skinning variants are
 intentionally skipped (load_abc returns None).  They remain visible through the
@@ -101,12 +100,10 @@ from typing import List, Optional, Tuple
 class AbcVertex:
     """
     Single vertex from an ABC piece.
-    ``bone_index`` is the 0-based node index.  Known rigid prop files store
-    this as 1-based; top-level animated character files store it as 0-based.
-    ``pos`` is the currently selected draw position. For ordinary props this is
-    the first bone-local weight position; for static character previews it can
-    be replaced by ``saved_pos``. ``weights`` preserve the bone-local source
-    records for future animation/skinning work.
+    ``bone_index`` is the direct 0-based model node index. ``pos`` is the
+    currently selected draw position and may be either the first bone-local
+    weight position or a baked model-space position. ``weights`` preserve the
+    bone-local source records for future animation/skinning work.
     """
     bone_index: int
     pos:        Tuple[float, float, float]   # (x, y, z)
@@ -158,6 +155,14 @@ class AbcPiece:
     texture_name: str = ""
 
 
+@dataclass(frozen=True)
+class AbcAnimation:
+    """Animation metadata needed by static preview and object placement."""
+
+    name:      str
+    user_dims: Tuple[float, float, float]
+
+
 @dataclass
 class AbcModel:
     """Loaded ABC model: header metadata + list of pieces."""
@@ -171,10 +176,16 @@ class AbcModel:
     command_string: str
     pieces:         List[AbcPiece] = field(default_factory=list)
     nodes:          List[AbcNode]  = field(default_factory=list)
+    animations:     List[AbcAnimation] = field(default_factory=list)
+    bottom_pivot_offset_y: float = 0.0
     baked_bind_pose: bool = False
 
     def is_empty(self) -> bool:
         return not any(p.triangles for p in self.pieces)
+
+    def default_user_dims(self) -> Optional[Tuple[float, float, float]]:
+        """Return the dimensions used by Prop's initial runtime animation."""
+        return _default_animation_user_dims(self.animations)
 
 
 @dataclass
@@ -470,11 +481,77 @@ def _bounds_are_sane(bounds: Optional[Tuple[float, float, float, float, float, f
     return 0.001 <= extent <= 2000.0
 
 
+def _default_animation_user_dims(
+    animations: List[AbcAnimation],
+) -> Optional[Tuple[float, float, float]]:
+    for animation in animations:
+        if animation.name.casefold() == "world":
+            return animation.user_dims
+    return animations[0].user_dims if animations else None
+
+
+def _bottom_pivot_offset_y(
+    pieces: List[AbcPiece],
+    animations: List[AbcAnimation],
+    command_string: str,
+) -> float:
+    """Detect rigid models authored around a bottom-oriented source pivot.
+
+    Some ``NoAnimation`` vegetation stores its first weight positions with Y
+    beginning near zero, while the saved model-space positions are translated
+    downward by approximately the animation's Y UserDims.  Keep that exact
+    translation as preview metadata instead of applying it to every prop.
+    """
+    if "noanimation" not in command_string.casefold() or not pieces:
+        return 0.0
+    user_dims = _default_animation_user_dims(animations)
+    if user_dims is None:
+        return 0.0
+    try:
+        dims_y = abs(float(user_dims[1]))
+    except (TypeError, IndexError, ValueError):
+        return 0.0
+    if dims_y <= 1.0e-6:
+        return 0.0
+
+    raw_bounds = _bounds_for_pieces(pieces)
+    saved_y = [
+        float(vertex.saved_pos[1])
+        for piece in pieces
+        for vertex in piece.vertices
+        if vertex.saved_pos is not None
+    ]
+    if raw_bounds is None or not saved_y or len(saved_y) != sum(
+        len(piece.vertices) for piece in pieces
+    ):
+        return 0.0
+
+    raw_min_y = float(raw_bounds[2])
+    saved_min_y = min(saved_y)
+    offset_y = raw_min_y - saved_min_y
+    origin_tolerance = max(1.0, dims_y * 0.05)
+    dims_tolerance = max(2.0, dims_y * 0.10)
+    if (
+        abs(raw_min_y) <= origin_tolerance
+        and saved_min_y <= -(dims_y * 0.5)
+        and offset_y > 0.0
+        and abs(offset_y - dims_y) <= dims_tolerance
+    ):
+        return offset_y
+    return 0.0
+
+
 def _bake_with_node_matrices(
     pieces: List[AbcPiece],
     matrices_by_node: dict,
 ) -> Optional[List[AbcPiece]]:
-    """Return pieces whose bone-local vertices are transformed by node matrices."""
+    """Return pieces whose bone-local vertices are transformed by node matrices.
+
+    ABC vertex normals are stored in model space and are used that way by the
+    LithTech renderer; bone transforms deform positions but do not replace the
+    authored smoothing normals.  Keep those normals attached to the baked
+    static preview so GPU upload does not fall back to flat face normals.
+    """
     if not pieces or not matrices_by_node:
         return None
 
@@ -500,6 +577,14 @@ def _bake_with_node_matrices(
                 verts.append(AbcVertex(
                     bone_index=vert.bone_index,
                     pos=baked_pos,
+                    weights=vert.weights,
+                    normal=(
+                        vert.saved_normal
+                        if vert.saved_normal is not None
+                        else vert.normal
+                    ),
+                    saved_pos=vert.saved_pos,
+                    saved_normal=vert.saved_normal,
                 ))
             else:
                 matrix = matrices_by_node.get(vert.bone_index)
@@ -508,6 +593,14 @@ def _bake_with_node_matrices(
                 verts.append(AbcVertex(
                     bone_index=vert.bone_index,
                     pos=_mat_transform_point_colvec(matrix, vert.pos),
+                    weights=vert.weights,
+                    normal=(
+                        vert.saved_normal
+                        if vert.saved_normal is not None
+                        else vert.normal
+                    ),
+                    saved_pos=vert.saved_pos,
+                    saved_normal=vert.saved_normal,
                 ))
         out.append(AbcPiece(
             name=piece.name,
@@ -564,10 +657,10 @@ def _use_saved_model_positions(pieces: List[AbcPiece]) -> List[AbcPiece]:
     return out
 
 
-def _parse_old_static_animation_pose(
+def _parse_old_animation_data(
     adata: bytes,
     nodes: List[AbcNode],
-) -> Optional[dict]:
+) -> Tuple[List[AbcAnimation], Optional[dict]]:
     """
     Parse the old MM9 ABC raw-``NodeKeyFrame`` animation layout.
 
@@ -578,15 +671,16 @@ def _parse_old_static_animation_pose(
     pointer/placeholder (uint32).  The first ``stand`` animation frame gives a
     useful frozen character preview.
     """
+    animations: List[AbcAnimation] = []
     if not adata or not nodes or len(adata) < 4:
-        return None
+        return animations, None
 
     try:
         n_anims = struct.unpack_from('<I', adata, 0)[0]
     except struct.error:
-        return None
+        return animations, None
     if n_anims <= 0 or n_anims > 512:
-        return None
+        return animations, None
 
     pos = 4
     best_pose = None
@@ -597,11 +691,16 @@ def _parse_old_static_animation_pose(
     for _ in range(n_anims):
         if pos + 12 > len(adata):
             break
-        pos += 12  # animation user dims
+        user_dims = struct.unpack_from('<3f', adata, pos)
+        pos += 12
         anim_name, pos2 = _read_string(adata, pos)
         if pos2 == pos or pos2 + 12 > len(adata):
             break
         pos = pos2
+        animations.append(AbcAnimation(
+            name=anim_name,
+            user_dims=tuple(float(value) for value in user_dims),
+        ))
 
         comp, _interp_ms, n_keyframes = struct.unpack_from('<3I', adata, pos)
         pos += 12
@@ -610,11 +709,11 @@ def _parse_old_static_animation_pose(
 
         for _key in range(n_keyframes):
             if pos + 4 > len(adata):
-                return best_pose
+                return animations, best_pose
             _time_ms = struct.unpack_from('<I', adata, pos)[0]
             _tag, pos2 = _read_string(adata, pos + 4)
             if pos2 == pos + 4:
-                return best_pose
+                return animations, best_pose
             pos = pos2
 
         if comp != 0xFFFFFFFF:
@@ -645,7 +744,7 @@ def _parse_old_static_animation_pose(
         for node in nodes:
             local = local_by_node.get(node.index)
             if local is None:
-                return best_pose
+                return animations, best_pose
             parent_matrix = global_by_node.get(node.parent_index)
             global_by_node[node.index] = (
                 _mat_mul(parent_matrix, local)
@@ -654,13 +753,22 @@ def _parse_old_static_animation_pose(
             )
 
         lname = anim_name.lower()
-        if best_pose is None or lname.startswith('stand') or lname.startswith('idle'):
+        best_is_idle = best_name.startswith('stand') or best_name.startswith('idle')
+        candidate_is_idle = lname.startswith('stand') or lname.startswith('idle')
+        if best_pose is None or (candidate_is_idle and not best_is_idle):
             best_pose = global_by_node
             best_name = lname
-            if best_name.startswith('stand') or best_name.startswith('idle'):
-                break
 
-    return best_pose
+    return animations, best_pose
+
+
+def _parse_old_static_animation_pose(
+    adata: bytes,
+    nodes: List[AbcNode],
+) -> Optional[dict]:
+    """Backward-compatible pose-only view of the old animation parser."""
+    _animations, pose = _parse_old_animation_data(adata, nodes)
+    return pose
 
 
 def _should_bake_static_bind_pose(
@@ -1158,8 +1266,9 @@ def load_abc(path: str, bake_static_bind_pose: bool = False) -> Optional[AbcMode
     path : str
         Absolute or relative filesystem path to the .ABC file.
     bake_static_bind_pose : bool
-        Static-preview option for top-level animated character/NPC models.
-        Ordinary prop models are left unbaked even when this is True.
+        Static-preview option. Rigid props are converted to their authored
+        model-space positions; top-level animated characters use a suitable
+        frozen animation or bind pose.
     """
     try:
         with open(path, 'rb') as fh:
@@ -1197,13 +1306,10 @@ def load_abc(path: str, bake_static_bind_pose: bool = False) -> Optional[AbcMode
     pds, pde = block_map['Pieces']
     pdata = raw[pds:pde]
 
-    # Rigid prop payloads observed so far store bone indices as 1-based values.
-    # Top-level character/NPC meshes store the node index directly, including
-    # several one-animation civilian variants; subtracting one assigns every
-    # vertex to the previous bone and collapses the static preview into shards.
-    bone_index_base = 0 if (
-        _is_top_level_model_path(path) and allocs.get('nNodes', 0) > 4
-    ) else 1
+    # LithTech vertex weights store direct, zero-based model node indices.
+    # Rigid props commonly reference node 1 (Bone01), while node 0 is their
+    # Scene Root; treating that value as one-based renders bone-local geometry.
+    bone_index_base = 0
 
     pieces = _parse_pieces(
         pdata,
@@ -1229,8 +1335,23 @@ def load_abc(path: str, bake_static_bind_pose: bool = False) -> Optional[AbcMode
         if parsed_nodes is not None:
             nodes = parsed_nodes
 
+    animations: List[AbcAnimation] = []
+    animation_pose = None
+    if 'Animation' in block_map and nodes:
+        ads, ade = block_map['Animation']
+        animations, animation_pose = _parse_old_animation_data(
+            raw[ads:ade], nodes
+        )
+
+    bottom_pivot_offset_y = _bottom_pivot_offset_y(
+        pieces,
+        animations,
+        command_string,
+    )
+
     baked_bind_pose = False
-    if bake_static_bind_pose and _should_bake_static_bind_pose(allocs, nodes, path):
+    character_preview = _should_bake_static_bind_pose(allocs, nodes, path)
+    if bake_static_bind_pose and character_preview:
         if (
             _pieces_have_multi_weight_vertices(pieces)
             and _pieces_have_saved_model_positions(pieces)
@@ -1239,11 +1360,27 @@ def load_abc(path: str, bake_static_bind_pose: bool = False) -> Optional[AbcMode
             baked_bind_pose = True
         else:
             baked = None
-            if 'Animation' in block_map:
-                ads, ade = block_map['Animation']
-                pose = _parse_old_static_animation_pose(raw[ads:ade], nodes)
-                if pose is not None:
-                    baked = _bake_with_node_matrices(pieces, pose)
+            if animation_pose is not None:
+                baked = _bake_with_node_matrices(pieces, animation_pose)
+            if baked is None:
+                baked = _bake_bind_pose(pieces, nodes)
+            if baked is not None:
+                pieces = baked
+                baked_bind_pose = True
+    elif bake_static_bind_pose:
+        # Rigid NoAnimation models carry the exact authored model-space vertex
+        # positions in each vertex record. Other small-node static models use
+        # their first animation pose, then their bind pose as a fallback.
+        if (
+            "noanimation" in command_string.casefold()
+            and _pieces_have_saved_model_positions(pieces)
+        ):
+            pieces = _use_saved_model_positions(pieces)
+            baked_bind_pose = True
+        else:
+            baked = None
+            if animation_pose is not None:
+                baked = _bake_with_node_matrices(pieces, animation_pose)
             if baked is None:
                 baked = _bake_bind_pose(pieces, nodes)
             if baked is not None:
@@ -1264,6 +1401,8 @@ def load_abc(path: str, bake_static_bind_pose: bool = False) -> Optional[AbcMode
         command_string=command_string,
         pieces=pieces,
         nodes=nodes,
+        animations=animations,
+        bottom_pivot_offset_y=bottom_pivot_offset_y,
         baked_bind_pose=baked_bind_pose,
     )
 
@@ -1285,7 +1424,9 @@ def upload_abc_model(
 
         [x, y, z, nx, ny, nz, u, v]   float32 × 8  = 32 bytes/vertex
 
-    Normals are computed per-triangle by cross-product (flat shading).
+    Authored vertex normals are used when available.  A per-triangle
+    cross-product normal is retained as a conservative fallback for ABC
+    variants that do not contain a valid normal.
     Returns a GpuMesh or None if the model is empty.
 
     Requires a live GL context.
@@ -1408,4 +1549,7 @@ def upload_abc_model(
         # Skin entries at instance draw time.
         tex_ranges=tex_ranges,
         tri_positions=tri_pos_np,
+        model_user_dims=abc.default_user_dims(),
+        model_no_animation="noanimation" in abc.command_string.casefold(),
+        model_bottom_pivot_offset_y=abc.bottom_pivot_offset_y,
     )

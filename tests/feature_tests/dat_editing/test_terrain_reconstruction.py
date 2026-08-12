@@ -4,6 +4,7 @@ import types
 import unittest
 
 from tests._path import ROOT  # noqa: F401
+from tests._investigation import investigation_test
 
 from features.dat_editing import compiler_strategy, surrogate_ed, terrain_reconstruction
 
@@ -936,6 +937,7 @@ class TerrainReconstructionTests(unittest.TestCase):
             (),
         )
 
+    @investigation_test
     def test_anskramkeep_startpoint_focus_reserves_connected_stairwell_neighborhood(self):
         from core import bsp
         from features.dat_editing import terrain_semantics
@@ -967,6 +969,7 @@ class TerrainReconstructionTests(unittest.TestCase):
             {"floor": 52, "ceiling": 59, "side_wall": 239},
         )
 
+    @investigation_test
     def test_anskramkeep_stair_detector_finds_high_confidence_assemblies(self):
         from core import bsp
         from features.dat_editing import terrain_semantics

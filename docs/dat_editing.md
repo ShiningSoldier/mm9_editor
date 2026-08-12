@@ -46,27 +46,31 @@ not be added back to the menu unless they become stable user workflows.
 
 ## Test Tiers
 
-The default DAT-to-ED tests keep deterministic unit, writer, selector, report,
-and small-fixture coverage. Large real-level reconstruction cases are retained
-as an opt-in regression tier because repeatedly rebuilding BOOTCAMP,
-ANSKRAMKEEP, ISLEOFASHES, and compiled SkyMarker residue takes several minutes.
+The default suite keeps deterministic parsing, writer, selector, report, and
+small-fixture coverage. Expensive compiler-strategy, surrogate-world, terrain
+BSP, and door-BSP cases are retained as an opt-in investigation tier because
+repeatedly rebuilding shipped levels takes several minutes. These tests cover
+functionality that is expected to be investigated and updated in the future.
 
-Run the normal DAT-to-ED tests with:
-
-```powershell
-python -m unittest tests.feature_tests.dat_editing.test_terrain_reconstruction tests.feature_tests.dat_editing.test_surrogate_ed tests.feature_tests.dat_editing.test_compiler_strategy
-```
-
-Run the complete real-level regression tier with:
+Run the normal suite with:
 
 ```powershell
-$env:MM9_RUN_SLOW_DAT_TO_ED_TESTS = "1"
-python -m unittest tests.feature_tests.dat_editing.test_surrogate_ed tests.feature_tests.dat_editing.test_compiler_strategy
+python -m unittest discover -s tests
 ```
 
-The slow tests are skipped, not deleted, in the default run. Use the complete
-tier before accepting a reconstruction change that affects real-level geometry,
-door corridors, SkyMarker residue, Processor budgets, or baseline counts.
+Run the complete suite, including investigation regressions, with:
+
+```powershell
+$env:MM9_RUN_INVESTIGATION_TESTS = "1"
+python -m unittest discover -s tests
+Remove-Item Env:MM9_RUN_INVESTIGATION_TESTS
+```
+
+The investigation tests are skipped, not deleted, in the default run. The old
+`MM9_RUN_SLOW_DAT_TO_ED_TESTS=1` flag remains supported for compatibility. Use
+the complete tier before accepting a reconstruction change that affects
+real-level geometry, door corridors, SkyMarker residue, Processor budgets, or
+baseline counts.
 
 ## Format Facts
 

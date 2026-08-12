@@ -5,6 +5,7 @@
 | `gl_view.py` | Tk/OpenGL viewport. Handles camera modes, BSP rendering, object model rendering, billboard handles, colour-buffer picking, click placement, drag movement, keyboard nudges, height changes, yaw rotation, fog, and status text. |
 | `camera.py` | Orbit and fly camera math plus unprojection for picking and surface placement. |
 | `gl_mesh.py` | BSP mesh upload/draw. Triangulates polygons, filters non-render helper surfaces, normalizes OPQ texture coordinates, groups triangles by texture, and draws textured or fallback-colour geometry. |
+| `sky.py` | Resolves `DemoSkyWorldModel`, `SkyPointer`, and `WorldProperties` records into ordered, camera-relative sky layers and an optional `SoftSky` cloud shell. |
 | `gl_objects.py` | Coloured billboard handle batch. Handles selection/picking markers and live VBO position updates during edits. |
 | `gl_object_models.py` | ABC object mesh renderer. Resolves object `Filename`, `Skin`, `Pos`, `Rotation`, and `Scale`; draws supported meshes; leaves unsupported objects as handles. |
 | `abc_loader.py` | Conservative ABC parser/uploader for static props and supported static NPC/creature poses. |
@@ -25,8 +26,8 @@ Orbit mode is the editing mode:
 - `Tools -> Import Static Prefab BSP...` opens a converted prefab `.dat`, asks
   for a new BSP model name, then the next BSP click places a static prefab
   import preview.
-- `View -> Toggle object helpers` mirrors the viewport `Helpers` button and
-  toggles billboards for objects that already have visible 3-D models, such as
+- `View -> Toggle object helpers` toggles billboards for objects that already
+  have visible 3-D models, such as
   NPCs, monsters, furniture, chests, and props.
 - `View -> Toggle world helpers` toggles editor/service billboards such as
   AI rails/barriers, ambient sounds, triggers, weather/world markers, doors,
@@ -37,20 +38,38 @@ Orbit mode is the editing mode:
   geometry.
 - `View -> Helper BSP` role toggles control AI rails, collision/firethrough,
   water volumes, triggers, sound, and sky/visibility helpers.
+- The sky/visibility group also contains BSP surfaces marked with the engine's
+  `SURF_SKY` flag. These surfaces are sky portals rather than ordinary world
+  geometry, so normal mode hides them.
+- In normal rendering, those portals reveal the sky world-models named by
+  `DemoSkyWorldModel` and `SkyPointer`. The viewport maps the main camera into
+  the authored `SkyDims` inner box, preserves object `Index` ordering, and
+  applies the `WorldProperties.SoftSky` cloud layer when its texture is
+  available. A missing legacy MM9 cloud path falls back to the shipped
+  `TEXTURES\Skybox\Clouds1.dtx` texture.
+- Translucent BSP materials are composited after the sky pass. This preserves
+  authored combinations such as BOOTCAMP's `StainedGlass2` church windows,
+  whose glass world-models intentionally sit over circular sky portals.
+- The collision/firethrough group also contains BSP surfaces marked with the
+  engine's `SURF_INVISIBLE` flag and same-named BSP models owned by invisible
+  catalog-classified world helpers. In normal mode these match the game's
+  hidden rendering behavior; examples include BOOTCAMP's table collision
+  boxes and CHASMOFTHEDEAD's `AIBarrier` geometry.
 - Drag selected object: move X/Z while preserving current Y.
 - Arrow keys: nudge selected object X/Z relative to camera.
 - `PageUp` / `PageDown`, or `E` / `Q`: adjust selected object height.
 - `[` / `]`: rotate selected object yaw by editing `Rotation[1]` in radians.
 - `Shift`: larger nudge/rotation step.
 - `F`: fit camera to level bounds.
-- `P`: toggle render profiling to stderr.
 
 Fly mode is for navigation:
 
 - Drag: look.
 - `W/A/S/D`: move horizontally.
 - `Q/E`: move down/up.
+- Mouse wheel: dolly forward/back along the viewing direction.
 - `Shift`: faster camera.
+- `F`: fit camera to normal visible level geometry.
 
 # Placement And Transform Commit Flow
 
@@ -106,9 +125,9 @@ Transform interaction is optimized for responsiveness:
 - During a 3D object drag, the viewport skips non-dragged ABC meshes and avoids
   the back-to-front sprite sort. The dragged object/model and handles still
   preview immediately.
-- Lightweight profiling is built into `_GLCanvas._profile_record()`. Press
-  `P` in the viewport, or set `MM9_EDITOR_PROFILE=1`, to print average frame,
-  BSP, ABC, and sprite timings every 120 frames.
+- Lightweight profiling is built into `_GLCanvas._profile_record()`. Set
+  `MM9_EDITOR_PROFILE=1` before launch to print average frame, BSP, ABC, and
+  sprite timings every 120 frames. There is no user-facing profiling shortcut.
 
 
 ## Editor Billboard Visibility Notes
@@ -118,23 +137,26 @@ world/service helpers.
 
 Implementation summary:
 
-1. Added an editor-only visibility predicate for world/service helper
-   WorldObject billboards:
-   - classes like `BlueWater`, `ExitTrigger`, `AIRail`, `AmbientSound`
-   - categories like `trigger`, `sound`, `marker`, `world`, `light`, and
-     `door`
-   - AI track name prefixes such as `AITrk`
-2. Repurposed the viewport checkbox beside the Camera controls:
-   - label: `Helpers`
+1. World/service helper classification is derived from the active catalog:
+   - `object.lto` inheritance identifies actor and model-object classes.
+   - model-valued `Filename` defaults from `object.lto` and explicit model
+     paths observed in level DAT files identify other visible objects.
+   - a class with neither actor/model inheritance nor a model resource is a
+     world helper. This covers MM9 and LoMM service classes without maintaining
+     separate class-name lists.
+   - converted/custom objects fall back to their per-instance `Filename` and
+     actor-property signature when their class is absent from the catalog.
+   - old catalogs are annotated in memory when loaded; regenerated catalogs
+     persist the `world_helper` decision, reason, and evidence source per class.
+2. Added `View -> Toggle object helpers`:
    - default: off
    - on: show billboards for objects that already render as 3-D models
    - off: hide those model-backed billboards unless the object is selected or
      actively dragged
-   - `View -> Toggle object helpers` duplicates the same control.
 3. Added `View -> Toggle world helpers` for editor/service billboards:
    - default: off
    - on: show all world/service helper billboards
-   - off: hide helper/control billboard classes above unless selected.
+   - off: hide data-classified helper/control billboards unless selected.
 4. Added `View -> Helper BSP` and moved helper BSP controls out of the
    viewport toolbar. The menu exposes `Normal`, `Helpers translucent`, and
    role toggles for AI rails, collision/firethrough, water volumes, triggers,
@@ -164,7 +186,10 @@ Implementation summary:
    - actual BSP geometry and ABC object meshes keep their existing visibility
      rules.
 9. Added focused tests around the pure predicates:
-   - `BlueWater`, `ExitTrigger`, `AIRail`, `AmbientSound` hidden by default.
+   - MM9 and LoMM object.lto actor/model inheritance and Filename defaults.
+   - model-free controls and audio Filename values are helpers.
+   - explicit per-instance models and converted-LoMM actor signatures override
+     helper classification.
    - modeled objects can keep object-helper billboards even if their catalog
      category is otherwise a world-helper category.
    - selected hidden world helpers are included when the selected-index

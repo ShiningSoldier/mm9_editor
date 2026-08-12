@@ -4,6 +4,7 @@ import struct
 import unittest
 
 from tests._path import ROOT  # noqa: F401
+from tests._investigation import investigation_test
 
 from core import bsp
 from features.dat_editing import (
@@ -16,6 +17,7 @@ from features.dat_editing import (
 DATA_ROOT = os.path.join(ROOT, "mm9_data")
 
 
+@investigation_test
 class TerrainBspPatchTests(unittest.TestCase):
     def load_bootcamp(self):
         path = os.path.join(DATA_ROOT, "WORLDS", "BOOTCAMP.DAT")

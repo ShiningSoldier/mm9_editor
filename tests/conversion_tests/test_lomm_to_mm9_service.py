@@ -5,6 +5,7 @@ import unittest
 
 from tests._path import ROOT  # noqa: F401
 
+from conversion import lomm_to_mm9 as converter
 from conversion import lomm_to_mm9_service as service
 from core import install_manager
 from core import rezmgr
@@ -46,6 +47,28 @@ class LommToMm9ServiceTests(unittest.TestCase):
         write_minimal_rez(os.path.join(data, "RUDE.REZ"), {"RUDE/NPCNAME": b""})
         write_minimal_rez(os.path.join(data, "SCRIPTS.REZ"), {"SCRIPTS/EMPTY": b""})
         return root
+
+    def _make_actor_world(self, class_name: str, name: str = "Actor1") -> bytes:
+        from mm9_patcher import mm9_patch as patcher
+        world = patcher.World(
+            header=patcher.Header(66, 0, 0, (0,) * 8),
+            pre_objects=b"",
+            objects=[patcher.WorldObject(class_name, [
+                patcher.Property("Name", 0, 0, name),
+                patcher.Property("Pos", 1, 0, (1.0, 2.0, 3.0)),
+                patcher.Property("SightDistance", 3, 0, 100.0),
+                patcher.Property("HearingDistance", 3, 0, 50.0),
+            ])],
+            render_data=b"",
+        )
+        fd, path = tempfile.mkstemp(suffix=".DAT")
+        os.close(fd)
+        try:
+            world.save(path)
+            with open(path, "rb") as f:
+                return f.read()
+        finally:
+            os.remove(path)
 
     def test_validates_mm9_and_lomm_roots_case_insensitively(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -127,6 +150,224 @@ class LommToMm9ServiceTests(unittest.TestCase):
             world = load_world_from_bytes(result.dat_bytes)
             self.assertEqual(world.objects[0].get("Name"), "LoMM")
 
+    def test_conversion_builds_explicit_missing_lomm_catalog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            lomm_root = self._make_lomm_root(tmp)
+            lomm_catalog = os.path.join(tmp, "catalogs", "catalog_lomm.json")
+
+            service.convert_level_to_bytes(service.ConvertLevelRequest(
+                mm9_root=mm9_root,
+                lomm_root=lomm_root,
+                level_to_convert="CHATEAUESCAPE",
+                converted_level_name="NEWLEVEL",
+                config_path=self._write_config(tmp),
+                lomm_catalog_json=lomm_catalog,
+            ))
+
+            self.assertTrue(os.path.isfile(lomm_catalog))
+            with open(lomm_catalog, "r", encoding="utf-8") as f:
+                built = json.load(f)
+            self.assertEqual(built["game"], "lomm")
+            self.assertEqual(built["summary"]["total_levels"], 1)
+
+    def test_explicit_dat_skin_prevents_catalog_skin_inference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog_path = os.path.join(tmp, "catalog_lomm.json")
+            with open(catalog_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "model_variants": {
+                        r"models\dragonred.abc": [{
+                            "name": "DragonRed",
+                            "skins": [r"skins\dragonred.dtx"],
+                            "source_keys": [],
+                        }],
+                    },
+                }, f)
+            world = load_world_from_bytes(self._make_world_with_assets(
+                name="DragonRed0",
+                filename=r"models\DragonRed.abc",
+                skin=r"skins\explicit.dtx",
+            ))
+
+            refs, preview_visuals = converter._implicit_catalog_skin_refs(
+                world, catalog_path
+            )
+
+            self.assertEqual(refs, [])
+            self.assertEqual(preview_visuals, {})
+
+    def test_preserves_unsupported_lomm_actor_and_reports_it_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            lomm_root = self._make_lomm_root(tmp, {
+                "WORLDS/HIDEOUT": self._make_actor_world("Orc"),
+            })
+            result = service.convert_level_to_bytes(service.ConvertLevelRequest(
+                mm9_root=mm9_root,
+                lomm_root=lomm_root,
+                level_to_convert="HIDEOUT",
+                converted_level_name="HIDEOUT_MM9",
+                config_path=self._write_config(tmp),
+            ))
+
+            world = load_world_from_bytes(result.dat_bytes)
+            self.assertEqual([obj.type_str for obj in world.objects], ["Orc"])
+            self.assertEqual(result.stats.compatibility.actor_policy, "preserve")
+            self.assertEqual(result.stats.compatibility.unresolved_actor_count, 1)
+            record = result.stats.compatibility.records[0]
+            self.assertEqual(record.status, "unsupported_actor_preserved")
+            self.assertEqual(record.output_index, 0)
+
+    def test_explicit_remove_policy_deletes_only_unsupported_actor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            lomm_root = self._make_lomm_root(tmp, {
+                "WORLDS/HIDEOUT": self._make_actor_world("Orc"),
+            })
+            result = service.convert_level_to_bytes(service.ConvertLevelRequest(
+                mm9_root=mm9_root,
+                lomm_root=lomm_root,
+                level_to_convert="HIDEOUT",
+                converted_level_name="HIDEOUT_MM9",
+                config_path=self._write_config(tmp),
+                actor_policy="remove",
+            ))
+
+            self.assertEqual(load_world_from_bytes(result.dat_bytes).objects, [])
+            self.assertEqual(result.stats.removed_by_class, {"Orc": 1})
+            self.assertEqual(
+                result.stats.compatibility.records[0].status,
+                "unsupported_actor_removed",
+            )
+
+    def test_hidden_but_runtime_loadable_mm9_actor_is_not_marked_unsupported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            lomm_root = self._make_lomm_root(tmp, {
+                "WORLDS/HIDEOUT": self._make_actor_world("Dwarf"),
+            })
+            result = service.convert_level_to_bytes(service.ConvertLevelRequest(
+                mm9_root=mm9_root,
+                lomm_root=lomm_root,
+                level_to_convert="HIDEOUT",
+                converted_level_name="HIDEOUT_MM9",
+                config_path=self._write_config(tmp),
+            ))
+
+            self.assertEqual(
+                [obj.type_str for obj in load_world_from_bytes(result.dat_bytes).objects],
+                ["Dwarf"],
+            )
+            self.assertEqual(result.stats.compatibility.unresolved_actor_count, 0)
+            self.assertEqual(
+                result.stats.compatibility.records[0].status,
+                "same_name_mm9_implementation",
+            )
+
+    def test_legacy_actor_substitution_is_explicit_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            lomm_root = self._make_lomm_root(tmp, {
+                "WORLDS/HIDEOUT": self._make_actor_world("Orc", "LoMMOrc"),
+            })
+            config_path = os.path.join(tmp, "legacy_rules.json")
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "remove_unknown_classes": True,
+                    "patch_class": {},
+                    "convert_class": {
+                        "Orc": {
+                            "template": "WORLDS/MM9LEVEL::MM9",
+                            "new_type": "TestObject",
+                            "preserve": ["Name", "Pos"],
+                        },
+                    },
+                }, f)
+
+            preserved = service.convert_level_to_bytes(service.ConvertLevelRequest(
+                mm9_root=mm9_root,
+                lomm_root=lomm_root,
+                level_to_convert="HIDEOUT",
+                converted_level_name="PRESERVED",
+                config_path=config_path,
+            ))
+            legacy = service.convert_level_to_bytes(service.ConvertLevelRequest(
+                mm9_root=mm9_root,
+                lomm_root=lomm_root,
+                level_to_convert="HIDEOUT",
+                converted_level_name="LEGACY",
+                config_path=config_path,
+                actor_policy="legacy",
+            ))
+
+            self.assertEqual(load_world_from_bytes(preserved.dat_bytes).objects[0].type_str, "Orc")
+            legacy_obj = load_world_from_bytes(legacy.dat_bytes).objects[0]
+            self.assertEqual(legacy_obj.type_str, "TestObject")
+            self.assertEqual(legacy_obj.get("Name"), "LoMMOrc")
+            self.assertEqual(
+                legacy.stats.compatibility.records[0].status,
+                "legacy_actor_substitution",
+            )
+
+    def test_staging_does_not_modify_live_archive_and_blocks_unsupported_actor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            lomm_root = self._make_lomm_root(tmp, {
+                "WORLDS/HIDEOUT": self._make_actor_world("Orc"),
+            })
+            live_worlds = service.validate_mm9_root(mm9_root).worlds_rez
+            with open(live_worlds, "rb") as f:
+                before = f.read()
+
+            result = service.convert_and_stage_level(
+                service.ConvertLevelRequest(
+                    mm9_root=mm9_root,
+                    lomm_root=lomm_root,
+                    level_to_convert="HIDEOUT",
+                    converted_level_name="HIDEOUT_MM9",
+                    config_path=self._write_config(tmp),
+                ),
+                staging_root=os.path.join(tmp, "output"),
+            )
+
+            with open(live_worlds, "rb") as f:
+                self.assertEqual(f.read(), before)
+            self.assertTrue(result.staged)
+            self.assertTrue(os.path.isfile(result.worlds_rez))
+            with open(result.manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(
+                manifest["blocking_issues"][0]["code"],
+                "unsupported_lomm_actors",
+            )
+            with self.assertRaisesRegex(install_manager.InstallError, "marked unsafe"):
+                install_manager.install_batch(
+                    result.stage_dir,
+                    service.validate_mm9_root(mm9_root).data_dir,
+                    os.path.join(tmp, "backups"),
+                )
+
+    def test_live_insertion_refuses_unresolved_actor_without_advanced_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            lomm_root = self._make_lomm_root(tmp, {
+                "WORLDS/HIDEOUT": self._make_actor_world("Orc"),
+            })
+            request = service.ConvertLevelRequest(
+                mm9_root=mm9_root,
+                lomm_root=lomm_root,
+                level_to_convert="HIDEOUT",
+                converted_level_name="HIDEOUT_MM9",
+                config_path=self._write_config(tmp),
+            )
+
+            with self.assertRaisesRegex(
+                service.ConversionServiceError,
+                "Refusing to modify the live game",
+            ):
+                service.convert_and_insert_level(request)
+
     def test_convert_and_insert_adds_level_and_backs_up_original_worlds_rez(self):
         with tempfile.TemporaryDirectory() as tmp:
             mm9_root = self._make_mm9_root(tmp, {
@@ -174,7 +415,14 @@ class LommToMm9ServiceTests(unittest.TestCase):
                 world = load_world_from_bytes(reader.extract_to_bytes("WORLDS/NEWLEVEL"))
             self.assertEqual(world.objects[0].get("Name"), "LoMM")
 
-    def _make_world_with_assets(self, name: str, filename: str = "", skin: str = "", sound: str = "") -> bytes:
+    def _make_world_with_assets(
+        self,
+        name: str,
+        filename: str = "",
+        skin: str = "",
+        sound: str = "",
+        class_name: str = "TestObject",
+    ) -> bytes:
         from mm9_patcher import mm9_patch as patcher
         header = patcher.Header(66, 0, 0, (0,) * 8)
         props = [
@@ -187,7 +435,7 @@ class LommToMm9ServiceTests(unittest.TestCase):
             props.append(patcher.Property("Skin", 0, 0, skin))
         if sound:
             props.append(patcher.Property("AmbientSound", 0, 0, sound))
-        obj = patcher.WorldObject("TestObject", props)
+        obj = patcher.WorldObject(class_name, props)
         world = patcher.World(
             header=header,
             pre_objects=b"",
@@ -384,6 +632,227 @@ class LommToMm9ServiceTests(unittest.TestCase):
             self.assertIn("MODELS.REZ", restore_names)
             self.assertIn("SKINS.REZ", restore_names)
             self.assertIn("SOUNDS.REZ", restore_names)
+
+    def test_stages_implicit_skin_from_lomm_catalog_model_variant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            mm9_data = os.path.join(mm9_root, "data")
+            write_minimal_rez(
+                os.path.join(mm9_data, "MODELS.REZ"),
+                {"MODELS/EXISTING.ABC": b"mm9-model"},
+            )
+            write_minimal_rez(
+                os.path.join(mm9_data, "SKINS.REZ"),
+                {"SKINS/EXISTING.DTX": b"mm9-skin"},
+            )
+
+            lomm_world = self._make_world_with_assets(
+                name="DragonRed0",
+                filename=r"models\DragonRed.abc",
+            )
+            lomm_root = self._make_lomm_root(
+                tmp,
+                {"WORLDS/ISLEOFFIRE": lomm_world},
+            )
+            lomm_data = os.path.join(lomm_root, "Data")
+            write_minimal_rez(
+                os.path.join(lomm_data, "MODELS.REZ"),
+                {"MODELS/DRAGONRED.ABC": b"dragon-model"},
+            )
+            write_minimal_rez(
+                os.path.join(lomm_data, "SKINS.REZ"),
+                {"SKINS/DRAGONRED.DTX": b"dragon-skin"},
+            )
+            lomm_catalog = os.path.join(tmp, "catalog_lomm.json")
+            with open(lomm_catalog, "w", encoding="utf-8") as f:
+                json.dump({
+                    "game": "lomm",
+                    "classes": {},
+                    "summary": {"total_levels": 1},
+                    "model_variants": {
+                        r"models\dragonred.abc": [{
+                            "name": "DragonRed",
+                            "skins": [r"skins\dragonred.dtx"],
+                            "source_keys": [r"asset-name:skins\dragonred.dtx"],
+                        }],
+                    },
+                }, f)
+
+            result = service.convert_and_stage_level(
+                service.ConvertLevelRequest(
+                    mm9_root=mm9_root,
+                    lomm_root=lomm_root,
+                    level_to_convert="ISLEOFFIRE",
+                    converted_level_name="ISLEOFFIRE_MM9",
+                    config_path=self._write_config(tmp),
+                    lomm_catalog_json=lomm_catalog,
+                ),
+                staging_root=os.path.join(tmp, "staging"),
+            )
+
+            self.assertEqual(
+                result.conversion.stats.audit_skins.in_lomm_only,
+                [r"skins\dragonred.dtx"],
+            )
+            implicit = result.conversion.stats.implicit_skin_refs
+            self.assertEqual(len(implicit), 1)
+            self.assertEqual(implicit[0].model, r"models\dragonred.abc")
+            self.assertEqual(implicit[0].skin, r"skins\dragonred.dtx")
+            staged_skins = os.path.join(result.stage_dir, "data", "SKINS.REZ")
+            with rezmgr.RezReader(staged_skins) as reader:
+                self.assertEqual(
+                    reader.extract_to_bytes("SKINS/DRAGONRED.DTX"),
+                    b"dragon-skin",
+                )
+            with open(result.manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            manifest_implicit = manifest["conversion"]["stats"]["implicit_skin_refs"]
+            self.assertEqual(manifest_implicit[0]["variant_name"], "DragonRed")
+            with open(
+                os.path.join(result.stage_dir, "conversion_log.txt"),
+                "r",
+                encoding="utf-8",
+            ) as f:
+                log_content = f.read()
+            self.assertIn("Implicit catalog skin resolutions", log_content)
+            self.assertIn(r"models\dragonred.abc -> skins\dragonred.dtx", log_content)
+
+    def test_stages_princess_class_visual_without_changing_dat_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mm9_root = self._make_mm9_root(tmp)
+            mm9_data = os.path.join(mm9_root, "data")
+            write_minimal_rez(
+                os.path.join(mm9_data, "MODELS.REZ"),
+                {"MODELS/PLAYER/KING.ABC": b"mm9-king"},
+            )
+            write_minimal_rez(
+                os.path.join(mm9_data, "SKINS.REZ"),
+                {"SKINS/EXISTING.DTX": b"mm9-skin"},
+            )
+
+            lomm_world = self._make_world_with_assets(
+                name="Princess0",
+                class_name="Princess",
+                filename=r"models\player\king.abc",
+            )
+            lomm_root = self._make_lomm_root(
+                tmp,
+                {"WORLDS/_RESCUEATTHERUINS": lomm_world},
+            )
+            lomm_data = os.path.join(lomm_root, "Data")
+            write_minimal_rez(
+                os.path.join(lomm_data, "MODELS.REZ"),
+                {"MODELS/PRINCESS.ABC": b"princess-model"},
+            )
+            write_minimal_rez(
+                os.path.join(lomm_data, "SKINS.REZ"),
+                {
+                    "SKINS/PRINCESSBLUE.DTX": b"princess-blue",
+                    "SKINS/PRINCESSGOLD.DTX": b"princess-gold",
+                },
+            )
+            lomm_catalog = os.path.join(tmp, "catalog_lomm.json")
+            with open(lomm_catalog, "w", encoding="utf-8") as f:
+                json.dump({
+                    "game": "lomm",
+                    "classes": {
+                        "Princess": {
+                            "object_lto": {
+                                "hierarchy": ["BaseClass", "Actor", "Princess"],
+                            },
+                        },
+                    },
+                    "object_lto": {
+                        "classes": {
+                            "Princess": {
+                                "hierarchy": ["BaseClass", "Actor", "Princess"],
+                                "runtime_loadable": True,
+                            },
+                        },
+                    },
+                    "summary": {"total_levels": 1},
+                    "model_resources": [r"models\princess.abc"],
+                    "model_variants": {
+                        r"models\princess.abc": [
+                            {
+                                "name": "Princess Blue",
+                                "skins": [r"skins\princessblue.dtx"],
+                                "source_keys": [
+                                    r"asset-name:skins\princessblue.dtx"
+                                ],
+                            },
+                            {
+                                "name": "Princess Gold",
+                                "skins": [r"skins\princessgold.dtx"],
+                                "source_keys": [
+                                    r"asset-name:skins\princessgold.dtx"
+                                ],
+                            },
+                        ],
+                    },
+                }, f)
+
+            result = service.convert_and_stage_level(
+                service.ConvertLevelRequest(
+                    mm9_root=mm9_root,
+                    lomm_root=lomm_root,
+                    level_to_convert="_RESCUEATTHERUINS",
+                    converted_level_name="_RESCUEATTHERUINS_MM9",
+                    config_path=self._write_config(tmp),
+                    lomm_catalog_json=lomm_catalog,
+                ),
+                staging_root=os.path.join(tmp, "staging"),
+            )
+
+            stats = result.conversion.stats
+            self.assertEqual(
+                stats.audit_models.in_lomm_only,
+                [r"models\princess.abc"],
+            )
+            self.assertEqual(
+                stats.audit_skins.in_lomm_only,
+                [r"skins\princessblue.dtx"],
+            )
+            self.assertEqual(
+                stats.preview_actor_visuals["princess"]["model"],
+                r"models\princess.abc",
+            )
+            self.assertEqual(
+                stats.preview_actor_visuals["princess"]["skins"],
+                [r"skins\princessblue.dtx"],
+            )
+            self.assertEqual(stats.compatibility.unresolved_actor_count, 1)
+
+            converted_world = load_world_from_bytes(result.conversion.dat_bytes)
+            self.assertEqual(
+                converted_world.objects[0].get("Filename"),
+                r"models\player\king.abc",
+            )
+            with rezmgr.RezReader(
+                os.path.join(result.stage_dir, "data", "MODELS.REZ")
+            ) as reader:
+                self.assertEqual(
+                    reader.extract_to_bytes("MODELS/PRINCESS.ABC"),
+                    b"princess-model",
+                )
+            with rezmgr.RezReader(
+                os.path.join(result.stage_dir, "data", "SKINS.REZ")
+            ) as reader:
+                self.assertEqual(
+                    reader.extract_to_bytes("SKINS/PRINCESSBLUE.DTX"),
+                    b"princess-blue",
+                )
+            with open(result.manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertTrue(
+                manifest["conversion"]["stats"]["implicit_skin_refs"][0]
+                ["preview_model_override"]
+            )
+            self.assertEqual(
+                manifest["conversion"]["stats"]["preview_actor_visuals"]
+                ["princess"]["model"],
+                r"models\princess.abc",
+            )
 
 
 if __name__ == "__main__":

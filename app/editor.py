@@ -52,6 +52,7 @@ import mm9_patch as patcher
 from core import autodetect
 from core import project as P
 from core import project_io
+from core.game_resources import GameResources
 from features.doors import clone as door_clone
 from features.doors import links as door_links
 from features.dat_editing import compiler_strategy as dat_compiler_strategy
@@ -61,7 +62,13 @@ from features.dat_editing import terrain_reconstruction
 from features.dat_editing import terrain_semantics
 from features.prefabs import import_static as prefab_import
 from features.prefabs import inspector as prefab_inspector
-from catalog import build_catalog_from_rez, load_catalog, save_catalog
+from catalog import (
+    DEFAULT_LOMM_CATALOG_PATH,
+    build_catalog_from_rez,
+    ensure_lomm_catalog,
+    load_catalog,
+    save_catalog,
+)
 from features.presets.manager import PresetStore
 
 # These imports pull in tkinter; they're deferred to _import_gui() below.
@@ -223,10 +230,16 @@ def _import_gui():
 
 class EditorApp:
     def __init__(self, root: tk.Tk, catalog: Dict[str, Any],
-                 paths: Any, catalog_path: Optional[str] = None):
+                 paths: Any, catalog_path: Optional[str] = None,
+                 lomm_catalog_path: Optional[str] = None,
+                 initial_lomm_root: str = ""):
         self.root = root
         self.catalog = catalog
         self.catalog_path = catalog_path
+        self.lomm_catalog_path = (
+            lomm_catalog_path or DEFAULT_LOMM_CATALOG_PATH
+        )
+        self.initial_lomm_root = str(initial_lomm_root or "")
         self.cfg = paths          # GamePaths — kept as self.cfg for compat
         self.resources = paths.resources()
 
@@ -392,10 +405,6 @@ class EditorApp:
         self.level_combo.pack(side="left", padx=4, pady=4)
         self.level_combo.bind("<<ComboboxSelected>>", self._on_level_change)
 
-        tk.Label(bar, text="(3D: F fit · arrows nudge · PgUp/PgDn height · [/] rotate)",
-                 bg="#1a1d22", fg="#888", font=("Segoe UI", 9)
-                 ).pack(side="right", padx=8)
-
         # Three-column body
         body = tk.PanedWindow(self.root, orient="horizontal",
                               bg="#0e1116", sashrelief="flat", sashwidth=4)
@@ -408,6 +417,7 @@ class EditorApp:
             on_select_object = self._on_panel_object_selected,
             on_place_preset  = self._begin_place_preset,
             preset_store     = self.preset_store,
+            on_delete_incompatible = self._delete_all_incompatible_actors,
         )
         self.level_panel.config(width=260)
         body.add(self.level_panel, minsize=200, stretch="never")
@@ -443,7 +453,7 @@ class EditorApp:
                 skins_dir    = skins_dir,
                 models_dir   = models_dir,
                 actor_visuals = self.catalog.get("actor_visuals", {}),
-                on_object_helpers_changed = self._on_view3d_object_helpers_changed,
+                world_helper_metadata = self.catalog.get("classes", {}),
             )
             self.view3d.pack(fill="both", expand=True)
         else:
@@ -501,6 +511,9 @@ class EditorApp:
             pass
 
     def _last_lomm_root(self) -> str:
+        initial = str(getattr(self, "initial_lomm_root", "") or "")
+        if initial and os.path.isdir(initial):
+            return initial
         settings = getattr(self, "editor_settings", {}) or {}
         value = str(settings.get("last_lomm_root") or "")
         return value if value and os.path.isdir(value) else ""
@@ -593,12 +606,12 @@ class EditorApp:
         from ui.rez_picker import RezPicker
         RezPicker(self.root, rez_path, self._open_rez_level)
 
-    def _open_rez_level(self, rez_path: str, virtual_path: str) -> None:
+    def _open_rez_level(self, rez_path: str, virtual_path: str) -> Optional[Any]:
         try:
             L = self.project.add_level_from_rez(rez_path, virtual_path)
         except Exception as e:
             messagebox.showerror("Open failed", str(e))
-            return
+            return None
 
         if self.view3d is not None:
             textures_dir = self._asset_dir(
@@ -626,6 +639,7 @@ class EditorApp:
         self.level_combo["values"] = names
         self.level_var.set(L.display_name)
         self._set_active(L)
+        return L
 
     def cmd_save(self) -> None:
         self._flush_view_transforms()
@@ -659,6 +673,7 @@ class EditorApp:
         try:
             from core import install_manager
             archives = install_manager.archives_to_install(batch_dir)
+            blocking_issues = install_manager.batch_blocking_issues(batch_dir)
         except Exception as e:
             messagebox.showerror("Cannot inspect output batch", str(e))
             return
@@ -668,6 +683,21 @@ class EditorApp:
                 f"No patched .REZ files were found under:\n{os.path.join(batch_dir, 'data')}")
             return
         archive_names = [os.path.basename(path) for path in archives]
+        allow_blocking_issues = False
+        if blocking_issues:
+            details = "\n".join(
+                f"  - {issue.get('message') or issue.get('code')}"
+                for issue in blocking_issues
+            )
+            allow_blocking_issues = messagebox.askyesno(
+                "Advanced override: incompatible LoMM actors",
+                "This batch contains conversion issues that MM9 cannot display:\n\n"
+                f"{details}\n\n"
+                "Installing anyway is an advanced override. Continue?",
+                icon="warning",
+            )
+            if not allow_blocking_issues:
+                return
 
         if not messagebox.askyesno(
             "Install output to game?",
@@ -682,6 +712,7 @@ class EditorApp:
                 batch_dir=batch_dir,
                 game_data_dir=game_data_dir,
                 backup_root=getattr(self.cfg, "backup_root", None),
+                allow_blocking_issues=allow_blocking_issues,
             )
         except Exception as e:
             messagebox.showerror("Install failed", str(e))
@@ -754,7 +785,7 @@ class EditorApp:
         self._refresh_after_edit(self._selected_world_index)
 
     def cmd_toggle_object_helpers(self) -> None:
-        """Mirror the 3-D toolbar Helpers toggle from the View menu."""
+        """Show or hide billboards for objects with visible 3-D models."""
         if self.view3d is None:
             return
         self.view3d.set_show_object_helper_billboards(
@@ -802,25 +833,35 @@ class EditorApp:
             self.root,
             mm9_root=mm9_root,
             backup_root=getattr(self.cfg, "backup_root", None),
+            staging_root=getattr(self.cfg, "work_dir", None),
             catalog_json=self.catalog_path,
+            lomm_catalog_json=getattr(
+                self, "lomm_catalog_path", DEFAULT_LOMM_CATALOG_PATH,
+            ),
             initial_lomm_root=self._last_lomm_root(),
             on_success=self._on_lomm_conversion_success,
         )
 
     def _on_lomm_conversion_success(self, result: Any, lomm_root: str = "") -> None:
-        """Open the newly inserted MM9 level after a LoMM conversion."""
+        """Open the staged MM9 level after a LoMM conversion."""
         self._remember_lomm_root(lomm_root)
         try:
-            self._open_rez_level(result.worlds_rez, result.added_virtual_path)
+            level = self._open_rez_level(result.worlds_rez, result.added_virtual_path)
+            stats = getattr(getattr(result, "conversion", None), "stats", None)
+            compatibility = getattr(stats, "compatibility", None)
+            if level is not None and compatibility is not None:
+                from conversion.lomm_to_mm9_service import _compatibility_report_dict
+                level.conversion_report = _compatibility_report_dict(compatibility)
+                level.conversion_stage_dir = str(getattr(result, "stage_dir", "") or "")
+                level.preview_actor_visuals = copy.deepcopy(
+                    getattr(stats, "preview_actor_visuals", {}) or {}
+                )
+                self._set_active(level)
         except Exception as exc:
             messagebox.showerror(
                 "Open converted level failed",
                 str(exc),
             )
-
-    def _on_view3d_object_helpers_changed(self, enabled: bool) -> None:
-        """Keep View menu state synced when the toolbar button is clicked."""
-        self._view_object_helpers_var.set(bool(enabled))
 
     def cmd_save_project(self) -> None:
         """Save the current project (levels + ops) to a .mm9mod JSON file."""
@@ -882,6 +923,7 @@ class EditorApp:
         self.active = L
         self._selected_world_index = None
         if self.view3d:
+            self._update_view_assets_for_level(L)
             self.view3d.set_active_level(L)
         self.level_panel.set_active_level(L)
         self.props_panel.show(None)
@@ -2411,6 +2453,29 @@ class EditorApp:
         self._selected_world_index = None
         self._refresh_after_edit(None)
 
+    def _delete_all_incompatible_actors(self) -> None:
+        L = self.active
+        if not L:
+            return
+        unresolved = L.unresolved_conversion_indices()
+        already_deleted = {
+            op.target_index for op in L.ops if isinstance(op, P.DeleteOp)
+        }
+        targets = sorted(unresolved - already_deleted)
+        if not targets:
+            return
+        if not messagebox.askyesno(
+            "Delete incompatible LoMM actors?",
+            f"Delete {len(targets)} actor(s) that MM9 cannot construct?\n\n"
+            "This is an editor operation and can be undone before saving.",
+        ):
+            return
+        for index in targets:
+            L.append_op(P.DeleteOp(target_index=index))
+        self.props_panel.show(None)
+        self._selected_world_index = None
+        self._refresh_after_edit(None)
+
     def _on_object_positioned(self, world_index: int,
                               new_wx: float, new_wy: float,
                               new_wz: float) -> None:
@@ -2587,10 +2652,17 @@ class EditorApp:
     # ---------- helpers ----------
 
     def _asset_dir(self, archive_key: str,
-                   virtual_root: str, extensions) -> Optional[str]:
+                   virtual_root: str, extensions,
+                   archive_path: Optional[str] = None) -> Optional[str]:
         """Return a cached REZ-backed asset directory."""
         try:
-            return self.resources.cache_archive_tree(
+            resources = self.resources
+            if archive_path:
+                resources = GameResources(
+                    archives={archive_key: archive_path},
+                    cache_dir=getattr(self.resources, "cache_dir", None),
+                )
+            return resources.cache_archive_tree(
                 archive_key=archive_key,
                 virtual_root=virtual_root,
                 extensions=extensions,
@@ -2601,6 +2673,51 @@ class EditorApp:
                 file=sys.stderr,
             )
             return None
+
+    def _level_asset_archive(
+        self,
+        level: Optional[P.LevelEdit],
+        archive_key: str,
+    ) -> Optional[str]:
+        """Prefer a converted level's complete staged asset archive."""
+        archive_name = {
+            "models": "MODELS.REZ",
+            "skins": "SKINS.REZ",
+        }.get(archive_key)
+        stage_dir = str(
+            getattr(level, "conversion_stage_dir", "") or ""
+        )
+        if archive_name and stage_dir:
+            staged = os.path.join(stage_dir, "data", archive_name)
+            if os.path.isfile(staged):
+                return staged
+        return self.resources.archives.get(archive_key)
+
+    def _update_view_assets_for_level(
+        self,
+        level: Optional[P.LevelEdit],
+    ) -> None:
+        """Switch model/skin caches between live and staged complete archives."""
+        if self.view3d is None:
+            return
+        models_rez = self._level_asset_archive(level, "models")
+        skins_rez = self._level_asset_archive(level, "skins")
+        models_dir = self._asset_dir(
+            "models", "MODELS", (".ABC",), archive_path=models_rez,
+        )
+        skins_dir = self._asset_dir(
+            "skins", "SKINS", (".DTX",), archive_path=skins_rez,
+        )
+        self.view3d.update_asset_directories(
+            models_dir=models_dir,
+            skins_dir=skins_dir,
+        )
+        if hasattr(self.view3d, "update_actor_visuals"):
+            actor_visuals = dict(self.catalog.get("actor_visuals") or {})
+            actor_visuals.update(
+                getattr(level, "preview_actor_visuals", {}) or {}
+            )
+            self.view3d.update_actor_visuals(actor_visuals)
 
     def _load_world_from_resource_level(
         self,
@@ -2781,6 +2898,22 @@ def main(argv=None):
     p.add_argument("--game-root", default=None,
                    help="Path to the Might and Magic IX install folder. "
                         "If omitted, the editor checks its own folder and parent.")
+    p.add_argument(
+        "--lomm-root",
+        default=None,
+        help=(
+            "Path to the Legends of Might and Magic install folder. When the "
+            "LoMM catalog is missing, it is built automatically from this install."
+        ),
+    )
+    p.add_argument(
+        "--lomm-catalog",
+        default=DEFAULT_LOMM_CATALOG_PATH,
+        help=(
+            "Path to catalog_lomm.json (built atomically when missing and a "
+            "valid --lomm-root is provided)."
+        ),
+    )
     args = p.parse_args(argv)
 
     # ---------- Resolve editor-local paths ----------
@@ -2826,9 +2959,27 @@ def main(argv=None):
                 file=sys.stderr,
             )
             return 2
-        save_catalog(cat_dict)
+        save_catalog(cat_dict, args.catalog)
         print(f"  catalog saved to {args.catalog}")
     catalog = load_catalog(args.catalog)
+
+    # ---------- Validate LoMM root / build its optional catalog ----------
+    lomm_root = ""
+    if args.lomm_root:
+        try:
+            from conversion.lomm_to_mm9_service import validate_lomm_root
+
+            lomm_install = validate_lomm_root(args.lomm_root)
+            lomm_root = lomm_install.root
+            _lomm_catalog, generated = ensure_lomm_catalog(
+                lomm_root,
+                args.lomm_catalog,
+            )
+            if generated:
+                print(f"  LoMM catalog saved to {args.lomm_catalog}")
+        except Exception as exc:
+            print(f"ERROR: could not prepare LoMM catalog: {exc}", file=sys.stderr)
+            return 2
 
     # ---------- Launch GUI ----------
     _import_gui()
@@ -2842,7 +2993,14 @@ def main(argv=None):
                 + "\n\nThis is just a heads-up - the editor will work normally.")
         root.after(200, _show_warnings)
 
-    app = EditorApp(root, catalog, paths, catalog_path=args.catalog)
+    app = EditorApp(
+        root,
+        catalog,
+        paths,
+        catalog_path=args.catalog,
+        lomm_catalog_path=args.lomm_catalog,
+        initial_lomm_root=lomm_root,
+    )
     root.mainloop()
     return 0
 

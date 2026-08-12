@@ -125,6 +125,7 @@ class Camera:
         self._yaw        = 0.0   # radians, rotation around world Y
         self._pitch      = 0.0   # radians, above/below horizon  (±π/2)
         self.fly_speed   = 500.0 # world units per second
+        self._orbit_distance = float(np.linalg.norm(self.target - self.eye))
 
     # ------------------------------------------------------------------
     # Matrices
@@ -141,6 +142,32 @@ class Camera:
     def mvp(self, aspect: float) -> np.ndarray:
         """Projection × View (use as MVP when Model == identity)."""
         return self.proj_matrix(aspect) @ self.view_matrix()
+
+    def view_direction(self) -> np.ndarray:
+        """Return the normalized current eye-to-target direction."""
+        direction = self.target - self.eye
+        length = float(np.linalg.norm(direction))
+        if length < 1.0e-10:
+            return np.array([0.0, 0.0, -1.0], dtype=np.float32)
+        return (direction / length).astype(np.float32)
+
+    def mvp_from_eye(
+        self,
+        eye: Tuple[float, float, float],
+        aspect: float,
+        near: float,
+        far: float,
+    ) -> np.ndarray:
+        """Project from another eye while preserving this camera's heading/FOV."""
+        sky_eye = np.asarray(eye, dtype=np.float32)
+        view = _look_at(sky_eye, sky_eye + self.view_direction(), self._world_up)
+        projection = _perspective(
+            self.fov,
+            max(float(aspect), 0.01),
+            max(float(near), 1.0e-4),
+            max(float(far), float(near) + 1.0),
+        )
+        return projection @ view
 
     # ------------------------------------------------------------------
     # Orbit controls  (active in 'orbit' mode)
@@ -224,6 +251,20 @@ class Camera:
         forward = np.array([sy * cp, sp, -cy * cp], dtype=np.float32)
         self.target = (self.eye + forward).astype(np.float32)
 
+    def fly_dolly(self, distance: float) -> None:
+        """Move along the current fly viewing direction by world units."""
+        direction = self.target - self.eye
+        length = float(np.linalg.norm(direction))
+        if length < 1.0e-10:
+            cy, sy = math.cos(self._yaw), math.sin(self._yaw)
+            cp, sp = math.cos(self._pitch), math.sin(self._pitch)
+            direction = np.array([sy * cp, sp, -cy * cp], dtype=np.float32)
+        else:
+            direction = (direction / length).astype(np.float32)
+        delta = direction * float(distance)
+        self.eye = (self.eye + delta).astype(np.float32)
+        self.target = (self.target + delta).astype(np.float32)
+
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
@@ -249,6 +290,10 @@ class Camera:
         self.eye    = (centre + np.array(
             [0.0, size * _FIT_HEIGHT_SCALE, dist],
             dtype=np.float32)).astype(np.float32)
+        self._orbit_distance = max(
+            float(np.linalg.norm(self.target - self.eye)),
+            self.near * 4.0,
+        )
 
         # Keep near/far sensible for this level's scale
         self.near = max(dist * 0.001, 1.0)
@@ -318,15 +363,35 @@ class Camera:
 
     def set_mode(self, mode: str) -> None:
         """
-        Switch between 'orbit' and 'fly'.  When switching to fly, the
-        yaw/pitch are derived from the current eye→target direction so
-        the view does not jump.
+        Switch between 'orbit' and 'fly' without changing the visible heading.
+
+        Fly mode keeps its target one unit ahead of the eye.  The most recent
+        orbit distance is therefore retained separately and used to rebuild a
+        practical orbit pivot along the current heading when returning.
         """
         if mode not in ("orbit", "fly") or mode == self.mode:
             return
-        self.mode = mode
         if mode == "fly":
             d = self.target - self.eye
-            d = d / (np.linalg.norm(d) + 1e-15)
+            distance = float(np.linalg.norm(d))
+            if distance > 1.0e-10:
+                self._orbit_distance = distance
+                d = d / distance
+            else:
+                d = np.array([0.0, 0.0, -1.0], dtype=np.float32)
             self._pitch = float(math.asin(float(np.clip(d[1], -1.0, 1.0))))
             self._yaw   = float(math.atan2(float(d[0]), -float(d[2])))
+            self.target = (self.eye + d).astype(np.float32)
+        else:
+            d = self.target - self.eye
+            distance = float(np.linalg.norm(d))
+            if distance < 1.0e-10:
+                cy, sy = math.cos(self._yaw), math.sin(self._yaw)
+                cp, sp = math.cos(self._pitch), math.sin(self._pitch)
+                d = np.array([sy * cp, sp, -cy * cp], dtype=np.float32)
+            else:
+                d = (d / distance).astype(np.float32)
+            self.target = (
+                self.eye + d * max(self._orbit_distance, self.near * 4.0)
+            ).astype(np.float32)
+        self.mode = mode

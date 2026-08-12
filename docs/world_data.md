@@ -8,8 +8,9 @@
   `NPCNbr`, `Scale`, `RangeAttackType`, `TrapLevel`, `TreasureLevel`, and
   several treasure fields can use this pattern.
 - `MoveToFloor` is an engine-side object property, not an editor-only flag.
-  The editor exposes it as a checkbox but does not simulate all runtime
-  physics behavior.
+  The viewport previews its initial runtime placement using the ABC
+  animation `UserDims` and solid BSP collision surfaces. Dynamic object-on-
+  object physics after level startup is still outside the editor simulation.
 
 
 ## Treasure Chests
@@ -371,16 +372,31 @@ Confirmed ABC details:
 - Several character ABCs use old `compression_type=0xFFFFFFFF` raw
   `NodeKeyFrame` animation data.
 - Static pose baking uses frame 0 of `stand*` or `idle*` when present.
+- Static pose baking preserves the ABC's authored model-space vertex normals;
+  only models without valid normals fall back to flat per-triangle shading.
+- Rigid `NoAnimation` props use their saved model-space vertex positions. This
+  preserves the authored pivot instead of drawing Bone01-local coordinates.
+- Animation `UserDims` are retained and used for `MoveToFloor` placement.
+  Static furniture whose DAT position is authored directly on a solid support
+  keeps that position as its model-bottom anchor.
+- Rigid models with a data-detectable bottom-oriented source pivot (including
+  MM9 vegetation) retain the exact raw-to-saved ABC Y offset when positioned.
+  Placement raycasts ignore solid AI/helper materials such as `Rail.dtx`.
+- Object-model lighting is transformed into model space per instance so yaw,
+  scale, and the viewport coordinate reflection do not rotate lighting away
+  from the geometry.
 - Node transforms use column translation; using row-vector math collapses
   animated characters into imploded-looking geometry.
-- Animated top-level character vertices observed so far use 0-based bone
-  indices; rigid props often use 1-based indices.
+- ABC vertex weight node indices are direct and zero-based. Rigid props often
+  reference node 1 (`Bone01`) because node 0 is their `Scene Root`; subtracting
+  one from that value assigns the geometry to the wrong node.
 
 
 # Issues to fix
 
- - CandleProp are not rendered in any level (examples: 1000TERRORS.DAT). CandleProps
-   have visible = 0, so perhaps this is the intended behavior? Requires investigation.
+ - Invisible CandleProp controller instances (`Visible=0`) intentionally have
+   neither a model nor a fallback billboard in the viewport. They remain
+   addressable through the object list and display a marker while selected.
  - Levels are mirrored between the editor and the game. Example: added an ExitTrigger
    to the left side of the peasant in the BOOTCAMP, but in the game it appears to the right side
  - In order to see the changes in the game, a new game has to be started. It looks like the

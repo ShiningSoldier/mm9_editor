@@ -4,8 +4,8 @@ lomm_to_mm9_service.py
 
 Reusable LoMM-to-MM9 conversion helpers for both the standalone CLI and the
 editor UI.  This module owns install-root validation, LoMM WORLDS.REZ level
-discovery, conversion to serialized MM9 DAT bytes, and transactional insertion
-into MM9's live WORLDS.REZ with an automatic backup.
+discovery, conversion to serialized MM9 DAT bytes, non-destructive editor
+staging, and the backward-compatible transactional CLI insertion path.
 """
 
 from __future__ import annotations
@@ -21,8 +21,10 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import _path_setup  # noqa: F401
 from core import rezmgr
 from mm9_patcher.mm9_patch import World
+from catalog import ensure_lomm_catalog
 
 from conversion import lomm_to_mm9 as converter
+from conversion.runtime_registry import load_runtime_registry
 
 
 REQUIRED_MM9_ARCHIVES = {
@@ -84,6 +86,8 @@ class ConvertLevelRequest:
     converted_level_name: str
     config_path: Optional[str] = None
     catalog_json: Optional[str] = None
+    lomm_catalog_json: Optional[str] = None
+    actor_policy: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,8 @@ class InsertConvertedLevelResult:
     temp_output_path: str
     added_virtual_path: str
     log: Sequence[str]
+    staged: bool = False
+    stage_dir: str = ""
 
 
 def validate_mm9_root(root: str) -> Mm9Install:
@@ -265,6 +271,20 @@ def convert_level_to_bytes(request: ConvertLevelRequest) -> ConvertLevelResult:
     """Convert a LoMM level to MM9 DAT bytes without writing a REZ archive."""
     mm9 = validate_mm9_root(request.mm9_root)
     lomm = validate_lomm_root(request.lomm_root)
+    lomm_catalog_json = request.lomm_catalog_json
+    if lomm_catalog_json:
+        try:
+            _catalog, _generated = ensure_lomm_catalog(
+                lomm.root,
+                lomm_catalog_json,
+            )
+            lomm_catalog_json = os.path.abspath(
+                os.path.expanduser(lomm_catalog_json)
+            )
+        except Exception as exc:
+            raise ConversionServiceError(
+                f"Could not prepare LoMM catalog: {exc}"
+            ) from exc
     source = find_lomm_level(lomm.root, request.level_to_convert)
     output_vpath = ensure_output_level_available(mm9.root, request.converted_level_name)
 
@@ -284,6 +304,30 @@ def convert_level_to_bytes(request: ConvertLevelRequest) -> ConvertLevelResult:
         with rezmgr.RezReader(lomm.worlds_rez) as reader:
             src_world = _world_from_bytes(reader.extract_to_bytes(source.virtual_path))
 
+        target_observed = catalog.class_names(
+            exclude_basename=os.path.basename(source.virtual_path),
+        )
+        target_registry = load_runtime_registry(
+            object_lto=_find_child_file(mm9.data_dir, "object.lto"),
+            catalog_json=(
+                catalog_json
+                or (converter.DEFAULT_CATALOG if os.path.isfile(converter.DEFAULT_CATALOG) else None)
+            ),
+            observed_classes=target_observed,
+        )
+        source_registry = load_runtime_registry(
+            object_lto=_find_child_file(lomm.data_dir, "object.lto"),
+            catalog_json=(
+                lomm_catalog_json
+                or (
+                    converter.DEFAULT_LOMM_CATALOG
+                    if os.path.isfile(converter.DEFAULT_LOMM_CATALOG)
+                    else None
+                )
+            ),
+            observed_classes=(obj.type_str for obj in src_world.objects),
+        )
+
         try:
             stats = converter.convert(
                 src_world=src_world,
@@ -297,6 +341,10 @@ def convert_level_to_bytes(request: ConvertLevelRequest) -> ConvertLevelResult:
                 lomm_models_rez=lomm.models_rez,
                 lomm_skins_rez=lomm.skins_rez,
                 lomm_sounds_rez=lomm.sounds_rez,
+                source_registry=source_registry,
+                target_registry=target_registry,
+                actor_policy=request.actor_policy,
+                lomm_catalog_json=lomm_catalog_json,
             )
         except (LookupError, ValueError) as exc:
             raise ConversionServiceError(f"Conversion failed: {exc}") from exc
@@ -385,6 +433,47 @@ def _extract_asset(
     return None
 
 
+def _collect_asset_updates(
+    conversion: ConvertLevelResult,
+    mm9: Mm9Install,
+    lomm: LommInstall,
+) -> Tuple[Dict[str, List[Tuple[str, bytes, int]]], Dict[str, list]]:
+    """Resolve LoMM-only referenced assets for archive staging/insertion."""
+    configs = [
+        (conversion.stats.audit_models.in_lomm_only, "MODELS", mm9.models_rez, "MODELS.REZ", lomm.models_rez),
+        (conversion.stats.audit_skins.in_lomm_only, "SKINS", mm9.skins_rez, "SKINS.REZ", lomm.skins_rez),
+        (conversion.stats.audit_sounds.in_lomm_only, "SOUNDS", mm9.sounds_rez, "SOUNDS.REZ", lomm.sounds_rez),
+    ]
+    updates_by_rez: Dict[str, List[Tuple[str, bytes, int]]] = {}
+    copied_assets: Dict[str, list] = {"MODELS": [], "SKINS": [], "SOUNDS": []}
+    for refs, subdir, target_rez_path, target_rez_name, lomm_rez_path in configs:
+        if not refs:
+            continue
+        if not target_rez_path or not os.path.isfile(target_rez_path):
+            raise ConversionServiceError(
+                f"Cannot copy missing assets of type {subdir} because the target "
+                f"archive {target_rez_name} is missing from the MM9 installation."
+            )
+        for ref in refs:
+            stem, _ = converter._normalize_asset_path(ref)
+            extracted = _extract_asset(lomm.data_dir, subdir, lomm_rez_path, stem)
+            if extracted is None:
+                raise ConversionServiceError(
+                    f"Failed to find missing asset {ref!r} in LoMM files or archives."
+                )
+            vpath, data, restype_val = extracted
+            is_loose = _find_loose_asset(lomm.data_dir, subdir, stem) is not None
+            source_desc = (
+                "loose file" if is_loose
+                else f"archive {os.path.basename(lomm_rez_path or '')}"
+            )
+            copied_assets[subdir].append((ref, vpath, source_desc))
+            updates_by_rez.setdefault(target_rez_path, []).append(
+                (vpath, data, restype_val)
+            )
+    return updates_by_rez, copied_assets
+
+
 def _verify_inserted_assets(rez_path: str, added_paths: List[str]) -> None:
     with rezmgr.RezReader(rez_path) as reader:
         for p in added_paths:
@@ -399,12 +488,52 @@ def _write_conversion_log(
     backup_dir: str,
     copied_assets: dict,
     log_lines: List[str],
+    conversion: Optional[ConvertLevelResult] = None,
 ) -> str:
     log_path = os.path.join(os.path.dirname(backup_dir), "conversion_log.txt")
     lines = []
     lines.append("=== LoMM to MM9 Conversion Log ===")
     lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
+    if conversion is not None:
+        report = conversion.stats.compatibility
+        lines.append("--- Actor compatibility ---")
+        lines.append(f"  Policy: {report.actor_policy}")
+        lines.append(f"  LoMM registry: {report.source_registry}")
+        lines.append(f"  MM9 registry: {report.target_registry}")
+        for status, count in sorted(report.status_counts.items()):
+            lines.append(f"  {status}: {count}")
+        if report.unresolved_actor_classes:
+            lines.append(
+                "  Unsupported classes: "
+                + ", ".join(report.unresolved_actor_classes)
+            )
+        for warning in report.registry_warnings:
+            lines.append(f"  Registry warning: {warning}")
+        lines.append("")
+        lines.append("--- Implicit catalog skin resolutions ---")
+        if not conversion.stats.implicit_skin_refs:
+            lines.append("  (none)")
+        for record in conversion.stats.implicit_skin_refs:
+            lines.append(
+                f"  {record.object_class} {record.object_name}: "
+                f"{record.model} -> {record.skin}"
+            )
+            lines.append(f"  Variant: {record.variant_name or '(unnamed)'}")
+            lines.append(f"  Catalog: {record.catalog_source}")
+            if record.source_keys:
+                lines.append("  Sources: " + ", ".join(record.source_keys))
+        lines.append("")
+        lines.append("--- Editor-only actor visual overrides ---")
+        if not conversion.stats.preview_actor_visuals:
+            lines.append("  (none)")
+        for key, visual in sorted(conversion.stats.preview_actor_visuals.items()):
+            lines.append(
+                f"  {key}: {visual.get('model') or '(no model)'}"
+                f" -> {', '.join(visual.get('skins') or ()) or '(no skin)'}"
+            )
+            lines.append(f"  Reason: {visual.get('quirk') or 'catalog preview mapping'}")
+        lines.append("")
     
     total_copied = 0
     for subdir in ["MODELS", "SKINS", "SOUNDS"]:
@@ -431,9 +560,21 @@ def _write_conversion_log(
 def convert_and_insert_level(
     request: ConvertLevelRequest,
     backup_root: Optional[str] = None,
+    allow_incompatible_actors: bool = False,
 ) -> InsertConvertedLevelResult:
     """Convert a LoMM level and add it to MM9 WORLDS.REZ transactionally."""
     conversion = convert_level_to_bytes(request)
+    unresolved = conversion.stats.compatibility.unresolved_actor_count
+    if unresolved and not allow_incompatible_actors:
+        classes = ", ".join(
+            conversion.stats.compatibility.unresolved_actor_classes
+        )
+        raise ConversionServiceError(
+            f"Refusing to modify the live game: {unresolved} LoMM actor(s) are "
+            f"not registered by MM9 ({classes}). Use editor staging to remove "
+            "them, choose another actor policy, or explicitly allow incompatible "
+            "actors in the live-insertion API."
+        )
     mm9 = validate_mm9_root(request.mm9_root)
     lomm = validate_lomm_root(request.lomm_root)
     _ensure_output_vpath_available_in_rez(mm9.worlds_rez, conversion.output_virtual_path)
@@ -451,47 +592,10 @@ def convert_and_insert_level(
     backup_dir = os.path.join(backup_base, f"lomm_to_mm9_{stamp}", "data")
     log: List[str] = []
 
-    # 1. Identify missing models, skins, and sounds, and resolve them
-    missing_assets_configs = [
-        # (audit_list, subdir, target_rez_path, target_rez_name, lomm_rez_path)
-        (conversion.stats.audit_models.in_lomm_only, "MODELS", mm9.models_rez, "MODELS.REZ", lomm.models_rez),
-        (conversion.stats.audit_skins.in_lomm_only, "SKINS", mm9.skins_rez, "SKINS.REZ", lomm.skins_rez),
-        (conversion.stats.audit_sounds.in_lomm_only, "SOUNDS", mm9.sounds_rez, "SOUNDS.REZ", lomm.sounds_rez),
-    ]
-
-    copied_assets_by_type = {
-        "MODELS": [],
-        "SKINS": [],
-        "SOUNDS": [],
-    }
-
-    updates_by_rez = {}
-
-    for refs, subdir, target_rez_path, target_rez_name, lomm_rez_path in missing_assets_configs:
-        if not refs:
-            continue
-        if not target_rez_path or not os.path.isfile(target_rez_path):
-            raise ConversionServiceError(
-                f"Cannot copy missing assets of type {subdir} because the target "
-                f"archive {target_rez_name} is missing from the MM9 installation."
-            )
-        
-        for ref in refs:
-            stem, _ = converter._normalize_asset_path(ref)
-            extracted = _extract_asset(lomm.data_dir, subdir, lomm_rez_path, stem)
-            if extracted is None:
-                raise ConversionServiceError(
-                    f"Failed to find missing asset {ref!r} in LoMM files or archives."
-                )
-            vpath, data, restype_val = extracted
-            
-            is_loose = _find_loose_asset(lomm.data_dir, subdir, stem) is not None
-            source_desc = "loose file" if is_loose else f"archive {os.path.basename(lomm_rez_path)}"
-            copied_assets_by_type[subdir].append((ref, vpath, source_desc))
-            
-            if target_rez_path not in updates_by_rez:
-                updates_by_rez[target_rez_path] = []
-            updates_by_rez[target_rez_path].append((vpath, data, restype_val))
+    # 1. Identify missing models, skins, and sounds, and resolve them.
+    updates_by_rez, copied_assets_by_type = _collect_asset_updates(
+        conversion, mm9, lomm,
+    )
 
     # 2. Build transactions
     transactions: List[RezTransaction] = []
@@ -555,7 +659,9 @@ def convert_and_insert_level(
 
         # Step 5: Write log and manifest
         try:
-            _write_conversion_log(backup_dir, copied_assets_by_type, log)
+            _write_conversion_log(
+                backup_dir, copied_assets_by_type, log, conversion=conversion,
+            )
         except Exception as exc:
             log.append(f"warning: could not write conversion log: {exc}")
 
@@ -603,6 +709,89 @@ def convert_and_insert_level(
         temp_output_path=temp_output_worlds,
         added_virtual_path=conversion.output_virtual_path,
         log=tuple(log),
+    )
+
+
+def convert_and_stage_level(
+    request: ConvertLevelRequest,
+    staging_root: str,
+) -> InsertConvertedLevelResult:
+    """Build installable patched archives without modifying the live game.
+
+    The resulting folder uses the same ``data/*.REZ`` + ``manifest.json``
+    layout as normal editor save batches, so it can be inspected and edited
+    before the existing installer is invoked.
+    """
+    conversion = convert_level_to_bytes(request)
+    mm9 = validate_mm9_root(request.mm9_root)
+    lomm = validate_lomm_root(request.lomm_root)
+    restype = rezmgr.restype_for_format_magic(conversion.dat_bytes[:4])
+    if restype is None:
+        raise ConversionServiceError("Converted level did not serialize as a DAT file.")
+
+    if not str(staging_root or "").strip():
+        raise ConversionServiceError("A conversion staging folder was not provided.")
+    root = os.path.abspath(os.path.expanduser(staging_root))
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stage_dir = os.path.join(root, f"lomm_to_mm9_{stamp}")
+    if os.path.exists(stage_dir):
+        base = os.path.join(root, f"lomm_to_mm9_{stamp}_{os.getpid()}")
+        stage_dir = base
+        suffix = 2
+        while os.path.exists(stage_dir):
+            stage_dir = f"{base}_{suffix}"
+            suffix += 1
+    data_dir = os.path.join(stage_dir, "data")
+    os.makedirs(data_dir, exist_ok=False)
+
+    updates_by_rez, copied_assets = _collect_asset_updates(conversion, mm9, lomm)
+    archive_updates: Dict[str, List[Tuple[str, bytes, int]]] = {
+        mm9.worlds_rez: [
+            (conversion.output_virtual_path, conversion.dat_bytes, restype),
+        ],
+        **updates_by_rez,
+    }
+    log: List[str] = []
+    output_archives: List[Tuple[str, str]] = []
+    try:
+        for source_rez, updates in archive_updates.items():
+            output_rez = os.path.join(data_dir, os.path.basename(source_rez))
+            with rezmgr.RezWriter(source_rez, output_rez) as writer:
+                for vpath, data, restype_val in updates:
+                    writer.add(vpath, data, restype=restype_val)
+                writer.commit()
+            if os.path.basename(source_rez).upper() == "WORLDS.REZ":
+                _verify_inserted_level(output_rez, conversion.output_virtual_path)
+            else:
+                _verify_inserted_assets(output_rez, [item[0] for item in updates])
+            output_archives.append((source_rez, output_rez))
+            log.append(f"staged patched {os.path.basename(source_rez)} at {output_rez}")
+
+        _write_conversion_log(data_dir, copied_assets, log, conversion=conversion)
+        manifest_path = _write_staging_manifest(
+            request=request,
+            conversion=conversion,
+            mm9=mm9,
+            stage_dir=stage_dir,
+            output_archives=output_archives,
+            stamp=stamp,
+        )
+        log.append(f"wrote staging manifest {manifest_path}")
+    except Exception as exc:
+        raise ConversionServiceError(f"Failed to stage converted level: {exc}") from exc
+
+    staged_worlds = os.path.join(data_dir, "WORLDS.REZ")
+    return InsertConvertedLevelResult(
+        conversion=conversion,
+        worlds_rez=staged_worlds,
+        backup_path="",
+        backup_dir="",
+        manifest_path=manifest_path,
+        temp_output_path=staged_worlds,
+        added_virtual_path=conversion.output_virtual_path,
+        log=tuple(log),
+        staged=True,
+        stage_dir=stage_dir,
     )
 
 
@@ -746,6 +935,62 @@ def _write_conversion_manifest(
     return path
 
 
+def _write_staging_manifest(
+    request: ConvertLevelRequest,
+    conversion: ConvertLevelResult,
+    mm9: Mm9Install,
+    stage_dir: str,
+    output_archives: List[Tuple[str, str]],
+    stamp: str,
+) -> str:
+    compatibility = conversion.stats.compatibility
+    blocking_issues = []
+    if compatibility.unresolved_actor_count:
+        classes = ", ".join(compatibility.unresolved_actor_classes)
+        blocking_issues.append({
+            "code": "unsupported_lomm_actors",
+            "message": (
+                f"{compatibility.unresolved_actor_count} LoMM actor(s) are not "
+                f"registered by MM9: {classes}. Remove or replace them before install."
+            ),
+            "count": compatibility.unresolved_actor_count,
+            "classes": compatibility.unresolved_actor_classes,
+        })
+    archives = []
+    for source_rez, output_rez in output_archives:
+        archives.append({
+            "source_archive": source_rez,
+            "output_archive": output_rez,
+            "batch_relative": os.path.relpath(output_rez, stage_dir).replace("\\", "/"),
+            "archive_name": os.path.basename(output_rez),
+        })
+    doc = {
+        "version": 1,
+        "batch_id": os.path.basename(stage_dir),
+        "created_at": stamp,
+        "kind": "lomm_to_mm9",
+        "archives": archives,
+        "loose_files": [],
+        "blocking_issues": blocking_issues,
+        "conversion": {
+            "kind": "lomm_to_mm9",
+            "mm9_root": mm9.root,
+            "lomm_root": os.path.abspath(os.path.expanduser(request.lomm_root)),
+            "source_level": request.level_to_convert,
+            "source_virtual_path": conversion.source_virtual_path,
+            "converted_level_name": request.converted_level_name,
+            "added_virtual_path": conversion.output_virtual_path,
+            "objects_after": conversion.object_count,
+            "dat_size": len(conversion.dat_bytes),
+            "stats": _conversion_stats_dict(conversion.stats),
+        },
+    }
+    path = os.path.join(stage_dir, "manifest.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, ensure_ascii=False)
+    return path
+
+
 def _conversion_stats_dict(stats: converter.ConversionStats) -> dict:
     return {
         "removed_by_class": dict(stats.removed_by_class),
@@ -757,6 +1002,48 @@ def _conversion_stats_dict(stats: converter.ConversionStats) -> dict:
         "audit_models": _asset_audit_dict(stats.audit_models),
         "audit_skins": _asset_audit_dict(stats.audit_skins),
         "audit_sounds": _asset_audit_dict(stats.audit_sounds),
+        "implicit_skin_refs": [
+            {
+                "model": record.model,
+                "skin": record.skin,
+                "object_class": record.object_class,
+                "object_name": record.object_name,
+                "variant_name": record.variant_name,
+                "source_keys": list(record.source_keys),
+                "catalog_source": record.catalog_source,
+                "dat_model": record.dat_model,
+                "preview_model_override": record.preview_model_override,
+            }
+            for record in stats.implicit_skin_refs
+        ],
+        "preview_actor_visuals": stats.preview_actor_visuals,
+        "compatibility": _compatibility_report_dict(stats.compatibility),
+    }
+
+
+def _compatibility_report_dict(report: converter.CompatibilityReport) -> dict:
+    return {
+        "actor_policy": report.actor_policy,
+        "source_registry": report.source_registry,
+        "target_registry": report.target_registry,
+        "registry_warnings": list(report.registry_warnings),
+        "status_counts": report.status_counts,
+        "unresolved_actor_count": report.unresolved_actor_count,
+        "unresolved_actor_classes": report.unresolved_actor_classes,
+        "records": [
+            {
+                "source_index": record.source_index,
+                "object_name": record.object_name,
+                "source_class": record.source_class,
+                "source_position": list(record.source_position),
+                "output_index": record.output_index,
+                "status": record.status,
+                "action": record.action,
+                "target_class": record.target_class,
+                "reason": record.reason,
+            }
+            for record in report.records
+        ],
     }
 
 

@@ -245,6 +245,9 @@ def leveledit_to_dict(L: P.LevelEdit) -> Dict[str, Any]:
         "output":       L.output,
         "backup_path":  L.backup_path,
         "display_name": L.display_name,
+        "conversion_report": copy.deepcopy(L.conversion_report),
+        "conversion_stage_dir": L.conversion_stage_dir,
+        "preview_actor_visuals": copy.deepcopy(L.preview_actor_visuals),
         "ops":          [op_to_dict(op) for op in L.ops],
     }
 
@@ -258,6 +261,9 @@ def dict_to_leveledit(d: Dict[str, Any]) -> P.LevelEdit:
         output       = d.get("output"),
         backup_path  = d.get("backup_path"),
         display_name = d.get("display_name", ""),
+        conversion_report = copy.deepcopy(d.get("conversion_report")),
+        conversion_stage_dir = str(d.get("conversion_stage_dir", "") or ""),
+        preview_actor_visuals = copy.deepcopy(d.get("preview_actor_visuals") or {}),
     )
     L.ops = [dict_to_op(op) for op in d.get("ops", [])]
     return L
@@ -267,8 +273,8 @@ def dict_to_leveledit(d: Dict[str, Any]) -> P.LevelEdit:
 # Project save / load
 # ─────────────────────────────────────────────────────────────────────────────
 
-FORMAT_VERSION = 12
-SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+FORMAT_VERSION = 13
+SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
 
 
 def project_to_json(project: P.Project, path: str) -> None:
@@ -328,6 +334,9 @@ def project_from_json(path: str, existing_project: P.Project) -> List[str]:
             loaded.output = L.output
         if L.backup_path:
             loaded.backup_path = L.backup_path
+        loaded.conversion_report = copy.deepcopy(L.conversion_report)
+        loaded.conversion_stage_dir = L.conversion_stage_dir
+        loaded.preview_actor_visuals = copy.deepcopy(L.preview_actor_visuals)
 
         # Replay ops — deserialised copies replace whatever was on the level
         loaded.ops = L.ops

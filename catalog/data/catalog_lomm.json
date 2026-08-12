@@ -565,6 +565,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "WorldObject": {
@@ -739,6 +744,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "DestructableBrush": {
@@ -1182,6 +1192,11 @@
             "value": 100
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Prop": {
@@ -1383,6 +1398,145 @@
           2248.0
         ]
       },
+      "dat_model_filenames": [
+        "models/props/haybale01.abc",
+        "models\\princess.abc",
+        "models\\props\\ankh.abc",
+        "models\\props\\anvil.abc",
+        "models\\props\\banner.abc",
+        "models\\props\\barrel.abc",
+        "models\\props\\barrel02.abc",
+        "models\\props\\basket_veggies.abc",
+        "models\\props\\bed.abc",
+        "models\\props\\bed_cot.abc",
+        "models\\props\\bed_ornate.abc",
+        "models\\props\\bed_wall.abc",
+        "models\\props\\bedmedium.abc",
+        "models\\props\\bell.abc",
+        "models\\props\\bench01.abc",
+        "models\\props\\bench02.abc",
+        "models\\props\\bench_stone02.abc",
+        "models\\props\\bluelight.abc",
+        "models\\props\\boat.abc",
+        "models\\props\\boiler.abc",
+        "models\\props\\bookcase01ew.abc",
+        "models\\props\\bookcase01ns.abc",
+        "models\\props\\bookcase02ew.abc",
+        "models\\props\\bookcase02ns.abc",
+        "models\\props\\brazierbowl.abc",
+        "models\\props\\bucket02.abc",
+        "models\\props\\cabinet01.abc",
+        "models\\props\\cabinet02.abc",
+        "models\\props\\cabinet02ns.abc",
+        "models\\props\\cabinet03.abc",
+        "models\\props\\cabinet04.abc",
+        "models\\props\\cabinet04ns.abc",
+        "models\\props\\cabinet05ns.abc",
+        "models\\props\\capitalhead.abc",
+        "models\\props\\cards.abc",
+        "models\\props\\carriage.abc",
+        "models\\props\\cart01.abc",
+        "models\\props\\cart02.abc",
+        "models\\props\\cart03.abc",
+        "models\\props\\cartouche01.abc",
+        "models\\props\\chair.abc",
+        "models\\props\\chair02.abc",
+        "models\\props\\chair_fordesk01.abc",
+        "models\\props\\chandelier.abc",
+        "models\\props\\coalbin.abc",
+        "models\\props\\crate.abc",
+        "models\\props\\debris\\lumberdebris02.abc",
+        "models\\props\\debris\\lumberdebris03.abc",
+        "models\\props\\debris\\lumberdebris04.abc",
+        "models\\props\\debris\\rockdebris.abc",
+        "models\\props\\debris\\stonedebris02.abc",
+        "models\\props\\debris\\stonedebris04.abc",
+        "models\\props\\debris\\stonedebris05.abc",
+        "models\\props\\desk01.abc",
+        "models\\props\\desk03.abc",
+        "models\\props\\dragonpharoah.abc",
+        "models\\props\\dresser.abc",
+        "models\\props\\dresserns.abc",
+        "models\\props\\fencens.abc",
+        "models\\props\\flowerboxns.abc",
+        "models\\props\\forge.abc",
+        "models\\props\\goblet_fancy02.abc",
+        "models\\props\\goblinhead.abc",
+        "models\\props\\grindingwheel.abc",
+        "models\\props\\hangingbrazierbowl.abc",
+        "models\\props\\haybale01.abc",
+        "models\\props\\hitchingpost.abc",
+        "models\\props\\horsestatue.abc",
+        "models\\props\\iron-ingots.abc",
+        "models\\props\\lionstatue.abc",
+        "models\\props\\logsburning.abc",
+        "models\\props\\marketplacegoods.abc",
+        "models\\props\\marketstall.abc",
+        "models\\props\\minelantern02.abc",
+        "models\\props\\mummy.abc",
+        "models\\props\\mummyew.abc",
+        "models\\props\\mummyvert.abc",
+        "models\\props\\painting_oval.abc",
+        "models\\props\\painting_rectangle.abc",
+        "models\\props\\pew.abc",
+        "models\\props\\pew2.abc",
+        "models\\props\\pipeorgan.abc",
+        "models\\props\\plantsandtrees\\bush03.abc",
+        "models\\props\\plantsandtrees\\bush06.abc",
+        "models\\props\\plantsandtrees\\grass02.abc",
+        "models\\props\\plantsandtrees\\plant04.abc",
+        "models\\props\\plantsandtrees\\plant05.abc",
+        "models\\props\\plantsandtrees\\plant06.abc",
+        "models\\props\\plantsandtrees\\planter.abc",
+        "models\\props\\plantsandtrees\\tree01.abc",
+        "models\\props\\plantsandtrees\\tree02.abc",
+        "models\\props\\plantsandtrees\\tree04.abc",
+        "models\\props\\plantsandtrees\\tree05.abc",
+        "models\\props\\potatopile.abc",
+        "models\\props\\rectangle_banner.abc",
+        "models\\props\\sack03.abc",
+        "models\\props\\sarcophagus.abc",
+        "models\\props\\sarcophagusns.abc",
+        "models\\props\\shield-broken01.abc",
+        "models\\props\\shield.abc",
+        "models\\props\\shield_rusty.abc",
+        "models\\props\\skeletoncage.abc",
+        "models\\props\\skeletonlaying.abc",
+        "models\\props\\skeletonstatue.abc",
+        "models\\props\\smithhammer.abc",
+        "models\\props\\stool01.abc",
+        "models\\props\\stove.abc",
+        "models\\props\\suitofarmor01.abc",
+        "models\\props\\suitofarmor02.abc",
+        "models\\props\\swordandshield.abc",
+        "models\\props\\table01.abc",
+        "models\\props\\table01ns.abc",
+        "models\\props\\table02.abc",
+        "models\\props\\table_bench.abc",
+        "models\\props\\tableround.abc",
+        "models\\props\\tableround2.abc",
+        "models\\props\\throne.abc",
+        "models\\props\\torch2.abc",
+        "models\\props\\torturecrusher01.abc",
+        "models\\props\\torturecrusher02.abc",
+        "models\\props\\torturerack01.abc",
+        "models\\props\\torturewheel01.abc",
+        "models\\props\\torturewheel02.abc",
+        "models\\props\\treasureopening.abc",
+        "models\\props\\treasurepile.abc",
+        "models\\props\\treeheart.abc",
+        "models\\props\\troughew.abc",
+        "models\\props\\wagon_broken.abc",
+        "models\\props\\wagon_merchant.abc",
+        "models\\props\\weaponscabinet01.abc",
+        "models\\props\\weaponscabinet03.abc",
+        "models\\props\\winebottle03.abc",
+        "models\\props\\winebottle04.abc",
+        "models\\props\\winerack.abc",
+        "models\\props\\winerackns.abc",
+        "models\\props\\woodbin.abc",
+        "models\\spider.abc"
+      ],
       "skins": [
         "skins\\props\\amoredsuitaged.dtx",
         "skins\\props\\amoredsuitgold.dtx",
@@ -1706,6 +1860,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "TreasureChest": {
@@ -1785,6 +1944,11 @@
           -2584.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\boiler.abc",
+        "models\\props\\chest-lacquer.abc",
+        "models\\props\\chest-rusty01.abc"
+      ],
       "skins": [
         "skins\\props\\boiler.dtx",
         "skins\\props\\chest-lacquer.dtx",
@@ -2035,6 +2199,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "SoftLandingZone": {
@@ -2343,6 +2512,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Switch": {
@@ -2930,6 +3104,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "RotatingDoor": {
@@ -3526,6 +3705,11 @@
             "value": 60.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "InvisibleBrush": {
@@ -3708,6 +3892,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Ladder": {
@@ -4038,6 +4227,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "StartPoint": {
@@ -4136,6 +4330,11 @@
             "value": 0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "BuyZone": {
@@ -4474,6 +4673,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "GoodKingRescueZone": {
@@ -4573,6 +4777,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "WorldProperties": {
@@ -4943,6 +5152,11 @@
             "value": 1.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "OutsideDef": {
@@ -5026,6 +5240,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Dagrell": {
@@ -5093,6 +5312,9 @@
           436.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dagrell.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -5391,6 +5613,11 @@
             "value": "models\\Dagrell.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Gargoyle": {
@@ -5457,6 +5684,9 @@
           -944.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\gargoyle.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -5755,6 +5985,11 @@
             "value": "models\\Gargoyle.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "AmbientSound": {
@@ -5922,6 +6157,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "DemoSkyWorldModel": {
@@ -6052,6 +6292,11 @@
             "value": 0.100000001
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "DirLight": {
@@ -6206,6 +6451,11 @@
             "value": 0.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Brazier": {
@@ -6264,6 +6514,11 @@
           -832.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\brazier.abc",
+        "models\\props\\brazierbowl.abc",
+        "models\\props\\dragonbrazier.abc"
+      ],
       "skins": [
         "skins\\props\\brazier.dtx",
         "skins\\props\\brazierbowl.dtx",
@@ -6440,6 +6695,11 @@
             "value": 2
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "object_lto_model_resource",
+        "source": "object.lto"
       }
     },
     "Light": {
@@ -6588,6 +6848,11 @@
             "value": 0.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "WallTorch": {
@@ -6649,6 +6914,11 @@
           642.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\hangingbrazierbowl.abc",
+        "models\\props\\torch2.abc",
+        "models\\props\\walltorch.abc"
+      ],
       "skins": [
         "skins\\props\\hangingbrazierbowl.dtx",
         "skins\\props\\sconce1.dtx",
@@ -6826,6 +7096,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "object_lto_model_resource",
+        "source": "object.lto"
       }
     },
     "CandleWall": {
@@ -6881,6 +7156,10 @@
           -552.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\minelantern02.abc",
+        "models\\props\\wallcandle.abc"
+      ],
       "skins": [
         "skins\\props\\minelantern.dtx",
         "skins\\props\\wallcandle.dtx"
@@ -7059,6 +7338,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "ObjectLight": {
@@ -7174,6 +7458,11 @@
             "value": 1.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Candle": {
@@ -7229,6 +7518,11 @@
           -826.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\candle.abc",
+        "models\\props\\minelantern02.abc",
+        "models\\props\\oillamp.abc"
+      ],
       "skins": [
         "skins\\props\\candle.dtx",
         "skins\\props\\minelantern.dtx",
@@ -7407,6 +7701,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "Wind": {
@@ -7712,6 +8011,11 @@
             "value": 0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "AIRail": {
@@ -7999,6 +8303,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "AIBarrier": {
@@ -8186,6 +8495,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Lift": {
@@ -8743,6 +9057,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "BlueWater": {
@@ -9052,6 +9371,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "ClearWater": {
@@ -9360,6 +9684,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "DirtyWater": {
@@ -9667,6 +9996,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Fire": {
@@ -9779,6 +10113,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Orc": {
@@ -9850,6 +10189,11 @@
           2560.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\goblin.abc",
+        "models\\golemstone.abc",
+        "models\\orc.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -10148,6 +10492,11 @@
             "value": "models\\Orc.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Cow": {
@@ -10215,6 +10564,9 @@
           1176.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\cow.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -10513,6 +10865,11 @@
             "value": "models\\Cow.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "DestructableProp": {
@@ -10635,6 +10992,27 @@
           2504.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\barrel.abc",
+        "models\\props\\bowl01.abc",
+        "models\\props\\bowl02.abc",
+        "models\\props\\bowl03.abc",
+        "models\\props\\bowl04.abc",
+        "models\\props\\bucket01.abc",
+        "models\\props\\cartouche01.abc",
+        "models\\props\\crate.abc",
+        "models\\props\\cup01.abc",
+        "models\\props\\cup03.abc",
+        "models\\props\\cup04.abc",
+        "models\\props\\dogstatue.abc",
+        "models\\props\\goblet_plain01.abc",
+        "models\\props\\jar01.abc",
+        "models\\props\\jar02.abc",
+        "models\\props\\jar06.abc",
+        "models\\props\\minelantern.abc",
+        "models\\props\\skeletonsitting.abc",
+        "models\\props\\urngargoyle.abc"
+      ],
       "skins": [
         "skins\\props\\barrel.dtx",
         "skins\\props\\bucket01.dtx",
@@ -11123,6 +11501,11 @@
             "value": 100
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "SkyPointer": {
@@ -11249,6 +11632,11 @@
             "value": 0.100000001
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Timer": {
@@ -11483,6 +11871,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "PortalZone": {
@@ -11797,6 +12190,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Trigger": {
@@ -12217,6 +12615,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Chandelier": {
@@ -12264,6 +12667,9 @@
           -1784.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\chandelier.abc"
+      ],
       "skins": [
         "skins\\props\\chandelier.dtx"
       ],
@@ -12440,6 +12846,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "Princess": {
@@ -12513,6 +12924,9 @@
           -1056.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\player\\king.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "Hostage",
@@ -12812,6 +13226,11 @@
             "value": "models\\player\\king.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "RescueZone": {
@@ -12920,6 +13339,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Spider2": {
@@ -12988,6 +13412,10 @@
           -4426.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\spider.abc",
+        "models\\spider2.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -13286,6 +13714,11 @@
             "value": "models\\Spider2.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Monk": {
@@ -13353,6 +13786,9 @@
           -1568.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\monk.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -13651,6 +14087,11 @@
             "value": "models\\Monk.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Terrain": {
@@ -13718,6 +14159,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Shooter": {
@@ -13846,6 +14292,11 @@
             "value": 5.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Lich": {
@@ -13916,6 +14367,11 @@
           2048.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dagrell.abc",
+        "models\\lich.abc",
+        "models\\skeleton.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -14214,6 +14670,11 @@
             "value": "models\\Lich.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Troll": {
@@ -14280,6 +14741,9 @@
           96.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\troll.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -14578,6 +15042,11 @@
             "value": "models\\Troll.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "GolemStone": {
@@ -14644,6 +15113,9 @@
           3904.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\golemstone.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -14942,6 +15414,11 @@
             "value": "models\\GolemStone.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "SwordInStone": {
@@ -14990,6 +15467,9 @@
           1752.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\excaliber.abc"
+      ],
       "skins": [
         "skins\\props\\excaliber.dtx"
       ],
@@ -15153,6 +15633,11 @@
             "value": "models\\props\\stoneHilt.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "Kato": {
@@ -15460,6 +15945,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Dwarf": {
@@ -15528,6 +16018,9 @@
           2944.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dwarf.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -15826,6 +16319,11 @@
             "value": "models\\Dwarf.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Basilisk": {
@@ -15893,6 +16391,9 @@
           2944.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\basilisk.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -16191,6 +16692,11 @@
             "value": "models\\Basilisk.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Wight": {
@@ -16258,6 +16764,9 @@
           1868.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\wight.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -16556,6 +17065,11 @@
             "value": "models\\Wight.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "DragonRed": {
@@ -16623,6 +17137,9 @@
           3936.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dragonred.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -16921,6 +17438,11 @@
             "value": "models\\DragonRed.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "DwarfKing": {
@@ -16987,6 +17509,9 @@
           448.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dwarfking.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -17285,6 +17810,11 @@
             "value": "models\\DwarfKing.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "EvilEye": {
@@ -17353,6 +17883,9 @@
           1728.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\evileyeterror.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -17651,6 +18184,11 @@
             "value": "models\\EvilEyeTerror.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Teleporter": {
@@ -17810,6 +18348,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Button": {
@@ -18393,6 +18936,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Candelabra": {
@@ -18439,6 +18987,9 @@
           312.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\props\\candelabra.abc"
+      ],
       "skins": [
         "skins\\props\\candelabra.dtx"
       ],
@@ -18615,6 +19166,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "StaticSunLight": {
@@ -18720,6 +19276,11 @@
             "value": 1.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Spider": {
@@ -18786,6 +19347,9 @@
           1440.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\spider.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -19084,6 +19648,11 @@
             "value": "models\\Spider.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Skeleton": {
@@ -19151,6 +19720,10 @@
           -632.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dagrell.abc",
+        "models\\skeleton.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -19449,6 +20022,11 @@
             "value": "models\\skeleton.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Bandit": {
@@ -19520,6 +20098,9 @@
           -2048.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\bandit.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -19818,6 +20399,11 @@
             "value": "models\\Bandit.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Soldier": {
@@ -19887,6 +20473,9 @@
           -1376.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\skeletonwarrior.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "NPC",
@@ -20198,6 +20787,11 @@
             "value": "models\\Soldier.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "LichKing": {
@@ -20265,6 +20859,9 @@
           -9152.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\lichking.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -20563,6 +21160,11 @@
             "value": "models\\LichKing.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "EvilEyeTerror": {
@@ -20631,6 +21233,10 @@
           -11136.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\evileyeterror.abc",
+        "models\\gargoyle.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -20929,6 +21535,11 @@
             "value": "models\\EvilEyeTerror.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "EvilKingRescueZone": {
@@ -21027,6 +21638,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Zombie": {
@@ -21093,6 +21709,9 @@
           320.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\zombie.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -21391,6 +22010,11 @@
             "value": "models\\Zombie.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "LizardMan": {
@@ -21458,6 +22082,9 @@
           -808.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dagrell.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -21756,6 +22383,11 @@
             "value": "models\\LizardMan.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "GenericObject": {
@@ -21882,6 +22514,11 @@
             "value": 255.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "SpectatorStartPoint": {
@@ -21963,6 +22600,11 @@
             "value": 0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "DamageBrush": {
@@ -22268,6 +22910,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Troglodyte": {
@@ -22335,6 +22982,9 @@
           -1120.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\troglodyte.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -22633,6 +23283,11 @@
             "value": "models\\Troglodyte.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "DragonFly": {
@@ -22700,6 +23355,9 @@
           -1840.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\dragonfly.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -22998,6 +23656,11 @@
             "value": "models\\DragonFly.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Mummy": {
@@ -23064,6 +23727,9 @@
           -1806.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\mummy.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -23362,6 +24028,11 @@
             "value": "models\\Mummy.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Titan": {
@@ -23428,6 +24099,9 @@
           -1632.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\titan.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -23726,6 +24400,11 @@
             "value": "models\\Titan.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "TitanGrand": {
@@ -23793,6 +24472,9 @@
           -3488.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\titan.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -24091,6 +24773,11 @@
             "value": "models\\TitanGrand.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "RotatingBrush": {
@@ -24658,6 +25345,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Goblin": {
@@ -24724,6 +25416,9 @@
           -3616.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\goblin.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -25022,6 +25717,11 @@
             "value": "models\\Goblin.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Harpy": {
@@ -25088,6 +25788,9 @@
           80.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\harpy.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -25386,6 +26089,11 @@
             "value": "models\\Harpy.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "SkeletonWarrior": {
@@ -25454,6 +26162,11 @@
           -3392.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\lich.abc",
+        "models\\skeleton.abc",
+        "models\\skeletonwarrior.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -25752,6 +26465,11 @@
             "value": "models\\SkeletonWarrior.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "LizardWarrior": {
@@ -25819,6 +26537,10 @@
           -2496.0
         ]
       },
+      "dat_model_filenames": [
+        "models\\lizardman.abc",
+        "models\\lizardmanwarrior.abc"
+      ],
       "source": "object.lto+dat",
       "object_lto": {
         "parent": "AIBase",
@@ -26117,6 +26839,11 @@
             "value": "models\\LizardManWarrior.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "AIBase": {
@@ -26469,6 +27196,11 @@
             "value": 6.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "AISpawn": {
@@ -26635,6 +27367,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "AISpawnPlacement": {
@@ -26696,6 +27433,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "ArcherBot": {
@@ -27059,6 +27801,11 @@
             "value": "models\\player\\Archer.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "BagGold": {
@@ -27280,6 +28027,11 @@
             "value": 0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "BaseClass": {
@@ -27340,6 +28092,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Bat": {
@@ -27702,6 +28459,11 @@
             "value": "models\\Bat.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Bird": {
@@ -28064,6 +28826,11 @@
             "value": "models\\bird.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Bot": {
@@ -28426,6 +29193,11 @@
             "value": "models\\player\\Warrior.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Brush": {
@@ -28664,6 +29436,11 @@
             "value": 1.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Camera": {
@@ -28775,6 +29552,11 @@
             "value": 90.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "CorrosiveFluid": {
@@ -29078,6 +29860,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "DeathMatchItem": {
@@ -29286,6 +30073,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "Drip": {
@@ -29481,6 +30273,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "DruidBot": {
@@ -29844,6 +30641,11 @@
             "value": "models\\player\\Druid.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Duck": {
@@ -30206,6 +31008,11 @@
             "value": "models\\Duck.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "EarthQuake": {
@@ -30338,6 +31145,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Electricity": {
@@ -30641,6 +31453,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "ElementalEarth": {
@@ -31003,6 +31820,11 @@
             "value": "models\\ElementalEarth.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "EndlessFall": {
@@ -31306,6 +32128,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "ExitTrigger": {
@@ -31428,6 +32255,11 @@
             "value": 0.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "FadeAwayInventoryItem": {
@@ -31631,6 +32463,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "FallingDebris": {
@@ -31838,6 +32675,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Fan": {
@@ -32100,6 +32942,11 @@
             "value": "skins\\props\\fan.dtx"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "Fish": {
@@ -32462,6 +33309,11 @@
             "value": "models\\fish.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Flicker1WaveLightFX": {
@@ -32742,6 +33594,11 @@
             "value": 6
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Flicker2WaveLightFX": {
@@ -33022,6 +33879,11 @@
             "value": 7
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Flicker3WaveLightFX": {
@@ -33302,6 +34164,11 @@
             "value": 8
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Flicker4WaveLightFX": {
@@ -33582,6 +34449,11 @@
             "value": 9
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "FlickerLight": {
@@ -33862,6 +34734,11 @@
             "value": 7
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Fountain": {
@@ -34079,6 +34956,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "GlowingLight": {
@@ -34359,6 +35241,11 @@
             "value": 5
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Goat": {
@@ -34721,6 +35608,11 @@
             "value": "models\\Goat.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "GoblinTest": {
@@ -35083,6 +35975,11 @@
             "value": "models\\Goblin.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Gopher": {
@@ -35445,6 +36342,11 @@
             "value": "models\\Gopher.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Hen": {
@@ -35807,6 +36709,11 @@
             "value": "models\\Hen.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "HereticBot": {
@@ -36170,6 +37077,11 @@
             "value": "models\\player\\Heretic.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Hostage": {
@@ -36523,6 +37435,11 @@
             "value": 6.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "InventoryItem": {
@@ -36724,6 +37641,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "LightFX": {
@@ -37003,6 +37925,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Lightning": {
@@ -37492,6 +38419,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "LineSystem": {
@@ -37693,6 +38625,11 @@
             "value": 0.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "LiquidNitrogen": {
@@ -37996,6 +38933,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Marker": {
@@ -38096,6 +39038,11 @@
             "value": 90.0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "NPC": {
@@ -38463,6 +39410,11 @@
             "value": 0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Nobleman": {
@@ -38840,6 +39792,11 @@
             "value": "models\\Nobleman.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "PaladinBot": {
@@ -39203,6 +40160,11 @@
             "value": "models\\player\\Paladin.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "PickupItem": {
@@ -39403,6 +40365,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "PickupItemSpawn": {
@@ -39471,6 +40438,11 @@
             "value": 0
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Pig": {
@@ -39833,6 +40805,11 @@
             "value": "models\\Pig.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Pikeman": {
@@ -40210,6 +41187,11 @@
             "value": "models\\Pikeman.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "PlayerActor": {
@@ -40619,6 +41601,11 @@
             "value": "models\\player\\warrior.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "PoisonGas": {
@@ -40922,6 +41909,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "PolyGrid": {
@@ -41135,6 +42127,11 @@
             "value": 20
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Priest": {
@@ -41512,6 +42509,11 @@
             "value": "models\\Priest.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "PropDamager": {
@@ -41767,6 +42769,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "RampDownWaveLightFX": {
@@ -42047,6 +43054,11 @@
             "value": 4
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "RampUpWaveLightFX": {
@@ -42327,6 +43339,11 @@
             "value": 3
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "RollingProp": {
@@ -42903,6 +43920,11 @@
             "value": 100
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "Rooster": {
@@ -43265,6 +44287,11 @@
             "value": "models\\Rooster.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "SawWaveLightFX": {
@@ -43545,6 +44572,11 @@
             "value": 2
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "ScriptObject": {
@@ -43684,6 +44716,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "SearchWaveLightFX": {
@@ -43964,6 +45001,11 @@
             "value": 11
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "SineWaveLightFX": {
@@ -44244,6 +45286,11 @@
             "value": 5
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Smoke": {
@@ -44547,6 +45594,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "SorcererBot": {
@@ -44910,6 +45962,11 @@
             "value": "models\\player\\Sorcerer.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "SpawnedInventoryItem": {
@@ -45112,6 +46169,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "Spawner": {
@@ -45205,6 +46267,11 @@
             ]
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Sphere": {
@@ -45370,6 +46437,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "SquareWaveLightFX": {
@@ -45650,6 +46722,11 @@
             "value": 1
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Stone": {
@@ -45815,6 +46892,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "model_hierarchy",
+        "source": "object.lto"
       }
     },
     "StrobeWaveLightFX": {
@@ -46095,6 +47177,11 @@
             "value": 10
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "TintScreen": {
@@ -46409,6 +47496,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "Torch": {
@@ -46618,6 +47710,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "object_lto_model_resource",
+        "source": "object.lto"
       }
     },
     "TotalRed": {
@@ -46921,6 +48018,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "TownsFolkBoy": {
@@ -47298,6 +48400,11 @@
             "value": "models\\TownsFolkBoy.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "TownsFolkFemale": {
@@ -47675,6 +48782,11 @@
             "value": "models\\TownsFolkFemale.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "TownsFolkFemaleMid": {
@@ -48052,6 +49164,11 @@
             "value": "models\\TownsFolkFemaleMid.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "TownsFolkGirl": {
@@ -48429,6 +49546,11 @@
             "value": "models\\townsfolkgirl.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "TownsFolkMale": {
@@ -48806,6 +49928,11 @@
             "value": "models\\TownsFolkMale.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Vacuum": {
@@ -49109,6 +50236,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "VolumeBrush": {
@@ -49411,6 +50543,11 @@
             "value": true
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "WarriorBot": {
@@ -49774,6 +50911,11 @@
             "value": "models\\player\\Warrior.abc"
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": false,
+        "reason": "actor_hierarchy",
+        "source": "object.lto"
       }
     },
     "Weather": {
@@ -50147,6 +51289,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "WorldModel": {
@@ -50217,6 +51364,11 @@
             "value": 1
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "WorldModelDebris": {
@@ -50793,6 +51945,11 @@
             "value": false
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     },
     "ZeroGravity": {
@@ -51096,6 +52253,11 @@
             "value": ""
           }
         ]
+      },
+      "world_helper": {
+        "is_helper": true,
+        "reason": "non_actor_without_model_resource",
+        "source": "object.lto"
       }
     }
   },
@@ -53270,6 +54432,161 @@
         ]
       }
     ],
+    "models\\gibs\\glass.abc": [
+      {
+        "name": "Glass",
+        "skins": [
+          "skins\\gibs\\glass.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\glass.dtx"
+        ]
+      },
+      {
+        "name": "Glass 2",
+        "skins": [
+          "skins\\gibs\\glass2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\glass2.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\glass2.abc": [
+      {
+        "name": "Glass2",
+        "skins": [
+          "skins\\gibs\\glass2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\glass2.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\metal.abc": [
+      {
+        "name": "Metal",
+        "skins": [
+          "skins\\gibs\\metal.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\metal.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\stone.abc": [
+      {
+        "name": "Stone",
+        "skins": [
+          "skins\\gibs\\stone.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\stone.dtx"
+        ]
+      },
+      {
+        "name": "Stone 2",
+        "skins": [
+          "skins\\gibs\\stone2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\stone2.dtx"
+        ]
+      },
+      {
+        "name": "Stone 3",
+        "skins": [
+          "skins\\gibs\\stone3.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\stone3.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\stone2.abc": [
+      {
+        "name": "Stone2",
+        "skins": [
+          "skins\\gibs\\stone2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\stone2.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\stone3.abc": [
+      {
+        "name": "Stone3",
+        "skins": [
+          "skins\\gibs\\stone3.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\stone3.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\terrain.abc": [
+      {
+        "name": "Terrain",
+        "skins": [
+          "skins\\gibs\\terrain.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\terrain.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\wood.abc": [
+      {
+        "name": "Wood",
+        "skins": [
+          "skins\\gibs\\wood.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\wood.dtx"
+        ]
+      },
+      {
+        "name": "Wood 2",
+        "skins": [
+          "skins\\gibs\\wood2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\wood2.dtx"
+        ]
+      },
+      {
+        "name": "Wood 3",
+        "skins": [
+          "skins\\gibs\\wood3.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\wood3.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\wood2.abc": [
+      {
+        "name": "Wood2",
+        "skins": [
+          "skins\\gibs\\wood2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\wood2.dtx"
+        ]
+      }
+    ],
+    "models\\gibs\\wood3.abc": [
+      {
+        "name": "Wood3",
+        "skins": [
+          "skins\\gibs\\wood3.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\gibs\\wood3.dtx"
+        ]
+      }
+    ],
     "models\\goat.abc": [
       {
         "name": "Goat",
@@ -53378,6 +54695,150 @@
         ]
       }
     ],
+    "models\\lizardwarrior.abc": [
+      {
+        "name": "Lizardwarrior",
+        "skins": [
+          "skins\\lizardwarrior.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\lizardwarrior.dtx"
+        ]
+      },
+      {
+        "name": "Lizardwarrior Blue",
+        "skins": [
+          "skins\\lizardwarriorblue.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\lizardwarriorblue.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\crown.abc": [
+      {
+        "name": "Crown",
+        "skins": [
+          "skins\\modelprops\\crown.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\crown.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\feedbucket.abc": [
+      {
+        "name": "Feedbucket",
+        "skins": [
+          "skins\\modelprops\\feedbucket.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\feedbucket.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\goblet.abc": [
+      {
+        "name": "Goblet",
+        "skins": [
+          "skins\\modelprops\\goblet.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\goblet.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\hammer.abc": [
+      {
+        "name": "Hammer",
+        "skins": [
+          "skins\\modelprops\\hammer.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\hammer.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\lichkingstaff.abc": [
+      {
+        "name": "Lichkingstaff",
+        "skins": [
+          "skins\\modelprops\\lichkingstaff.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\lichkingstaff.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\ogreclub.abc": [
+      {
+        "name": "Ogreclub",
+        "skins": [
+          "skins\\modelprops\\ogreclub.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\ogreclub.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\rag.abc": [
+      {
+        "name": "Rag",
+        "skins": [
+          "skins\\modelprops\\rag.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\rag.dtx"
+        ]
+      }
+    ],
+    "models\\modelprops\\shield.abc": [
+      {
+        "name": "Shield",
+        "skins": [
+          "skins\\modelprops\\shield.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\shield.dtx"
+        ]
+      },
+      {
+        "name": "Shield 2",
+        "skins": [
+          "skins\\props\\shield.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\shield.dtx"
+        ]
+      },
+      {
+        "name": "Shield 2",
+        "skins": [
+          "skins\\props\\shield2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\shield2.dtx"
+        ]
+      },
+      {
+        "name": "Shield 3",
+        "skins": [
+          "skins\\props\\shield3.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\shield3.dtx"
+        ]
+      },
+      {
+        "name": "Shield 4",
+        "skins": [
+          "skins\\props\\shield4.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\shield4.dtx"
+        ]
+      }
+    ],
     "models\\monk.abc": [
       {
         "name": "Monk",
@@ -53440,6 +54901,35 @@
         ]
       }
     ],
+    "models\\pickupitems\\axemagnetic.abc": [
+      {
+        "name": "Axemagnetic",
+        "skins": [
+          "skins\\pickupitems\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\axemagnetic.dtx"
+        ]
+      },
+      {
+        "name": "Axemagnetic 2",
+        "skins": [
+          "skins\\props\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\axemagnetic.dtx"
+        ]
+      },
+      {
+        "name": "Axemagnetic 3",
+        "skins": [
+          "skins\\weapons\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\axemagnetic.dtx"
+        ]
+      }
+    ],
     "models\\pickupitems\\baggold.abc": [
       {
         "name": "BagGold",
@@ -53449,6 +54939,784 @@
         "source_keys": [
           "object.lto:BagGold",
           "asset-name:skins\\pickupitems\\baggold.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\bowarcane.abc": [
+      {
+        "name": "Bowarcane",
+        "skins": [
+          "skins\\pickupitems\\bowarcane.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\bowarcane.dtx"
+        ]
+      },
+      {
+        "name": "Bowarcane 2",
+        "skins": [
+          "skins\\weapons\\bowarcane.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\bowarcane.dtx"
+        ]
+      },
+      {
+        "name": "Bowarcane 3",
+        "skins": [
+          "skins\\weapons\\pv\\bowarcane.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\bowarcane.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\bowbasic.abc": [
+      {
+        "name": "Bowbasic",
+        "skins": [
+          "skins\\pickupitems\\bowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\bowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Bowbasic 2",
+        "skins": [
+          "skins\\weapons\\bowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\bowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Bowbasic 3",
+        "skins": [
+          "skins\\weapons\\pv\\bowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\bowbasic.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\bowdragon.abc": [
+      {
+        "name": "Bowdragon",
+        "skins": [
+          "skins\\pickupitems\\bowdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\bowdragon.dtx"
+        ]
+      },
+      {
+        "name": "Bowdragon 2",
+        "skins": [
+          "skins\\weapons\\bowdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\bowdragon.dtx"
+        ]
+      },
+      {
+        "name": "Bowdragon 3",
+        "skins": [
+          "skins\\weapons\\pv\\bowdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\bowdragon.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\boweye.abc": [
+      {
+        "name": "Boweye",
+        "skins": [
+          "skins\\pickupitems\\boweye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\boweye.dtx"
+        ]
+      },
+      {
+        "name": "Boweye 2",
+        "skins": [
+          "skins\\weapons\\boweye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\boweye.dtx"
+        ]
+      },
+      {
+        "name": "Boweye 3",
+        "skins": [
+          "skins\\weapons\\pv\\boweye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\boweye.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\daggermagic.abc": [
+      {
+        "name": "Daggermagic",
+        "skins": [
+          "skins\\pickupitems\\daggermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\daggermagic.dtx"
+        ]
+      },
+      {
+        "name": "Daggermagic 2",
+        "skins": [
+          "skins\\weapons\\daggermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\daggermagic.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\hammereq.abc": [
+      {
+        "name": "Hammereq",
+        "skins": [
+          "skins\\pickupitems\\hammereq.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\hammereq.dtx"
+        ]
+      },
+      {
+        "name": "Hammereq 2",
+        "skins": [
+          "skins\\weapons\\hammereq.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\hammereq.dtx"
+        ]
+      },
+      {
+        "name": "Hammereq 3",
+        "skins": [
+          "skins\\weapons\\pv\\hammereq.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\hammereq.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\hammermagic.abc": [
+      {
+        "name": "Hammermagic",
+        "skins": [
+          "skins\\pickupitems\\hammermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\hammermagic.dtx"
+        ]
+      },
+      {
+        "name": "Hammermagic 2",
+        "skins": [
+          "skins\\weapons\\hammermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\hammermagic.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\hhga.abc": [
+      {
+        "name": "Hhga",
+        "skins": [
+          "skins\\pickupitems\\hhga.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\hhga.dtx"
+        ]
+      },
+      {
+        "name": "Hhga 2",
+        "skins": [
+          "skins\\weapons\\hhga.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\hhga.dtx"
+        ]
+      },
+      {
+        "name": "Hhga 3",
+        "skins": [
+          "skins\\weapons\\pv\\hhga.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\hhga.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\knifemagic.abc": [
+      {
+        "name": "Knifemagic",
+        "skins": [
+          "skins\\pickupitems\\knifemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\knifemagic.dtx"
+        ]
+      },
+      {
+        "name": "Knifemagic 2",
+        "skins": [
+          "skins\\weapons\\knifemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\knifemagic.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\melee2hsword.abc": [
+      {
+        "name": "Melee2hsword",
+        "skins": [
+          "skins\\pickupitems\\melee2hsword.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\melee2hsword.dtx"
+        ]
+      },
+      {
+        "name": "Melee2hsword 2",
+        "skins": [
+          "skins\\weapons\\melee2hsword.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\melee2hsword.dtx"
+        ]
+      },
+      {
+        "name": "Melee2hsword 3",
+        "skins": [
+          "skins\\weapons\\pv\\melee2hsword.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\melee2hsword.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\rodclaw.abc": [
+      {
+        "name": "Rodclaw",
+        "skins": [
+          "skins\\pickupitems\\rodclaw.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\rodclaw.dtx"
+        ]
+      },
+      {
+        "name": "Rodclaw 2",
+        "skins": [
+          "skins\\weapons\\pv\\rodclaw.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\rodclaw.dtx"
+        ]
+      },
+      {
+        "name": "Rodclaw 3",
+        "skins": [
+          "skins\\weapons\\rodclaw.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\rodclaw.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\roddemon.abc": [
+      {
+        "name": "Roddemon",
+        "skins": [
+          "skins\\pickupitems\\roddemon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\roddemon.dtx"
+        ]
+      },
+      {
+        "name": "Roddemon 2",
+        "skins": [
+          "skins\\weapons\\pv\\roddemon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\roddemon.dtx"
+        ]
+      },
+      {
+        "name": "Roddemon 3",
+        "skins": [
+          "skins\\weapons\\roddemon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\roddemon.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\rodflare.abc": [
+      {
+        "name": "Rodflare",
+        "skins": [
+          "skins\\pickupitems\\rodflare.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\rodflare.dtx"
+        ]
+      },
+      {
+        "name": "Rodflare 2",
+        "skins": [
+          "skins\\weapons\\pv\\rodflare.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\rodflare.dtx"
+        ]
+      },
+      {
+        "name": "Rodflare 3",
+        "skins": [
+          "skins\\weapons\\rodflare.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\rodflare.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\rodskull.abc": [
+      {
+        "name": "Rodskull",
+        "skins": [
+          "skins\\pickupitems\\rodskull.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\rodskull.dtx"
+        ]
+      },
+      {
+        "name": "Rodskull 2",
+        "skins": [
+          "skins\\weapons\\pv\\rodskull.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\rodskull.dtx"
+        ]
+      },
+      {
+        "name": "Rodskull 3",
+        "skins": [
+          "skins\\weapons\\rodskull.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\rodskull.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\secretweapon.abc": [
+      {
+        "name": "Secretweapon",
+        "skins": [
+          "skins\\pickupitems\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 2",
+        "skins": [
+          "skins\\projectiles\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 3",
+        "skins": [
+          "skins\\weapons\\pv\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 4",
+        "skins": [
+          "skins\\weapons\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\secretweapon.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\shortstaff.abc": [
+      {
+        "name": "Shortstaff",
+        "skins": [
+          "skins\\pickupitems\\shortstaff.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\shortstaff.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\spearfine.abc": [
+      {
+        "name": "Spearfine",
+        "skins": [
+          "skins\\pickupitems\\spearfine.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\spearfine.dtx"
+        ]
+      },
+      {
+        "name": "Spearfine 2",
+        "skins": [
+          "skins\\weapons\\spearfine.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\spearfine.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\spellpage.abc": [
+      {
+        "name": "Spellpage",
+        "skins": [
+          "skins\\pickupitems\\spellpage.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\spellpage.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\staffbasic.abc": [
+      {
+        "name": "Staffbasic",
+        "skins": [
+          "skins\\pickupitems\\staffbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\staffbasic.dtx"
+        ]
+      },
+      {
+        "name": "Staffbasic 2",
+        "skins": [
+          "skins\\weapons\\pv\\staffbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\staffbasic.dtx"
+        ]
+      },
+      {
+        "name": "Staffbasic 3",
+        "skins": [
+          "skins\\weapons\\staffbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\staffbasic.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\staffdragon.abc": [
+      {
+        "name": "Staffdragon",
+        "skins": [
+          "skins\\pickupitems\\staffdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\staffdragon.dtx"
+        ]
+      },
+      {
+        "name": "Staffdragon 2",
+        "skins": [
+          "skins\\weapons\\pv\\staffdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\staffdragon.dtx"
+        ]
+      },
+      {
+        "name": "Staffdragon 3",
+        "skins": [
+          "skins\\weapons\\staffdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\staffdragon.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\stafffire.abc": [
+      {
+        "name": "Stafffire",
+        "skins": [
+          "skins\\pickupitems\\stafffire.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\stafffire.dtx"
+        ]
+      },
+      {
+        "name": "Stafffire 2",
+        "skins": [
+          "skins\\weapons\\pv\\stafffire.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\stafffire.dtx"
+        ]
+      },
+      {
+        "name": "Stafffire 3",
+        "skins": [
+          "skins\\weapons\\stafffire.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\stafffire.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\staffsparks.abc": [
+      {
+        "name": "Staffsparks",
+        "skins": [
+          "skins\\pickupitems\\staffsparks.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\staffsparks.dtx"
+        ]
+      },
+      {
+        "name": "Staffsparks 2",
+        "skins": [
+          "skins\\weapons\\pv\\staffsparks.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\staffsparks.dtx"
+        ]
+      },
+      {
+        "name": "Staffsparks 3",
+        "skins": [
+          "skins\\weapons\\staffsparks.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\staffsparks.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\throwaxe.abc": [
+      {
+        "name": "Throwaxe",
+        "skins": [
+          "skins\\pickupitems\\throwaxe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\throwaxe.dtx"
+        ]
+      },
+      {
+        "name": "Throwaxe 2",
+        "skins": [
+          "skins\\weapons\\pv\\throwaxe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\throwaxe.dtx"
+        ]
+      },
+      {
+        "name": "Throwaxe 3",
+        "skins": [
+          "skins\\weapons\\throwaxe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\throwaxe.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\wandbolt.abc": [
+      {
+        "name": "Wandbolt",
+        "skins": [
+          "skins\\pickupitems\\wandbolt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\wandbolt.dtx"
+        ]
+      },
+      {
+        "name": "Wandbolt 2",
+        "skins": [
+          "skins\\weapons\\pv\\wandbolt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\wandbolt.dtx"
+        ]
+      },
+      {
+        "name": "Wandbolt 3",
+        "skins": [
+          "skins\\weapons\\wandbolt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\wandbolt.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\wandeye.abc": [
+      {
+        "name": "Wandeye",
+        "skins": [
+          "skins\\pickupitems\\wandeye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\wandeye.dtx"
+        ]
+      },
+      {
+        "name": "Wandeye 2",
+        "skins": [
+          "skins\\weapons\\pv\\wandeye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\wandeye.dtx"
+        ]
+      },
+      {
+        "name": "Wandeye 3",
+        "skins": [
+          "skins\\weapons\\wandeye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\wandeye.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\wandkb.abc": [
+      {
+        "name": "Wandkb",
+        "skins": [
+          "skins\\pickupitems\\wandkb.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\wandkb.dtx"
+        ]
+      },
+      {
+        "name": "Wandkb 2",
+        "skins": [
+          "skins\\weapons\\pv\\wandkb.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\wandkb.dtx"
+        ]
+      },
+      {
+        "name": "Wandkb 3",
+        "skins": [
+          "skins\\weapons\\wandkb.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\wandkb.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\xbow.abc": [
+      {
+        "name": "Xbow",
+        "skins": [
+          "skins\\pickupitems\\xbow.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\xbow.dtx"
+        ]
+      },
+      {
+        "name": "Xbow 2",
+        "skins": [
+          "skins\\weapons\\pv\\xbow.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\xbow.dtx"
+        ]
+      },
+      {
+        "name": "Xbow 3",
+        "skins": [
+          "skins\\weapons\\xbow.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\xbow.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\xbowbasic.abc": [
+      {
+        "name": "Xbowbasic",
+        "skins": [
+          "skins\\pickupitems\\xbowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\xbowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Xbowbasic 2",
+        "skins": [
+          "skins\\weapons\\pv\\xbowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\xbowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Xbowbasic 3",
+        "skins": [
+          "skins\\weapons\\xbowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\xbowbasic.dtx"
+        ]
+      }
+    ],
+    "models\\pickupitems\\xbowgattling.abc": [
+      {
+        "name": "Xbowgattling",
+        "skins": [
+          "skins\\pickupitems\\xbowgattling.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\xbowgattling.dtx"
+        ]
+      },
+      {
+        "name": "Xbowgattling 2",
+        "skins": [
+          "skins\\weapons\\pv\\xbowgattling.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\xbowgattling.dtx"
+        ]
+      },
+      {
+        "name": "Xbowgattling 3",
+        "skins": [
+          "skins\\weapons\\xbowgattling.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\xbowgattling.dtx"
         ]
       }
     ],
@@ -53487,12 +55755,203 @@
     ],
     "models\\princess.abc": [
       {
+        "name": "Princess Blue",
+        "skins": [
+          "skins\\princessblue.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\princessblue.dtx"
+        ]
+      },
+      {
+        "name": "Princess Gold",
+        "skins": [
+          "skins\\princessgold.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\princessgold.dtx"
+        ]
+      },
+      {
+        "name": "Princess Green",
+        "skins": [
+          "skins\\princessgreen.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\princessgreen.dtx"
+        ]
+      },
+      {
+        "name": "Princess Pink",
+        "skins": [
+          "skins\\princesspink.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\princesspink.dtx"
+        ]
+      },
+      {
         "name": "Prop",
         "skins": [
           "skins\\textures\\leveltextures\\wallsplaster\\crackedplastr.dtx"
         ],
         "source_keys": [
           "CULTOFTHESPIDER.DAT:Prop1"
+        ]
+      }
+    ],
+    "models\\projectiles\\arrow.abc": [
+      {
+        "name": "Arrow Blue",
+        "skins": [
+          "skins\\weapons\\arrowblue.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\arrowblue.dtx"
+        ]
+      },
+      {
+        "name": "Arrow Green",
+        "skins": [
+          "skins\\weapons\\arrowgreen.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\arrowgreen.dtx"
+        ]
+      },
+      {
+        "name": "Arrow Orange",
+        "skins": [
+          "skins\\weapons\\arroworange.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\arroworange.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\axe.abc": [
+      {
+        "name": "Axe",
+        "skins": [
+          "skins\\projectiles\\axe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\axe.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\eqhammer.abc": [
+      {
+        "name": "Eqhammer",
+        "skins": [
+          "skins\\projectiles\\eqhammer.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\eqhammer.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\hammer.abc": [
+      {
+        "name": "Hammer",
+        "skins": [
+          "skins\\modelprops\\hammer.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\modelprops\\hammer.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\handgrenade.abc": [
+      {
+        "name": "Handgrenade",
+        "skins": [
+          "skins\\projectiles\\handgrenade.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\handgrenade.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\knife.abc": [
+      {
+        "name": "Knife",
+        "skins": [
+          "skins\\projectiles\\knife.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\knife.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\landmine.abc": [
+      {
+        "name": "Landmine",
+        "skins": [
+          "skins\\projectiles\\landmine.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\landmine.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\magicarrow.abc": [
+      {
+        "name": "Magicarrow",
+        "skins": [
+          "skins\\projectiles\\magicarrow.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\magicarrow.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\screamingskull.abc": [
+      {
+        "name": "Screamingskull",
+        "skins": [
+          "skins\\projectiles\\screamingskull.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\screamingskull.dtx"
+        ]
+      }
+    ],
+    "models\\projectiles\\secretweapon.abc": [
+      {
+        "name": "Secretweapon",
+        "skins": [
+          "skins\\pickupitems\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 2",
+        "skins": [
+          "skins\\projectiles\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 3",
+        "skins": [
+          "skins\\weapons\\pv\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 4",
+        "skins": [
+          "skins\\weapons\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\secretweapon.dtx"
         ]
       }
     ],
@@ -53519,6 +55978,57 @@
         "source_keys": [
           "SWORDINTHESTONE.DAT:Anvil0",
           "asset-name:skins\\props\\anvil.dtx"
+        ]
+      }
+    ],
+    "models\\props\\axe-rusty.abc": [
+      {
+        "name": "Axe-rusty",
+        "skins": [
+          "skins\\props\\axe-rusty.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\axe-rusty.dtx"
+        ]
+      }
+    ],
+    "models\\props\\axemagnetic.abc": [
+      {
+        "name": "Axemagnetic",
+        "skins": [
+          "skins\\pickupitems\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\axemagnetic.dtx"
+        ]
+      },
+      {
+        "name": "Axemagnetic 2",
+        "skins": [
+          "skins\\props\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\axemagnetic.dtx"
+        ]
+      },
+      {
+        "name": "Axemagnetic 3",
+        "skins": [
+          "skins\\weapons\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\axemagnetic.dtx"
+        ]
+      }
+    ],
+    "models\\props\\ballista.abc": [
+      {
+        "name": "Ballista",
+        "skins": [
+          "skins\\props\\ballista.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\ballista.dtx"
         ]
       }
     ],
@@ -53628,6 +56138,39 @@
         ]
       }
     ],
+    "models\\props\\basket01.abc": [
+      {
+        "name": "Basket01",
+        "skins": [
+          "skins\\props\\basket01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\basket01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\basket02.abc": [
+      {
+        "name": "Basket02",
+        "skins": [
+          "skins\\props\\basket02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\basket02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\basket_fruit.abc": [
+      {
+        "name": "Basket_fruit",
+        "skins": [
+          "skins\\props\\basket_fruit.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\basket_fruit.dtx"
+        ]
+      }
+    ],
     "models\\props\\basket_veggies.abc": [
       {
         "name": "Prop",
@@ -53638,6 +56181,17 @@
           "DUNGEONSOFDRAGADUNE.DAT:Prop9",
           "WEDDINGDAY.DAT:Prop13",
           "asset-name:skins\\props\\basket_veggies.dtx"
+        ]
+      }
+    ],
+    "models\\props\\beaker01.abc": [
+      {
+        "name": "Beaker01",
+        "skins": [
+          "skins\\props\\beaker01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\beaker01.dtx"
         ]
       }
     ],
@@ -53781,6 +56335,39 @@
         ]
       }
     ],
+    "models\\props\\bench03.abc": [
+      {
+        "name": "Bench03",
+        "skins": [
+          "skins\\props\\bench03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\bench03.dtx"
+        ]
+      }
+    ],
+    "models\\props\\bench04.abc": [
+      {
+        "name": "Bench04",
+        "skins": [
+          "skins\\props\\bench04.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\bench04.dtx"
+        ]
+      }
+    ],
+    "models\\props\\bench_large1.abc": [
+      {
+        "name": "Bench_large1",
+        "skins": [
+          "skins\\props\\bench_large1.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\bench_large1.dtx"
+        ]
+      }
+    ],
     "models\\props\\bench_stone02.abc": [
       {
         "name": "Prop",
@@ -53844,6 +56431,17 @@
           "ONTHERUN.DAT:Prop56",
           "ONTHERUN.DAT:Prop45",
           "asset-name:skins\\props\\boiler.dtx"
+        ]
+      }
+    ],
+    "models\\props\\book.abc": [
+      {
+        "name": "Book",
+        "skins": [
+          "skins\\props\\book.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\book.dtx"
         ]
       }
     ],
@@ -53925,6 +56523,17 @@
         ]
       }
     ],
+    "models\\props\\bookstack01.abc": [
+      {
+        "name": "Bookstack01",
+        "skins": [
+          "skins\\props\\bookstack01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\bookstack01.dtx"
+        ]
+      }
+    ],
     "models\\props\\bowl01.abc": [
       {
         "name": "DestructableProp",
@@ -53968,6 +56577,17 @@
         ],
         "source_keys": [
           "SECRETSOFTHESPHINX.DAT:DestructableProp3"
+        ]
+      }
+    ],
+    "models\\props\\box-ornamental.abc": [
+      {
+        "name": "Box-ornamental",
+        "skins": [
+          "skins\\props\\box-ornamental.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\box-ornamental.dtx"
         ]
       }
     ],
@@ -54155,6 +56775,17 @@
         ]
       }
     ],
+    "models\\props\\broom.abc": [
+      {
+        "name": "Broom",
+        "skins": [
+          "skins\\props\\broom.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\broom.dtx"
+        ]
+      }
+    ],
     "models\\props\\bucket01.abc": [
       {
         "name": "DestructableProp",
@@ -54177,6 +56808,17 @@
           "DUNGEONSOFDRAGADUNE.DAT:Prop39",
           "DUNGEONSOFDRAGADUNE.DAT:Prop40",
           "asset-name:skins\\props\\bucket02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\burner.abc": [
+      {
+        "name": "Burner",
+        "skins": [
+          "skins\\props\\burner.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\burner.dtx"
         ]
       }
     ],
@@ -54252,6 +56894,17 @@
         ]
       }
     ],
+    "models\\props\\cabinet05.abc": [
+      {
+        "name": "Cabinet05",
+        "skins": [
+          "skins\\props\\cabinet05.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\cabinet05.dtx"
+        ]
+      }
+    ],
     "models\\props\\cabinet05ns.abc": [
       {
         "name": "Prop",
@@ -54295,6 +56948,17 @@
           "_RESCUEATTHERUINS.DAT:Candle1",
           "object.lto:Candle",
           "asset-name:skins\\props\\candle.dtx"
+        ]
+      }
+    ],
+    "models\\props\\canvassack.abc": [
+      {
+        "name": "Canvassack",
+        "skins": [
+          "skins\\props\\canvassack.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\canvassack.dtx"
         ]
       }
     ],
@@ -54430,6 +57094,24 @@
     ],
     "models\\props\\chair.abc": [
       {
+        "name": "Chair 02",
+        "skins": [
+          "skins\\props\\chair02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\chair02.dtx"
+        ]
+      },
+      {
+        "name": "Chair 03",
+        "skins": [
+          "skins\\props\\chair03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\chair03.dtx"
+        ]
+      },
+      {
         "name": "Prop",
         "skins": [
           "skins\\props\\chairplain.dtx"
@@ -54552,6 +57234,17 @@
         ]
       }
     ],
+    "models\\props\\chair03.abc": [
+      {
+        "name": "Chair03",
+        "skins": [
+          "skins\\props\\chair03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\chair03.dtx"
+        ]
+      }
+    ],
     "models\\props\\chair_fordesk01.abc": [
       {
         "name": "Prop",
@@ -54563,6 +57256,28 @@
           "DUNGEONRESCUE.DAT:Prop11",
           "STONEHAM.DAT:Deskchair0",
           "asset-name:skins\\props\\chair_fordesk01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\chair_fordesk02.abc": [
+      {
+        "name": "Chair_fordesk02",
+        "skins": [
+          "skins\\props\\chair_fordesk02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\chair_fordesk02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\chair_fordesk03.abc": [
+      {
+        "name": "Chair_fordesk03",
+        "skins": [
+          "skins\\props\\chair_fordesk03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\chair_fordesk03.dtx"
         ]
       }
     ],
@@ -54700,6 +57415,17 @@
         ]
       }
     ],
+    "models\\props\\coffinraised.abc": [
+      {
+        "name": "Coffinraised",
+        "skins": [
+          "skins\\props\\coffinraised.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\coffinraised.dtx"
+        ]
+      }
+    ],
     "models\\props\\crate.abc": [
       {
         "name": "Prop",
@@ -54780,6 +57506,17 @@
         ]
       }
     ],
+    "models\\props\\crystal.abc": [
+      {
+        "name": "Crystal",
+        "skins": [
+          "skins\\props\\crystal.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\crystal.dtx"
+        ]
+      }
+    ],
     "models\\props\\cup01.abc": [
       {
         "name": "DestructableProp",
@@ -54851,6 +57588,17 @@
         ],
         "source_keys": [
           "STONEHAM.DAT:Debris0"
+        ]
+      }
+    ],
+    "models\\props\\debris\\metal-bardebris.abc": [
+      {
+        "name": "Metal-bardebris",
+        "skins": [
+          "skins\\props\\debris\\metal-bardebris.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\debris\\metal-bardebris.dtx"
         ]
       }
     ],
@@ -54935,6 +57683,17 @@
         ]
       }
     ],
+    "models\\props\\debris\\treasurecoin.abc": [
+      {
+        "name": "Treasurecoin",
+        "skins": [
+          "skins\\props\\debris\\treasurecoin.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\debris\\treasurecoin.dtx"
+        ]
+      }
+    ],
     "models\\props\\default.abc": [
       {
         "name": "PropDamager",
@@ -54964,6 +57723,17 @@
           "SPIDERSDEN.DAT:Desk2",
           "STONEHAM.DAT:Desk0",
           "asset-name:skins\\props\\desk01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\desk02.abc": [
+      {
+        "name": "Desk02",
+        "skins": [
+          "skins\\props\\desk02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\desk02.dtx"
         ]
       }
     ],
@@ -55074,6 +57844,17 @@
         ]
       }
     ],
+    "models\\props\\egg.abc": [
+      {
+        "name": "Egg",
+        "skins": [
+          "skins\\props\\egg.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\egg.dtx"
+        ]
+      }
+    ],
     "models\\props\\excaliber.abc": [
       {
         "name": "SwordInStone",
@@ -55113,6 +57894,28 @@
         ]
       }
     ],
+    "models\\props\\flayingbench.abc": [
+      {
+        "name": "Flayingbench",
+        "skins": [
+          "skins\\props\\flayingbench.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\flayingbench.dtx"
+        ]
+      }
+    ],
+    "models\\props\\flowerboxew.abc": [
+      {
+        "name": "Flowerboxew",
+        "skins": [
+          "skins\\props\\flowerboxew.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\flowerboxew.dtx"
+        ]
+      }
+    ],
     "models\\props\\flowerboxns.abc": [
       {
         "name": "Prop",
@@ -55134,6 +57937,28 @@
         "source_keys": [
           "SWORDINTHESTONE.DAT:Forge0",
           "asset-name:skins\\props\\forge.dtx"
+        ]
+      }
+    ],
+    "models\\props\\frog.abc": [
+      {
+        "name": "Frog",
+        "skins": [
+          "skins\\props\\frog.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\frog.dtx"
+        ]
+      }
+    ],
+    "models\\props\\goblet_fancy01.abc": [
+      {
+        "name": "Goblet_fancy01",
+        "skins": [
+          "skins\\props\\goblet_fancy01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\goblet_fancy01.dtx"
         ]
       }
     ],
@@ -55163,6 +57988,17 @@
         ]
       }
     ],
+    "models\\props\\goblet_plain02.abc": [
+      {
+        "name": "Goblet_plain02",
+        "skins": [
+          "skins\\props\\goblet_plain02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\goblet_plain02.dtx"
+        ]
+      }
+    ],
     "models\\props\\goblinhead.abc": [
       {
         "name": "Prop",
@@ -55185,6 +58021,17 @@
         "source_keys": [
           "HIDEOUT.DAT:Prop7",
           "asset-name:skins\\props\\grindingwheel.dtx"
+        ]
+      }
+    ],
+    "models\\props\\guillotine.abc": [
+      {
+        "name": "Guillotine",
+        "skins": [
+          "skins\\props\\guillotine.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\guillotine.dtx"
         ]
       }
     ],
@@ -55281,6 +58128,17 @@
         ]
       }
     ],
+    "models\\props\\harp.abc": [
+      {
+        "name": "Harp",
+        "skins": [
+          "skins\\props\\harp.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\harp.dtx"
+        ]
+      }
+    ],
     "models\\props\\haybale01.abc": [
       {
         "name": "Prop",
@@ -55338,6 +58196,28 @@
         ]
       }
     ],
+    "models\\props\\haystack01.abc": [
+      {
+        "name": "Haystack01",
+        "skins": [
+          "skins\\props\\haystack01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\haystack01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\headsmansblock.abc": [
+      {
+        "name": "Headsmansblock",
+        "skins": [
+          "skins\\props\\headsmansblock.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\headsmansblock.dtx"
+        ]
+      }
+    ],
     "models\\props\\hitchingpost.abc": [
       {
         "name": "Prop",
@@ -55347,6 +58227,17 @@
         "source_keys": [
           "SWORDINTHESTONE.DAT:Post0",
           "asset-name:skins\\props\\hitchingpost.dtx"
+        ]
+      }
+    ],
+    "models\\props\\hoe.abc": [
+      {
+        "name": "Hoe",
+        "skins": [
+          "skins\\props\\hoe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\hoe.dtx"
         ]
       }
     ],
@@ -55407,6 +58298,17 @@
         ]
       }
     ],
+    "models\\props\\jacobsladder.abc": [
+      {
+        "name": "Jacobsladder",
+        "skins": [
+          "skins\\props\\jacobsladder.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\jacobsladder.dtx"
+        ]
+      }
+    ],
     "models\\props\\jar01.abc": [
       {
         "name": "DestructableProp",
@@ -55441,6 +58343,17 @@
         ]
       }
     ],
+    "models\\props\\lantern1.abc": [
+      {
+        "name": "Lantern1",
+        "skins": [
+          "skins\\props\\lantern1.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\lantern1.dtx"
+        ]
+      }
+    ],
     "models\\props\\lionstatue.abc": [
       {
         "name": "Prop",
@@ -55468,6 +58381,17 @@
         ]
       }
     ],
+    "models\\props\\manacles.abc": [
+      {
+        "name": "Manacles",
+        "skins": [
+          "skins\\props\\manacles.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\manacles.dtx"
+        ]
+      }
+    ],
     "models\\props\\marketplacegoods.abc": [
       {
         "name": "Prop",
@@ -55491,6 +58415,17 @@
           "SWORDINTHESTONE.DAT:Stall0",
           "SWORDINTHESTONE.DAT:Stall1",
           "asset-name:skins\\props\\marketstall.dtx"
+        ]
+      }
+    ],
+    "models\\props\\minecart.abc": [
+      {
+        "name": "Minecart",
+        "skins": [
+          "skins\\props\\minecart.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\minecart.dtx"
         ]
       }
     ],
@@ -55558,6 +58493,17 @@
           "_RESCUEATTHERUINS.DAT:Lantern1",
           "_RESCUEATTHERUINS.DAT:Lantern13",
           "_RESCUEATTHERUINS.DAT:Lantern14"
+        ]
+      }
+    ],
+    "models\\props\\mirror1.abc": [
+      {
+        "name": "Mirror1",
+        "skins": [
+          "skins\\props\\mirror1.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\mirror1.dtx"
         ]
       }
     ],
@@ -55643,7 +58589,8 @@
         ],
         "source_keys": [
           "HIDEOUT.DAT:Painting3",
-          "HIDEOUT.DAT:Painting8"
+          "HIDEOUT.DAT:Painting8",
+          "asset-name:skins\\props\\painting_oval1.dtx"
         ]
       },
       {
@@ -55652,7 +58599,8 @@
           "skins\\props\\painting_oval2.dtx"
         ],
         "source_keys": [
-          "HIDEOUT.DAT:Painting4"
+          "HIDEOUT.DAT:Painting4",
+          "asset-name:skins\\props\\painting_oval2.dtx"
         ]
       }
     ],
@@ -55663,7 +58611,8 @@
           "skins\\props\\painting_rectangle1.dtx"
         ],
         "source_keys": [
-          "HIDEOUT.DAT:Painting0"
+          "HIDEOUT.DAT:Painting0",
+          "asset-name:skins\\props\\painting_rectangle1.dtx"
         ]
       },
       {
@@ -55672,7 +58621,8 @@
           "skins\\props\\painting_rectangle2.dtx"
         ],
         "source_keys": [
-          "HIDEOUT.DAT:Painting1"
+          "HIDEOUT.DAT:Painting1",
+          "asset-name:skins\\props\\painting_rectangle2.dtx"
         ]
       },
       {
@@ -55683,7 +58633,8 @@
         "source_keys": [
           "DUNGEONSOFDRAGADUNE.DAT:Painting7",
           "HIDEOUT.DAT:Painting2",
-          "HIDEOUT.DAT:Painting7"
+          "HIDEOUT.DAT:Painting7",
+          "asset-name:skins\\props\\painting_rectangle3.dtx"
         ]
       },
       {
@@ -55692,7 +58643,8 @@
           "skins\\props\\painting_rectangle4.dtx"
         ],
         "source_keys": [
-          "HIDEOUT.DAT:Painting5"
+          "HIDEOUT.DAT:Painting5",
+          "asset-name:skins\\props\\painting_rectangle4.dtx"
         ]
       },
       {
@@ -55702,7 +58654,8 @@
         ],
         "source_keys": [
           "CHATEAUESCAPE.DAT:Picture0",
-          "HIDEOUT.DAT:Painting6"
+          "HIDEOUT.DAT:Painting6",
+          "asset-name:skins\\props\\painting_rectangle5.dtx"
         ]
       }
     ],
@@ -55782,6 +58735,39 @@
         ]
       }
     ],
+    "models\\props\\pew3.abc": [
+      {
+        "name": "Pew3",
+        "skins": [
+          "skins\\props\\pew3.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\pew3.dtx"
+        ]
+      }
+    ],
+    "models\\props\\pillarstand.abc": [
+      {
+        "name": "Pillarstand",
+        "skins": [
+          "skins\\props\\pillarstand.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\pillarstand.dtx"
+        ]
+      }
+    ],
+    "models\\props\\pillory.abc": [
+      {
+        "name": "Pillory",
+        "skins": [
+          "skins\\props\\pillory.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\pillory.dtx"
+        ]
+      }
+    ],
     "models\\props\\pipeorgan.abc": [
       {
         "name": "Prop",
@@ -55794,6 +58780,28 @@
         ]
       }
     ],
+    "models\\props\\plantsandtrees\\bush01.abc": [
+      {
+        "name": "Bush01",
+        "skins": [
+          "skins\\props\\plantsandtrees\\bush01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\bush01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\bush02.abc": [
+      {
+        "name": "Bush02",
+        "skins": [
+          "skins\\props\\plantsandtrees\\bush02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\bush02.dtx"
+        ]
+      }
+    ],
     "models\\props\\plantsandtrees\\bush03.abc": [
       {
         "name": "Prop",
@@ -55803,6 +58811,28 @@
         "source_keys": [
           "WEDDINGDAY.DAT:Prop17",
           "asset-name:skins\\props\\plantsandtrees\\bush03.dtx"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\bush04.abc": [
+      {
+        "name": "Bush04",
+        "skins": [
+          "skins\\props\\plantsandtrees\\bush04.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\bush04.dtx"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\bush05.abc": [
+      {
+        "name": "Bush05",
+        "skins": [
+          "skins\\props\\plantsandtrees\\bush05.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\bush05.dtx"
         ]
       }
     ],
@@ -55822,6 +58852,39 @@
         ]
       }
     ],
+    "models\\props\\plantsandtrees\\flowers01.abc": [
+      {
+        "name": "Flowers01",
+        "skins": [
+          "skins\\props\\plantsandtrees\\flowers01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\flowers01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\gargoyletree.abc": [
+      {
+        "name": "Gargoyletree",
+        "skins": [
+          "skins\\props\\plantsandtrees\\gargoyletree.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\gargoyletree.dtx"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\grass01.abc": [
+      {
+        "name": "Grass01",
+        "skins": [
+          "skins\\props\\plantsandtrees\\grass01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\grass01.dtx"
+        ]
+      }
+    ],
     "models\\props\\plantsandtrees\\grass02.abc": [
       {
         "name": "Prop",
@@ -55830,6 +58893,39 @@
         ],
         "source_keys": [
           "GAUNTLET.DAT:Prop130"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\plant01.abc": [
+      {
+        "name": "Plant01",
+        "skins": [
+          "skins\\props\\plantsandtrees\\plant01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\plant01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\plant02.abc": [
+      {
+        "name": "Plant02",
+        "skins": [
+          "skins\\props\\plantsandtrees\\plant02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\plant02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\plantsandtrees\\plant03.abc": [
+      {
+        "name": "Plant03",
+        "skins": [
+          "skins\\props\\plantsandtrees\\plant03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\plantsandtrees\\plant03.dtx"
         ]
       }
     ],
@@ -55999,6 +59095,39 @@
         ]
       }
     ],
+    "models\\props\\podium01.abc": [
+      {
+        "name": "Podium01",
+        "skins": [
+          "skins\\props\\podium01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\podium01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\podium02.abc": [
+      {
+        "name": "Podium02",
+        "skins": [
+          "skins\\props\\podium02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\podium02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\podium03.abc": [
+      {
+        "name": "Podium03",
+        "skins": [
+          "skins\\props\\podium03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\podium03.dtx"
+        ]
+      }
+    ],
     "models\\props\\potatopile.abc": [
       {
         "name": "Prop",
@@ -56029,6 +59158,39 @@
         "source_keys": [
           "GAUNTLET.DAT:Prop1",
           "GAUNTLET.DAT:Prop4"
+        ]
+      }
+    ],
+    "models\\props\\rope.abc": [
+      {
+        "name": "Rope",
+        "skins": [
+          "skins\\props\\rope.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\rope.dtx"
+        ]
+      }
+    ],
+    "models\\props\\ropecoil.abc": [
+      {
+        "name": "Ropecoil",
+        "skins": [
+          "skins\\props\\ropecoil.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\ropecoil.dtx"
+        ]
+      }
+    ],
+    "models\\props\\sack01.abc": [
+      {
+        "name": "Sack01",
+        "skins": [
+          "skins\\props\\sack01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\sack01.dtx"
         ]
       }
     ],
@@ -56076,6 +59238,28 @@
         ]
       }
     ],
+    "models\\props\\sconce1.abc": [
+      {
+        "name": "Sconce1",
+        "skins": [
+          "skins\\props\\sconce1.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\sconce1.dtx"
+        ]
+      }
+    ],
+    "models\\props\\sconce2.abc": [
+      {
+        "name": "Sconce2",
+        "skins": [
+          "skins\\props\\sconce2.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\sconce2.dtx"
+        ]
+      }
+    ],
     "models\\props\\shield-broken01.abc": [
       {
         "name": "Prop",
@@ -56087,6 +59271,28 @@
           "_TEMPLEOFBARK.DAT:Shield15",
           "_TEMPLEOFBARK.DAT:Shield16",
           "asset-name:skins\\props\\shield-broken01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\shield-broken02.abc": [
+      {
+        "name": "Shield-broken02",
+        "skins": [
+          "skins\\props\\shield-broken02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\shield-broken02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\shield-broken03.abc": [
+      {
+        "name": "Shield-broken03",
+        "skins": [
+          "skins\\props\\shield-broken03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\shield-broken03.dtx"
         ]
       }
     ],
@@ -56234,6 +59440,50 @@
         ]
       }
     ],
+    "models\\props\\spikepit.abc": [
+      {
+        "name": "Spikepit",
+        "skins": [
+          "skins\\props\\spikepit.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\spikepit.dtx"
+        ]
+      }
+    ],
+    "models\\props\\stein_fancy01.abc": [
+      {
+        "name": "Stein_fancy01",
+        "skins": [
+          "skins\\props\\stein_fancy01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\stein_fancy01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\stein_fancy02.abc": [
+      {
+        "name": "Stein_fancy02",
+        "skins": [
+          "skins\\props\\stein_fancy02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\stein_fancy02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\stonehilt.abc": [
+      {
+        "name": "Stonehilt",
+        "skins": [
+          "skins\\props\\stonehilt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\stonehilt.dtx"
+        ]
+      }
+    ],
     "models\\props\\stool01.abc": [
       {
         "name": "Prop",
@@ -56243,6 +59493,28 @@
         "source_keys": [
           "WEDDINGDAY.DAT:Prop14",
           "asset-name:skins\\props\\stool01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\stool02.abc": [
+      {
+        "name": "Stool02",
+        "skins": [
+          "skins\\props\\stool02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\stool02.dtx"
+        ]
+      }
+    ],
+    "models\\props\\stool03.abc": [
+      {
+        "name": "Stool03",
+        "skins": [
+          "skins\\props\\stool03.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\stool03.dtx"
         ]
       }
     ],
@@ -56316,6 +59588,17 @@
         ],
         "source_keys": [
           "ONTHERUN.DAT:Prop5"
+        ]
+      }
+    ],
+    "models\\props\\sword-broken.abc": [
+      {
+        "name": "Sword-broken",
+        "skins": [
+          "skins\\props\\sword-broken.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\sword-broken.dtx"
         ]
       }
     ],
@@ -56465,6 +59748,28 @@
         ]
       }
     ],
+    "models\\props\\tapestry-old01.abc": [
+      {
+        "name": "Tapestry-old01",
+        "skins": [
+          "skins\\props\\tapestry-old01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\tapestry-old01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\tapestry-old02.abc": [
+      {
+        "name": "Tapestry-old02",
+        "skins": [
+          "skins\\props\\tapestry-old02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\tapestry-old02.dtx"
+        ]
+      }
+    ],
     "models\\props\\throne.abc": [
       {
         "name": "Prop",
@@ -56588,6 +59893,17 @@
         ]
       }
     ],
+    "models\\props\\torturecage01.abc": [
+      {
+        "name": "Torturecage01",
+        "skins": [
+          "skins\\props\\torturecage01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\torturecage01.dtx"
+        ]
+      }
+    ],
     "models\\props\\torturecrusher01.abc": [
       {
         "name": "Prop",
@@ -56647,6 +59963,28 @@
         ]
       }
     ],
+    "models\\props\\townsign.abc": [
+      {
+        "name": "Townsign",
+        "skins": [
+          "skins\\props\\townsign.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\townsign.dtx"
+        ]
+      }
+    ],
+    "models\\props\\treasurechute.abc": [
+      {
+        "name": "Treasurechute",
+        "skins": [
+          "skins\\props\\treasurechute.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\treasurechute.dtx"
+        ]
+      }
+    ],
     "models\\props\\treasureopening.abc": [
       {
         "name": "Prop",
@@ -56680,6 +60018,17 @@
           "DRAGONBLADE.DAT:Prop5",
           "DRAGONBLADE.DAT:Prop6",
           "asset-name:skins\\props\\treasurepile.dtx"
+        ]
+      }
+    ],
+    "models\\props\\tree.abc": [
+      {
+        "name": "Tree",
+        "skins": [
+          "skins\\props\\tree.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\tree.dtx"
         ]
       }
     ],
@@ -56744,6 +60093,17 @@
           "_TEMPLEOFBARK.DAT:DestructableProp7",
           "_TEMPLEOFBARK.DAT:DestructableProp5",
           "asset-name:skins\\props\\urngargoyle.dtx"
+        ]
+      }
+    ],
+    "models\\props\\vials.abc": [
+      {
+        "name": "Vials",
+        "skins": [
+          "skins\\props\\vials.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\vials.dtx"
         ]
       }
     ],
@@ -56924,6 +60284,17 @@
           "_RESCUEATTHERUINS.DAT:WallTorch25",
           "object.lto:CandleWall",
           "asset-name:skins\\props\\wallcandle.dtx"
+        ]
+      }
+    ],
+    "models\\props\\wallspikes.abc": [
+      {
+        "name": "Wallspikes",
+        "skins": [
+          "skins\\props\\wallspikes.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\wallspikes.dtx"
         ]
       }
     ],
@@ -57279,6 +60650,17 @@
         ]
       }
     ],
+    "models\\props\\weaponscabinet02.abc": [
+      {
+        "name": "Weaponscabinet02",
+        "skins": [
+          "skins\\props\\weaponscabinet02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\weaponscabinet02.dtx"
+        ]
+      }
+    ],
     "models\\props\\weaponscabinet03.abc": [
       {
         "name": "Prop",
@@ -57298,6 +60680,28 @@
         ],
         "source_keys": [
           "SWORDINTHESTONE.DAT:Cabinet0"
+        ]
+      }
+    ],
+    "models\\props\\winebottle01.abc": [
+      {
+        "name": "Winebottle01",
+        "skins": [
+          "skins\\props\\winebottle01.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\winebottle01.dtx"
+        ]
+      }
+    ],
+    "models\\props\\winebottle02.abc": [
+      {
+        "name": "Winebottle02",
+        "skins": [
+          "skins\\props\\winebottle02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\winebottle02.dtx"
         ]
       }
     ],
@@ -57367,6 +60771,28 @@
         ]
       }
     ],
+    "models\\props\\woodshed02.abc": [
+      {
+        "name": "Woodshed02",
+        "skins": [
+          "skins\\props\\woodshed02.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\woodshed02.dtx"
+        ]
+      }
+    ],
+    "models\\rabbit.abc": [
+      {
+        "name": "Rabbit",
+        "skins": [
+          "skins\\rabbit.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\rabbit.dtx"
+        ]
+      }
+    ],
     "models\\rooster.abc": [
       {
         "name": "Rooster",
@@ -57375,6 +60801,57 @@
         ],
         "source_keys": [
           "asset-name:skins\\rooster.dtx"
+        ]
+      }
+    ],
+    "models\\save\\lizardman.abc": [
+      {
+        "name": "Lizardman",
+        "skins": [
+          "skins\\lizardman.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\lizardman.dtx"
+        ]
+      }
+    ],
+    "models\\save\\lizardwarrior.abc": [
+      {
+        "name": "Lizardwarrior",
+        "skins": [
+          "skins\\lizardwarrior.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\lizardwarrior.dtx"
+        ]
+      },
+      {
+        "name": "Lizardwarrior Blue",
+        "skins": [
+          "skins\\lizardwarriorblue.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\lizardwarriorblue.dtx"
+        ]
+      }
+    ],
+    "models\\save\\skeleton.abc": [
+      {
+        "name": "Skeleton",
+        "skins": [
+          "skins\\skeleton.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\skeleton.dtx"
+        ]
+      },
+      {
+        "name": "Skeleton Warrior",
+        "skins": [
+          "skins\\skeletonwarrior.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\skeletonwarrior.dtx"
         ]
       }
     ],
@@ -57417,6 +60894,61 @@
         ],
         "source_keys": [
           "asset-name:skins\\soldier.dtx"
+        ]
+      }
+    ],
+    "models\\spells\\debris.abc": [
+      {
+        "name": "Debris",
+        "skins": [
+          "skins\\spells\\debris.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\spells\\debris.dtx"
+        ]
+      }
+    ],
+    "models\\spells\\flyingfist.abc": [
+      {
+        "name": "Flyingfist",
+        "skins": [
+          "skins\\spells\\flyingfist.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\spells\\flyingfist.dtx"
+        ]
+      }
+    ],
+    "models\\spells\\icebolt.abc": [
+      {
+        "name": "Icebolt",
+        "skins": [
+          "skins\\spells\\icebolt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\spells\\icebolt.dtx"
+        ]
+      }
+    ],
+    "models\\spells\\wizardeye.abc": [
+      {
+        "name": "Wizardeye",
+        "skins": [
+          "skins\\spells\\wizardeye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\spells\\wizardeye.dtx"
+        ]
+      }
+    ],
+    "models\\spells\\wizardeyeaura.abc": [
+      {
+        "name": "Wizardeyeaura",
+        "skins": [
+          "skins\\spells\\wizardeyeaura.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\spells\\wizardeyeaura.dtx"
         ]
       }
     ],
@@ -57504,6 +61036,884 @@
         ]
       }
     ],
+    "models\\weapons\\axemagnetic.abc": [
+      {
+        "name": "Axemagnetic",
+        "skins": [
+          "skins\\pickupitems\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\axemagnetic.dtx"
+        ]
+      },
+      {
+        "name": "Axemagnetic 2",
+        "skins": [
+          "skins\\props\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\props\\axemagnetic.dtx"
+        ]
+      },
+      {
+        "name": "Axemagnetic 3",
+        "skins": [
+          "skins\\weapons\\axemagnetic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\axemagnetic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\berzerkeraxemagic.abc": [
+      {
+        "name": "Berzerkeraxemagic",
+        "skins": [
+          "skins\\pickupitems\\berzerkeraxemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\berzerkeraxemagic.dtx"
+        ]
+      },
+      {
+        "name": "Berzerkeraxemagic 2",
+        "skins": [
+          "skins\\weapons\\berzerkeraxemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\berzerkeraxemagic.dtx"
+        ]
+      },
+      {
+        "name": "Berzerkeraxemagic 3",
+        "skins": [
+          "skins\\weapons\\pv\\berzerkeraxemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\berzerkeraxemagic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\bowarcane.abc": [
+      {
+        "name": "Bowarcane",
+        "skins": [
+          "skins\\pickupitems\\bowarcane.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\bowarcane.dtx"
+        ]
+      },
+      {
+        "name": "Bowarcane 2",
+        "skins": [
+          "skins\\weapons\\bowarcane.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\bowarcane.dtx"
+        ]
+      },
+      {
+        "name": "Bowarcane 3",
+        "skins": [
+          "skins\\weapons\\pv\\bowarcane.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\bowarcane.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\bowbasic.abc": [
+      {
+        "name": "Bowbasic",
+        "skins": [
+          "skins\\pickupitems\\bowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\bowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Bowbasic 2",
+        "skins": [
+          "skins\\weapons\\bowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\bowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Bowbasic 3",
+        "skins": [
+          "skins\\weapons\\pv\\bowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\bowbasic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\bowdragon.abc": [
+      {
+        "name": "Bowdragon",
+        "skins": [
+          "skins\\pickupitems\\bowdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\bowdragon.dtx"
+        ]
+      },
+      {
+        "name": "Bowdragon 2",
+        "skins": [
+          "skins\\weapons\\bowdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\bowdragon.dtx"
+        ]
+      },
+      {
+        "name": "Bowdragon 3",
+        "skins": [
+          "skins\\weapons\\pv\\bowdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\bowdragon.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\boweye.abc": [
+      {
+        "name": "Boweye",
+        "skins": [
+          "skins\\pickupitems\\boweye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\boweye.dtx"
+        ]
+      },
+      {
+        "name": "Boweye 2",
+        "skins": [
+          "skins\\weapons\\boweye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\boweye.dtx"
+        ]
+      },
+      {
+        "name": "Boweye 3",
+        "skins": [
+          "skins\\weapons\\pv\\boweye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\boweye.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\daggermagic.abc": [
+      {
+        "name": "Daggermagic",
+        "skins": [
+          "skins\\pickupitems\\daggermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\daggermagic.dtx"
+        ]
+      },
+      {
+        "name": "Daggermagic 2",
+        "skins": [
+          "skins\\weapons\\daggermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\daggermagic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\hammereq.abc": [
+      {
+        "name": "Hammereq",
+        "skins": [
+          "skins\\pickupitems\\hammereq.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\hammereq.dtx"
+        ]
+      },
+      {
+        "name": "Hammereq 2",
+        "skins": [
+          "skins\\weapons\\hammereq.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\hammereq.dtx"
+        ]
+      },
+      {
+        "name": "Hammereq 3",
+        "skins": [
+          "skins\\weapons\\pv\\hammereq.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\hammereq.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\hammermagic.abc": [
+      {
+        "name": "Hammermagic",
+        "skins": [
+          "skins\\pickupitems\\hammermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\hammermagic.dtx"
+        ]
+      },
+      {
+        "name": "Hammermagic 2",
+        "skins": [
+          "skins\\weapons\\hammermagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\hammermagic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\handaxemagic.abc": [
+      {
+        "name": "Handaxemagic",
+        "skins": [
+          "skins\\pickupitems\\handaxemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\handaxemagic.dtx"
+        ]
+      },
+      {
+        "name": "Handaxemagic 2",
+        "skins": [
+          "skins\\weapons\\handaxemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\handaxemagic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\hhga.abc": [
+      {
+        "name": "Hhga",
+        "skins": [
+          "skins\\pickupitems\\hhga.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\hhga.dtx"
+        ]
+      },
+      {
+        "name": "Hhga 2",
+        "skins": [
+          "skins\\weapons\\hhga.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\hhga.dtx"
+        ]
+      },
+      {
+        "name": "Hhga 3",
+        "skins": [
+          "skins\\weapons\\pv\\hhga.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\hhga.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\knifemagic.abc": [
+      {
+        "name": "Knifemagic",
+        "skins": [
+          "skins\\pickupitems\\knifemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\knifemagic.dtx"
+        ]
+      },
+      {
+        "name": "Knifemagic 2",
+        "skins": [
+          "skins\\weapons\\knifemagic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\knifemagic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\longswordfine.abc": [
+      {
+        "name": "Longswordfine",
+        "skins": [
+          "skins\\weapons\\longswordfine.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\longswordfine.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\melee2hsword.abc": [
+      {
+        "name": "Melee2hsword",
+        "skins": [
+          "skins\\pickupitems\\melee2hsword.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\melee2hsword.dtx"
+        ]
+      },
+      {
+        "name": "Melee2hsword 2",
+        "skins": [
+          "skins\\weapons\\melee2hsword.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\melee2hsword.dtx"
+        ]
+      },
+      {
+        "name": "Melee2hsword 3",
+        "skins": [
+          "skins\\weapons\\pv\\melee2hsword.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\melee2hsword.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\rodclaw.abc": [
+      {
+        "name": "Rodclaw",
+        "skins": [
+          "skins\\pickupitems\\rodclaw.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\rodclaw.dtx"
+        ]
+      },
+      {
+        "name": "Rodclaw 2",
+        "skins": [
+          "skins\\weapons\\pv\\rodclaw.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\rodclaw.dtx"
+        ]
+      },
+      {
+        "name": "Rodclaw 3",
+        "skins": [
+          "skins\\weapons\\rodclaw.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\rodclaw.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\roddemon.abc": [
+      {
+        "name": "Roddemon",
+        "skins": [
+          "skins\\pickupitems\\roddemon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\roddemon.dtx"
+        ]
+      },
+      {
+        "name": "Roddemon 2",
+        "skins": [
+          "skins\\weapons\\pv\\roddemon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\roddemon.dtx"
+        ]
+      },
+      {
+        "name": "Roddemon 3",
+        "skins": [
+          "skins\\weapons\\roddemon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\roddemon.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\rodflare.abc": [
+      {
+        "name": "Rodflare",
+        "skins": [
+          "skins\\pickupitems\\rodflare.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\rodflare.dtx"
+        ]
+      },
+      {
+        "name": "Rodflare 2",
+        "skins": [
+          "skins\\weapons\\pv\\rodflare.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\rodflare.dtx"
+        ]
+      },
+      {
+        "name": "Rodflare 3",
+        "skins": [
+          "skins\\weapons\\rodflare.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\rodflare.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\rodskull.abc": [
+      {
+        "name": "Rodskull",
+        "skins": [
+          "skins\\pickupitems\\rodskull.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\rodskull.dtx"
+        ]
+      },
+      {
+        "name": "Rodskull 2",
+        "skins": [
+          "skins\\weapons\\pv\\rodskull.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\rodskull.dtx"
+        ]
+      },
+      {
+        "name": "Rodskull 3",
+        "skins": [
+          "skins\\weapons\\rodskull.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\rodskull.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\scimitar.abc": [
+      {
+        "name": "Scimitar",
+        "skins": [
+          "skins\\weapons\\scimitar.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\scimitar.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\secretweapon.abc": [
+      {
+        "name": "Secretweapon",
+        "skins": [
+          "skins\\pickupitems\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 2",
+        "skins": [
+          "skins\\projectiles\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\projectiles\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 3",
+        "skins": [
+          "skins\\weapons\\pv\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\secretweapon.dtx"
+        ]
+      },
+      {
+        "name": "Secretweapon 4",
+        "skins": [
+          "skins\\weapons\\secretweapon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\secretweapon.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\shortstaff.abc": [
+      {
+        "name": "Shortstaff",
+        "skins": [
+          "skins\\pickupitems\\shortstaff.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\shortstaff.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\spearfine.abc": [
+      {
+        "name": "Spearfine",
+        "skins": [
+          "skins\\pickupitems\\spearfine.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\spearfine.dtx"
+        ]
+      },
+      {
+        "name": "Spearfine 2",
+        "skins": [
+          "skins\\weapons\\spearfine.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\spearfine.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\spellpage.abc": [
+      {
+        "name": "Spellpage",
+        "skins": [
+          "skins\\pickupitems\\spellpage.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\spellpage.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\staffbasic.abc": [
+      {
+        "name": "Staffbasic",
+        "skins": [
+          "skins\\pickupitems\\staffbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\staffbasic.dtx"
+        ]
+      },
+      {
+        "name": "Staffbasic 2",
+        "skins": [
+          "skins\\weapons\\pv\\staffbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\staffbasic.dtx"
+        ]
+      },
+      {
+        "name": "Staffbasic 3",
+        "skins": [
+          "skins\\weapons\\staffbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\staffbasic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\staffdragon.abc": [
+      {
+        "name": "Staffdragon",
+        "skins": [
+          "skins\\pickupitems\\staffdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\staffdragon.dtx"
+        ]
+      },
+      {
+        "name": "Staffdragon 2",
+        "skins": [
+          "skins\\weapons\\pv\\staffdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\staffdragon.dtx"
+        ]
+      },
+      {
+        "name": "Staffdragon 3",
+        "skins": [
+          "skins\\weapons\\staffdragon.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\staffdragon.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\stafffire.abc": [
+      {
+        "name": "Stafffire",
+        "skins": [
+          "skins\\pickupitems\\stafffire.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\stafffire.dtx"
+        ]
+      },
+      {
+        "name": "Stafffire 2",
+        "skins": [
+          "skins\\weapons\\pv\\stafffire.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\stafffire.dtx"
+        ]
+      },
+      {
+        "name": "Stafffire 3",
+        "skins": [
+          "skins\\weapons\\stafffire.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\stafffire.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\staffsparks.abc": [
+      {
+        "name": "Staffsparks",
+        "skins": [
+          "skins\\pickupitems\\staffsparks.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\staffsparks.dtx"
+        ]
+      },
+      {
+        "name": "Staffsparks 2",
+        "skins": [
+          "skins\\weapons\\pv\\staffsparks.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\staffsparks.dtx"
+        ]
+      },
+      {
+        "name": "Staffsparks 3",
+        "skins": [
+          "skins\\weapons\\staffsparks.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\staffsparks.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\throwaxe.abc": [
+      {
+        "name": "Throwaxe",
+        "skins": [
+          "skins\\pickupitems\\throwaxe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\throwaxe.dtx"
+        ]
+      },
+      {
+        "name": "Throwaxe 2",
+        "skins": [
+          "skins\\weapons\\pv\\throwaxe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\throwaxe.dtx"
+        ]
+      },
+      {
+        "name": "Throwaxe 3",
+        "skins": [
+          "skins\\weapons\\throwaxe.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\throwaxe.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\wandbolt.abc": [
+      {
+        "name": "Wandbolt",
+        "skins": [
+          "skins\\pickupitems\\wandbolt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\wandbolt.dtx"
+        ]
+      },
+      {
+        "name": "Wandbolt 2",
+        "skins": [
+          "skins\\weapons\\pv\\wandbolt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\wandbolt.dtx"
+        ]
+      },
+      {
+        "name": "Wandbolt 3",
+        "skins": [
+          "skins\\weapons\\wandbolt.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\wandbolt.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\wandeye.abc": [
+      {
+        "name": "Wandeye",
+        "skins": [
+          "skins\\pickupitems\\wandeye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\wandeye.dtx"
+        ]
+      },
+      {
+        "name": "Wandeye 2",
+        "skins": [
+          "skins\\weapons\\pv\\wandeye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\wandeye.dtx"
+        ]
+      },
+      {
+        "name": "Wandeye 3",
+        "skins": [
+          "skins\\weapons\\wandeye.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\wandeye.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\wandkb.abc": [
+      {
+        "name": "Wandkb",
+        "skins": [
+          "skins\\pickupitems\\wandkb.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\wandkb.dtx"
+        ]
+      },
+      {
+        "name": "Wandkb 2",
+        "skins": [
+          "skins\\weapons\\pv\\wandkb.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\wandkb.dtx"
+        ]
+      },
+      {
+        "name": "Wandkb 3",
+        "skins": [
+          "skins\\weapons\\wandkb.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\wandkb.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\xbow.abc": [
+      {
+        "name": "Xbow",
+        "skins": [
+          "skins\\pickupitems\\xbow.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\xbow.dtx"
+        ]
+      },
+      {
+        "name": "Xbow 2",
+        "skins": [
+          "skins\\weapons\\pv\\xbow.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\xbow.dtx"
+        ]
+      },
+      {
+        "name": "Xbow 3",
+        "skins": [
+          "skins\\weapons\\xbow.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\xbow.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\xbowbasic.abc": [
+      {
+        "name": "Xbowbasic",
+        "skins": [
+          "skins\\pickupitems\\xbowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\xbowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Xbowbasic 2",
+        "skins": [
+          "skins\\weapons\\pv\\xbowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\xbowbasic.dtx"
+        ]
+      },
+      {
+        "name": "Xbowbasic 3",
+        "skins": [
+          "skins\\weapons\\xbowbasic.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\xbowbasic.dtx"
+        ]
+      }
+    ],
+    "models\\weapons\\xbowgattling.abc": [
+      {
+        "name": "Xbowgattling",
+        "skins": [
+          "skins\\pickupitems\\xbowgattling.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\pickupitems\\xbowgattling.dtx"
+        ]
+      },
+      {
+        "name": "Xbowgattling 2",
+        "skins": [
+          "skins\\weapons\\pv\\xbowgattling.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\pv\\xbowgattling.dtx"
+        ]
+      },
+      {
+        "name": "Xbowgattling 3",
+        "skins": [
+          "skins\\weapons\\xbowgattling.dtx"
+        ],
+        "source_keys": [
+          "asset-name:skins\\weapons\\xbowgattling.dtx"
+        ]
+      }
+    ],
     "models\\wight.abc": [
       {
         "name": "Wight",
@@ -57527,6 +61937,588 @@
       }
     ]
   },
+  "model_resources": [
+    "models\\3dsprite.abc",
+    "models\\bandit.abc",
+    "models\\basilisk.abc",
+    "models\\bat.abc",
+    "models\\bird.abc",
+    "models\\cow.abc",
+    "models\\dagrell.abc",
+    "models\\dragonfly.abc",
+    "models\\dragonred.abc",
+    "models\\duck.abc",
+    "models\\dwarf.abc",
+    "models\\dwarfking.abc",
+    "models\\elementalearth.abc",
+    "models\\evileyeterror.abc",
+    "models\\fish.abc",
+    "models\\gargoyle.abc",
+    "models\\gibs\\dagrell\\xarm.abc",
+    "models\\gibs\\dagrell\\xarm01.abc",
+    "models\\gibs\\dagrell\\xarmlow.abc",
+    "models\\gibs\\dagrell\\xarmlow01.abc",
+    "models\\gibs\\dagrell\\xbackb.abc",
+    "models\\gibs\\dagrell\\xfinpiv.abc",
+    "models\\gibs\\dagrell\\xfinpiv01.abc",
+    "models\\gibs\\dagrell\\xfinpiv02.abc",
+    "models\\gibs\\dagrell\\xfinpiv03.abc",
+    "models\\gibs\\dagrell\\xfinpiv04.abc",
+    "models\\gibs\\dagrell\\xfinpiv05.abc",
+    "models\\gibs\\dagrell\\xfinpiv06.abc",
+    "models\\gibs\\dagrell\\xheadpiv.abc",
+    "models\\gibs\\dagrell\\xjawpiv.abc",
+    "models\\gibs\\dagrell\\xleg.abc",
+    "models\\gibs\\dagrell\\xleg01.abc",
+    "models\\gibs\\dagrell\\xleglow.abc",
+    "models\\gibs\\dagrell\\xleglow01.abc",
+    "models\\gibs\\dagrell\\xnecka.abc",
+    "models\\gibs\\dagrell\\xneckb.abc",
+    "models\\gibs\\dagrell\\xneckbase.abc",
+    "models\\gibs\\dagrell\\xtaila.abc",
+    "models\\gibs\\dagrell\\xtoepiv01.abc",
+    "models\\gibs\\dagrell\\xtoepiv02.abc",
+    "models\\gibs\\dagrell\\xtoepiv03.abc",
+    "models\\gibs\\dagrell\\xtoepiv04.abc",
+    "models\\gibs\\dagrell\\xtoepiv05.abc",
+    "models\\gibs\\dragonfly\\xwinga.abc",
+    "models\\gibs\\dragonfly\\xwinga01.abc",
+    "models\\gibs\\dragonfly\\xwinga02.abc",
+    "models\\gibs\\dragonfly\\xwinga03.abc",
+    "models\\gibs\\elementalearth\\bip01 head.abc",
+    "models\\gibs\\elementalearth\\bip01 l calf.abc",
+    "models\\gibs\\elementalearth\\bip01 l foot.abc",
+    "models\\gibs\\elementalearth\\bip01 l forearm.abc",
+    "models\\gibs\\elementalearth\\bip01 l thigh.abc",
+    "models\\gibs\\elementalearth\\bip01 l upperarm.abc",
+    "models\\gibs\\elementalearth\\bip01 lhand1.abc",
+    "models\\gibs\\elementalearth\\bip01 r calf.abc",
+    "models\\gibs\\elementalearth\\bip01 r foot.abc",
+    "models\\gibs\\elementalearth\\bip01 r forearm.abc",
+    "models\\gibs\\elementalearth\\bip01 r thigh.abc",
+    "models\\gibs\\elementalearth\\bip01 r upperarm.abc",
+    "models\\gibs\\elementalearth\\bip01 rhand1.abc",
+    "models\\gibs\\elementalearth\\bip01 spine.abc",
+    "models\\gibs\\elementalwater\\tnodebottom.abc",
+    "models\\gibs\\elementalwater\\tnodemiddle.abc",
+    "models\\gibs\\elementalwater\\tnodetop.abc",
+    "models\\gibs\\glass.abc",
+    "models\\gibs\\glass2.abc",
+    "models\\gibs\\gopher\\gopherbody1.abc",
+    "models\\gibs\\gopher\\gopherbody2.abc",
+    "models\\gibs\\metal.abc",
+    "models\\gibs\\skeleton\\bip01 head.abc",
+    "models\\gibs\\skeleton\\bip01 l calf.abc",
+    "models\\gibs\\skeleton\\bip01 l foot.abc",
+    "models\\gibs\\skeleton\\bip01 l forearm.abc",
+    "models\\gibs\\skeleton\\bip01 l hand.abc",
+    "models\\gibs\\skeleton\\bip01 l thigh.abc",
+    "models\\gibs\\skeleton\\bip01 l upperarm.abc",
+    "models\\gibs\\skeleton\\bip01 neck.abc",
+    "models\\gibs\\skeleton\\bip01 pelvis.abc",
+    "models\\gibs\\skeleton\\bip01 r calf.abc",
+    "models\\gibs\\skeleton\\bip01 r foot.abc",
+    "models\\gibs\\skeleton\\bip01 r forearm.abc",
+    "models\\gibs\\skeleton\\bip01 r hand.abc",
+    "models\\gibs\\skeleton\\bip01 r thigh.abc",
+    "models\\gibs\\skeleton\\bip01 r upperarm.abc",
+    "models\\gibs\\skeleton\\bip01 spine1.abc",
+    "models\\gibs\\skeleton\\bip01 spine2.abc",
+    "models\\gibs\\stone.abc",
+    "models\\gibs\\stone2.abc",
+    "models\\gibs\\stone3.abc",
+    "models\\gibs\\terrain.abc",
+    "models\\gibs\\torturecageleg.abc",
+    "models\\gibs\\wood.abc",
+    "models\\gibs\\wood2.abc",
+    "models\\gibs\\wood3.abc",
+    "models\\goat.abc",
+    "models\\goblin.abc",
+    "models\\golemstone.abc",
+    "models\\gopher.abc",
+    "models\\harpy.abc",
+    "models\\hen.abc",
+    "models\\lich.abc",
+    "models\\lichking.abc",
+    "models\\lizardman.abc",
+    "models\\lizardwarrior.abc",
+    "models\\modelprops\\crown.abc",
+    "models\\modelprops\\feedbucket.abc",
+    "models\\modelprops\\goblet.abc",
+    "models\\modelprops\\hammer.abc",
+    "models\\modelprops\\lichkingstaff.abc",
+    "models\\modelprops\\ogreclub.abc",
+    "models\\modelprops\\rag.abc",
+    "models\\modelprops\\shield.abc",
+    "models\\monk.abc",
+    "models\\mummy.abc",
+    "models\\nobleman.abc",
+    "models\\orc.abc",
+    "models\\pickupitems\\axemagnetic.abc",
+    "models\\pickupitems\\baggold.abc",
+    "models\\pickupitems\\bowarcane.abc",
+    "models\\pickupitems\\bowbasic.abc",
+    "models\\pickupitems\\bowdragon.abc",
+    "models\\pickupitems\\boweye.abc",
+    "models\\pickupitems\\daggermagic.abc",
+    "models\\pickupitems\\hammereq.abc",
+    "models\\pickupitems\\hammermagic.abc",
+    "models\\pickupitems\\hhga.abc",
+    "models\\pickupitems\\knifemagic.abc",
+    "models\\pickupitems\\melee2hsword.abc",
+    "models\\pickupitems\\rodclaw.abc",
+    "models\\pickupitems\\roddemon.abc",
+    "models\\pickupitems\\rodflare.abc",
+    "models\\pickupitems\\rodskull.abc",
+    "models\\pickupitems\\secretweapon.abc",
+    "models\\pickupitems\\shortstaff.abc",
+    "models\\pickupitems\\spearfine.abc",
+    "models\\pickupitems\\spellpage.abc",
+    "models\\pickupitems\\staffbasic.abc",
+    "models\\pickupitems\\staffdragon.abc",
+    "models\\pickupitems\\stafffire.abc",
+    "models\\pickupitems\\staffsparks.abc",
+    "models\\pickupitems\\throwaxe.abc",
+    "models\\pickupitems\\wandbolt.abc",
+    "models\\pickupitems\\wandeye.abc",
+    "models\\pickupitems\\wandkb.abc",
+    "models\\pickupitems\\xbow.abc",
+    "models\\pickupitems\\xbowbasic.abc",
+    "models\\pickupitems\\xbowgattling.abc",
+    "models\\pig.abc",
+    "models\\player\\archer.abc",
+    "models\\player\\base.abc",
+    "models\\player\\druid.abc",
+    "models\\player\\evilking.abc",
+    "models\\player\\goodking.abc",
+    "models\\player\\heretic.abc",
+    "models\\player\\lowpoly\\lowpoly.abc",
+    "models\\player\\paladin.abc",
+    "models\\player\\sorceress.abc",
+    "models\\player\\warrior.abc",
+    "models\\priest.abc",
+    "models\\princess.abc",
+    "models\\projectiles\\arrow.abc",
+    "models\\projectiles\\axe.abc",
+    "models\\projectiles\\crossbowbolt.abc",
+    "models\\projectiles\\eqhammer.abc",
+    "models\\projectiles\\hammer.abc",
+    "models\\projectiles\\handgrenade.abc",
+    "models\\projectiles\\knife.abc",
+    "models\\projectiles\\landmine.abc",
+    "models\\projectiles\\magicarrow.abc",
+    "models\\projectiles\\node_offset.abc",
+    "models\\projectiles\\prismatic.abc",
+    "models\\projectiles\\screamingskull.abc",
+    "models\\projectiles\\secretweapon.abc",
+    "models\\props\\ankh.abc",
+    "models\\props\\anvil.abc",
+    "models\\props\\axe-rusty.abc",
+    "models\\props\\axemagnetic.abc",
+    "models\\props\\ballista.abc",
+    "models\\props\\banner.abc",
+    "models\\props\\bannercastle.abc",
+    "models\\props\\barrel.abc",
+    "models\\props\\barrel02.abc",
+    "models\\props\\basket01.abc",
+    "models\\props\\basket02.abc",
+    "models\\props\\basket_fruit.abc",
+    "models\\props\\basket_veggies.abc",
+    "models\\props\\beaker01.abc",
+    "models\\props\\bed.abc",
+    "models\\props\\bed_cot.abc",
+    "models\\props\\bed_ornate.abc",
+    "models\\props\\bed_wall.abc",
+    "models\\props\\bedmedium.abc",
+    "models\\props\\bell.abc",
+    "models\\props\\bench01.abc",
+    "models\\props\\bench02.abc",
+    "models\\props\\bench03.abc",
+    "models\\props\\bench04.abc",
+    "models\\props\\bench_large1.abc",
+    "models\\props\\bench_large1ns.abc",
+    "models\\props\\bench_stone01.abc",
+    "models\\props\\bench_stone02.abc",
+    "models\\props\\bluelight.abc",
+    "models\\props\\boat.abc",
+    "models\\props\\boiler.abc",
+    "models\\props\\book.abc",
+    "models\\props\\bookcase01ew.abc",
+    "models\\props\\bookcase01ns.abc",
+    "models\\props\\bookcase02ew.abc",
+    "models\\props\\bookcase02ns.abc",
+    "models\\props\\bookstack01.abc",
+    "models\\props\\bowl01.abc",
+    "models\\props\\bowl02.abc",
+    "models\\props\\bowl03.abc",
+    "models\\props\\bowl04.abc",
+    "models\\props\\box-ornamental.abc",
+    "models\\props\\box01.abc",
+    "models\\props\\box02.abc",
+    "models\\props\\box03.abc",
+    "models\\props\\box04.abc",
+    "models\\props\\brazier.abc",
+    "models\\props\\brazierbowl.abc",
+    "models\\props\\broom.abc",
+    "models\\props\\bucket01.abc",
+    "models\\props\\bucket02.abc",
+    "models\\props\\burner.abc",
+    "models\\props\\cabinet01.abc",
+    "models\\props\\cabinet01ns.abc",
+    "models\\props\\cabinet02.abc",
+    "models\\props\\cabinet02ns.abc",
+    "models\\props\\cabinet03.abc",
+    "models\\props\\cabinet03ns.abc",
+    "models\\props\\cabinet04.abc",
+    "models\\props\\cabinet04ns.abc",
+    "models\\props\\cabinet05.abc",
+    "models\\props\\cabinet05ns.abc",
+    "models\\props\\candelabra.abc",
+    "models\\props\\candle.abc",
+    "models\\props\\canvassack.abc",
+    "models\\props\\capitalhead.abc",
+    "models\\props\\cards.abc",
+    "models\\props\\carriage.abc",
+    "models\\props\\cart01.abc",
+    "models\\props\\cart02.abc",
+    "models\\props\\cart03.abc",
+    "models\\props\\cartouche01.abc",
+    "models\\props\\chair.abc",
+    "models\\props\\chair02.abc",
+    "models\\props\\chair03.abc",
+    "models\\props\\chair_fordesk01.abc",
+    "models\\props\\chair_fordesk02.abc",
+    "models\\props\\chair_fordesk03.abc",
+    "models\\props\\chandelier.abc",
+    "models\\props\\chest-lacquer.abc",
+    "models\\props\\chest-rusty01.abc",
+    "models\\props\\coalbin.abc",
+    "models\\props\\coffinfancy.abc",
+    "models\\props\\coffinraised.abc",
+    "models\\props\\crate.abc",
+    "models\\props\\crystal.abc",
+    "models\\props\\cup01.abc",
+    "models\\props\\cup02.abc",
+    "models\\props\\cup03.abc",
+    "models\\props\\cup04.abc",
+    "models\\props\\dam.abc",
+    "models\\props\\debris\\barrel02-debris.abc",
+    "models\\props\\debris\\barreldebris.abc",
+    "models\\props\\debris\\beakerdebris.abc",
+    "models\\props\\debris\\bookdebris.abc",
+    "models\\props\\debris\\brickdbris_1.abc",
+    "models\\props\\debris\\brickdbris_2.abc",
+    "models\\props\\debris\\brickdbris_3.abc",
+    "models\\props\\debris\\brickdbris_4.abc",
+    "models\\props\\debris\\brickdbris_5.abc",
+    "models\\props\\debris\\brickdbris_6.abc",
+    "models\\props\\debris\\bucket_debris.abc",
+    "models\\props\\debris\\coalbin_debris.abc",
+    "models\\props\\debris\\cratedebris.abc",
+    "models\\props\\debris\\lumberdebris01.abc",
+    "models\\props\\debris\\lumberdebris02.abc",
+    "models\\props\\debris\\lumberdebris03.abc",
+    "models\\props\\debris\\lumberdebris04.abc",
+    "models\\props\\debris\\lumberdebris05.abc",
+    "models\\props\\debris\\lumberstonedebris01.abc",
+    "models\\props\\debris\\lumberstonedebris02.abc",
+    "models\\props\\debris\\lumberstonedebris03.abc",
+    "models\\props\\debris\\lumberstonedebris04.abc",
+    "models\\props\\debris\\lumberstonedebris05.abc",
+    "models\\props\\debris\\metal-bardebris.abc",
+    "models\\props\\debris\\rockdebris.abc",
+    "models\\props\\debris\\skeletondebris01.abc",
+    "models\\props\\debris\\skeletondebris02.abc",
+    "models\\props\\debris\\skeletondebris03.abc",
+    "models\\props\\debris\\stonedebris01.abc",
+    "models\\props\\debris\\stonedebris02.abc",
+    "models\\props\\debris\\stonedebris03.abc",
+    "models\\props\\debris\\stonedebris04.abc",
+    "models\\props\\debris\\stonedebris05.abc",
+    "models\\props\\debris\\treasurecoin.abc",
+    "models\\props\\debris\\urndebris.abc",
+    "models\\props\\debris\\woodbin_debris.abc",
+    "models\\props\\desk01.abc",
+    "models\\props\\desk02.abc",
+    "models\\props\\desk03.abc",
+    "models\\props\\dogstatue.abc",
+    "models\\props\\dragonbrazier.abc",
+    "models\\props\\dragonpharoah.abc",
+    "models\\props\\dragontrophy.abc",
+    "models\\props\\dresser.abc",
+    "models\\props\\dresserns.abc",
+    "models\\props\\egg.abc",
+    "models\\props\\excaliber.abc",
+    "models\\props\\fenceew.abc",
+    "models\\props\\fencens.abc",
+    "models\\props\\flayingbench.abc",
+    "models\\props\\flowerboxew.abc",
+    "models\\props\\flowerboxns.abc",
+    "models\\props\\forge.abc",
+    "models\\props\\frog.abc",
+    "models\\props\\frog2.abc",
+    "models\\props\\goblet_fancy01.abc",
+    "models\\props\\goblet_fancy02.abc",
+    "models\\props\\goblet_plain01.abc",
+    "models\\props\\goblet_plain02.abc",
+    "models\\props\\goblinhead.abc",
+    "models\\props\\goblinstatue1.abc",
+    "models\\props\\goblinstatue2.abc",
+    "models\\props\\grindingwheel.abc",
+    "models\\props\\guillotine.abc",
+    "models\\props\\hangingbrazierbowl.abc",
+    "models\\props\\harp.abc",
+    "models\\props\\haybale01.abc",
+    "models\\props\\haystack01.abc",
+    "models\\props\\headsmansblock.abc",
+    "models\\props\\hitchingpost.abc",
+    "models\\props\\hoe.abc",
+    "models\\props\\horsestatue.abc",
+    "models\\props\\iron-ingots.abc",
+    "models\\props\\jacobsladder.abc",
+    "models\\props\\jar01.abc",
+    "models\\props\\jar02.abc",
+    "models\\props\\jar03.abc",
+    "models\\props\\jar04.abc",
+    "models\\props\\jar05.abc",
+    "models\\props\\jar06.abc",
+    "models\\props\\lantern1.abc",
+    "models\\props\\lantern2.abc",
+    "models\\props\\lionstatue.abc",
+    "models\\props\\logsburning.abc",
+    "models\\props\\manacles.abc",
+    "models\\props\\marketplacegoods.abc",
+    "models\\props\\marketstall.abc",
+    "models\\props\\minecart.abc",
+    "models\\props\\minelantern.abc",
+    "models\\props\\minelantern02.abc",
+    "models\\props\\mirror1.abc",
+    "models\\props\\mummy.abc",
+    "models\\props\\mummyew.abc",
+    "models\\props\\mummyvert.abc",
+    "models\\props\\oillamp.abc",
+    "models\\props\\painting_oval.abc",
+    "models\\props\\painting_rectangle.abc",
+    "models\\props\\pew.abc",
+    "models\\props\\pew2.abc",
+    "models\\props\\pew3.abc",
+    "models\\props\\pillarstand.abc",
+    "models\\props\\pillory.abc",
+    "models\\props\\pipeorgan.abc",
+    "models\\props\\pitcher01.abc",
+    "models\\props\\plantsandtrees\\bush01.abc",
+    "models\\props\\plantsandtrees\\bush02.abc",
+    "models\\props\\plantsandtrees\\bush03.abc",
+    "models\\props\\plantsandtrees\\bush04.abc",
+    "models\\props\\plantsandtrees\\bush05.abc",
+    "models\\props\\plantsandtrees\\bush06.abc",
+    "models\\props\\plantsandtrees\\flowers01.abc",
+    "models\\props\\plantsandtrees\\flowers02.abc",
+    "models\\props\\plantsandtrees\\flowers03.abc",
+    "models\\props\\plantsandtrees\\flowers04.abc",
+    "models\\props\\plantsandtrees\\flowers05.abc",
+    "models\\props\\plantsandtrees\\flowers06.abc",
+    "models\\props\\plantsandtrees\\gargoyletree.abc",
+    "models\\props\\plantsandtrees\\grass01.abc",
+    "models\\props\\plantsandtrees\\grass02.abc",
+    "models\\props\\plantsandtrees\\plant01.abc",
+    "models\\props\\plantsandtrees\\plant02.abc",
+    "models\\props\\plantsandtrees\\plant03.abc",
+    "models\\props\\plantsandtrees\\plant04.abc",
+    "models\\props\\plantsandtrees\\plant05.abc",
+    "models\\props\\plantsandtrees\\plant06.abc",
+    "models\\props\\plantsandtrees\\planter.abc",
+    "models\\props\\plantsandtrees\\tree01.abc",
+    "models\\props\\plantsandtrees\\tree01b.abc",
+    "models\\props\\plantsandtrees\\tree02.abc",
+    "models\\props\\plantsandtrees\\tree03.abc",
+    "models\\props\\plantsandtrees\\tree04.abc",
+    "models\\props\\plantsandtrees\\tree05.abc",
+    "models\\props\\plantsandtrees\\tree06.abc",
+    "models\\props\\podium01.abc",
+    "models\\props\\podium02.abc",
+    "models\\props\\podium03.abc",
+    "models\\props\\potatopile.abc",
+    "models\\props\\rectangle_banner.abc",
+    "models\\props\\rope.abc",
+    "models\\props\\ropecoil.abc",
+    "models\\props\\sack01.abc",
+    "models\\props\\sack02.abc",
+    "models\\props\\sack03.abc",
+    "models\\props\\sarcophagus.abc",
+    "models\\props\\sarcophagusns.abc",
+    "models\\props\\sarophagus_standing.abc",
+    "models\\props\\sconce1.abc",
+    "models\\props\\sconce2.abc",
+    "models\\props\\shield-broken01.abc",
+    "models\\props\\shield-broken02.abc",
+    "models\\props\\shield-broken03.abc",
+    "models\\props\\shield.abc",
+    "models\\props\\shield_rusty.abc",
+    "models\\props\\skeletoncage.abc",
+    "models\\props\\skeletonlaying.abc",
+    "models\\props\\skeletonsitting.abc",
+    "models\\props\\skeletonstatue.abc",
+    "models\\props\\smithhammer.abc",
+    "models\\props\\spellbook1.abc",
+    "models\\props\\spellbook3.abc",
+    "models\\props\\spellbook4.abc",
+    "models\\props\\sphere.abc",
+    "models\\props\\spikepit.abc",
+    "models\\props\\stein_fancy01.abc",
+    "models\\props\\stein_fancy02.abc",
+    "models\\props\\stonehilt.abc",
+    "models\\props\\stool01.abc",
+    "models\\props\\stool02.abc",
+    "models\\props\\stool03.abc",
+    "models\\props\\stove.abc",
+    "models\\props\\suitofarmor01.abc",
+    "models\\props\\suitofarmor02.abc",
+    "models\\props\\suitofarmor03.abc",
+    "models\\props\\sword-broken.abc",
+    "models\\props\\swordandshield.abc",
+    "models\\props\\table01.abc",
+    "models\\props\\table01ns.abc",
+    "models\\props\\table02.abc",
+    "models\\props\\table_bench.abc",
+    "models\\props\\tableround.abc",
+    "models\\props\\tableround2.abc",
+    "models\\props\\tapestry-old01.abc",
+    "models\\props\\tapestry-old02.abc",
+    "models\\props\\throne.abc",
+    "models\\props\\torch2.abc",
+    "models\\props\\torturecage01.abc",
+    "models\\props\\torturecrusher01.abc",
+    "models\\props\\torturecrusher02.abc",
+    "models\\props\\torturerack01.abc",
+    "models\\props\\torturerack02.abc",
+    "models\\props\\torturewheel01.abc",
+    "models\\props\\torturewheel02.abc",
+    "models\\props\\townsign.abc",
+    "models\\props\\treasurechute.abc",
+    "models\\props\\treasureopening.abc",
+    "models\\props\\treasurepile.abc",
+    "models\\props\\tree.abc",
+    "models\\props\\treeheart.abc",
+    "models\\props\\troughew.abc",
+    "models\\props\\troughns.abc",
+    "models\\props\\urngargoyle.abc",
+    "models\\props\\vials.abc",
+    "models\\props\\wagon_broken.abc",
+    "models\\props\\wagon_merchant.abc",
+    "models\\props\\wallcandle.abc",
+    "models\\props\\wallspikes.abc",
+    "models\\props\\walltorch.abc",
+    "models\\props\\weaponscabinet01.abc",
+    "models\\props\\weaponscabinet02.abc",
+    "models\\props\\weaponscabinet03.abc",
+    "models\\props\\winebottle01.abc",
+    "models\\props\\winebottle02.abc",
+    "models\\props\\winebottle03.abc",
+    "models\\props\\winebottle04.abc",
+    "models\\props\\winebottle05.abc",
+    "models\\props\\winerack.abc",
+    "models\\props\\winerackns.abc",
+    "models\\props\\woodbin.abc",
+    "models\\props\\woodshed01.abc",
+    "models\\props\\woodshed02.abc",
+    "models\\rabbit.abc",
+    "models\\rooster.abc",
+    "models\\save\\lizardman.abc",
+    "models\\save\\lizardwarrior.abc",
+    "models\\save\\skeleton.abc",
+    "models\\skeleton.abc",
+    "models\\skeletonwarrior.abc",
+    "models\\soldier.abc",
+    "models\\spells\\debris.abc",
+    "models\\spells\\dragonbreath.abc",
+    "models\\spells\\fireball.abc",
+    "models\\spells\\fireballexplosion.abc",
+    "models\\spells\\firebolt.abc",
+    "models\\spells\\fireboltexplosion.abc",
+    "models\\spells\\fireshield.abc",
+    "models\\spells\\flyingfist.abc",
+    "models\\spells\\iceblast.abc",
+    "models\\spells\\icebolt.abc",
+    "models\\spells\\wizardeye.abc",
+    "models\\spells\\wizardeyeaura.abc",
+    "models\\spider.abc",
+    "models\\spider2.abc",
+    "models\\titan.abc",
+    "models\\titangrand.abc",
+    "models\\troglodyte.abc",
+    "models\\troll.abc",
+    "models\\weapons\\axemagnetic.abc",
+    "models\\weapons\\berzerkeraxemagic.abc",
+    "models\\weapons\\bowarcane.abc",
+    "models\\weapons\\bowbasic.abc",
+    "models\\weapons\\bowdragon.abc",
+    "models\\weapons\\boweye.abc",
+    "models\\weapons\\daggermagic.abc",
+    "models\\weapons\\explosion.abc",
+    "models\\weapons\\hammereq.abc",
+    "models\\weapons\\hammermagic.abc",
+    "models\\weapons\\handaxemagic.abc",
+    "models\\weapons\\hhga.abc",
+    "models\\weapons\\knifemagic.abc",
+    "models\\weapons\\longswordfine.abc",
+    "models\\weapons\\melee2hsword.abc",
+    "models\\weapons\\pv\\pvaxemagnet.abc",
+    "models\\weapons\\pv\\pvbattleaxe.abc",
+    "models\\weapons\\pv\\pvbowarcane.abc",
+    "models\\weapons\\pv\\pvbowbasic.abc",
+    "models\\weapons\\pv\\pvbowdragon.abc",
+    "models\\weapons\\pv\\pvboweye.abc",
+    "models\\weapons\\pv\\pvhammereq.abc",
+    "models\\weapons\\pv\\pvhhga.abc",
+    "models\\weapons\\pv\\pvmelee2hsword.abc",
+    "models\\weapons\\pv\\pvmeleeberzerkeraxe.abc",
+    "models\\weapons\\pv\\pvmeleedagger.abc",
+    "models\\weapons\\pv\\pvmeleehammer.abc",
+    "models\\weapons\\pv\\pvmeleelongsword.abc",
+    "models\\weapons\\pv\\pvmeleescimitar.abc",
+    "models\\weapons\\pv\\pvmeleespear.abc",
+    "models\\weapons\\pv\\pvrodclaw.abc",
+    "models\\weapons\\pv\\pvroddemon.abc",
+    "models\\weapons\\pv\\pvrodflare.abc",
+    "models\\weapons\\pv\\pvrodskull.abc",
+    "models\\weapons\\pv\\pvsecretweapon.abc",
+    "models\\weapons\\pv\\pvspellpage.abc",
+    "models\\weapons\\pv\\pvstaffbasic.abc",
+    "models\\weapons\\pv\\pvstaffdragon.abc",
+    "models\\weapons\\pv\\pvstafffire.abc",
+    "models\\weapons\\pv\\pvstaffsparks.abc",
+    "models\\weapons\\pv\\pvthrowaxe.abc",
+    "models\\weapons\\pv\\pvthrowknife.abc",
+    "models\\weapons\\pv\\pvwandbolt.abc",
+    "models\\weapons\\pv\\pvwandeye.abc",
+    "models\\weapons\\pv\\pvwandkb.abc",
+    "models\\weapons\\pv\\pvxbow.abc",
+    "models\\weapons\\pv\\pvxbowbasic.abc",
+    "models\\weapons\\pv\\pvxbowgattling.abc",
+    "models\\weapons\\rodclaw.abc",
+    "models\\weapons\\roddemon.abc",
+    "models\\weapons\\rodflare.abc",
+    "models\\weapons\\rodskull.abc",
+    "models\\weapons\\scimitar.abc",
+    "models\\weapons\\secretweapon.abc",
+    "models\\weapons\\shortstaff.abc",
+    "models\\weapons\\spearfine.abc",
+    "models\\weapons\\spellpage.abc",
+    "models\\weapons\\staffbasic.abc",
+    "models\\weapons\\staffdragon.abc",
+    "models\\weapons\\stafffire.abc",
+    "models\\weapons\\staffsparks.abc",
+    "models\\weapons\\throwaxe.abc",
+    "models\\weapons\\wandbolt.abc",
+    "models\\weapons\\wandeye.abc",
+    "models\\weapons\\wandkb.abc",
+    "models\\weapons\\xbow.abc",
+    "models\\weapons\\xbowbasic.abc",
+    "models\\weapons\\xbowgattling.abc",
+    "models\\wight.abc",
+    "models\\zombie.abc"
+  ],
   "summary": {
     "total_levels": 20,
     "total_classes": 172,
@@ -57558,7 +62550,7 @@
     "available": true,
     "schema": "mm9_editor.object_lto_dump.v1",
     "source_dump": null,
-    "object_lto_path": "C:\\lithtech\\mm9_editor\\lomm_data\\object.lto",
+    "object_lto_path": "C:\\games\\Legends of Might and Magic\\Data\\object.lto",
     "server_object_version": 1,
     "class_count": 266,
     "classes": {
@@ -235476,5 +240468,15 @@
         ]
       }
     }
+  },
+  "game": "lomm",
+  "catalog_sources": {
+    "data_dir": "C:\\games\\Legends of Might and Magic\\Data",
+    "worlds_rez": "C:\\games\\Legends of Might and Magic\\Data\\worlds.rez",
+    "object_lto": "C:\\games\\Legends of Might and Magic\\Data\\object.lto",
+    "skins_rez": "C:\\games\\Legends of Might and Magic\\Data\\SKINS.REZ",
+    "skins_dir": "C:\\games\\Legends of Might and Magic\\Data\\SKINS",
+    "models_rez": "C:\\games\\Legends of Might and Magic\\Data\\MODELS.REZ",
+    "models_dir": "C:\\games\\Legends of Might and Magic\\Data\\MODELS"
   }
 }

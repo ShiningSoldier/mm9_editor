@@ -259,8 +259,80 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertEqual(opened["mm9_root"], tmp)
             self.assertEqual(opened["backup_root"], os.path.join(tmp, "backups"))
             self.assertEqual(opened["catalog_json"], os.path.join(tmp, "catalog.json"))
+            self.assertTrue(opened["lomm_catalog_json"].endswith("catalog_lomm.json"))
             self.assertEqual(opened["initial_lomm_root"], os.path.join(tmp, "LoMM"))
             self.assertTrue(callable(opened["on_success"]))
+
+    def test_converted_level_prefers_staged_models_and_independently_falls_back_skins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            live_data = os.path.join(tmp, "live", "data")
+            stage_dir = os.path.join(tmp, "stage")
+            stage_data = os.path.join(stage_dir, "data")
+            live_models = os.path.join(live_data, "MODELS.REZ")
+            live_skins = os.path.join(live_data, "SKINS.REZ")
+            staged_models = os.path.join(stage_data, "MODELS.REZ")
+            write_minimal_rez(live_models, {"MODELS/LIVE.ABC": b"live-model"})
+            write_minimal_rez(live_skins, {"SKINS/LIVE.DTX": b"live-skin"})
+            write_minimal_rez(staged_models, {"MODELS/STAGED.ABC": b"staged-model"})
+
+            updates = []
+            visual_updates = []
+
+            class FakeView:
+                def update_asset_directories(self, **kwargs):
+                    updates.append(kwargs)
+
+                def update_actor_visuals(self, actor_visuals):
+                    visual_updates.append(actor_visuals)
+
+            app = object.__new__(mm9_editor_app.EditorApp)
+            app.resources = game_resources.GameResources(
+                archives={"models": live_models, "skins": live_skins},
+                cache_dir=os.path.join(tmp, "cache"),
+            )
+            app.catalog = {
+                "actor_visuals": {
+                    "mm9actor": {"model": r"models\live.abc"},
+                },
+            }
+            app.view3d = FakeView()
+            converted = types.SimpleNamespace(
+                conversion_stage_dir=stage_dir,
+                preview_actor_visuals={
+                    "princess": {
+                        "model": r"models\princess.abc",
+                        "skins": [r"skins\princessblue.dtx"],
+                    },
+                },
+            )
+
+            mm9_editor_app.EditorApp._update_view_assets_for_level(app, converted)
+            converted_update = updates[-1]
+            self.assertTrue(os.path.isfile(os.path.join(
+                converted_update["models_dir"], "STAGED.ABC"
+            )))
+            self.assertTrue(os.path.isfile(os.path.join(
+                converted_update["skins_dir"], "LIVE.DTX"
+            )))
+            self.assertIn("mm9actor", visual_updates[-1])
+            self.assertEqual(
+                visual_updates[-1]["princess"]["model"],
+                r"models\princess.abc",
+            )
+
+            ordinary = types.SimpleNamespace(
+                conversion_stage_dir="",
+                preview_actor_visuals={},
+            )
+            mm9_editor_app.EditorApp._update_view_assets_for_level(app, ordinary)
+            ordinary_update = updates[-1]
+            self.assertTrue(os.path.isfile(os.path.join(
+                ordinary_update["models_dir"], "LIVE.ABC"
+            )))
+            self.assertNotEqual(
+                converted_update["models_dir"], ordinary_update["models_dir"]
+            )
+            self.assertNotIn("princess", visual_updates[-1])
 
     def test_lomm_conversion_success_opens_new_level(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,6 +361,27 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             result = types.SimpleNamespace(
                 worlds_rez=worlds_rez,
                 added_virtual_path="WORLDS/NEWLEVEL",
+                stage_dir=os.path.join(tmp, "stage"),
+                conversion=types.SimpleNamespace(
+                    stats=types.SimpleNamespace(
+                        compatibility=types.SimpleNamespace(
+                            actor_policy="preserve",
+                            source_registry="LoMM",
+                            target_registry="MM9",
+                            registry_warnings=[],
+                            status_counts={},
+                            unresolved_actor_count=1,
+                            unresolved_actor_classes=["Princess"],
+                            records=[],
+                        ),
+                        preview_actor_visuals={
+                            "princess": {
+                                "model": r"models\princess.abc",
+                                "skins": [r"skins\princessblue.dtx"],
+                            },
+                        },
+                    ),
+                ),
             )
             app._remember_lomm_root = lambda value: selected.setdefault("lomm_root", value)
 
@@ -302,6 +395,14 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertEqual(app.level_var.value, "WORLDS/NEWLEVEL")
             self.assertEqual(selected["level"].rez_vpath, "WORLDS/NEWLEVEL")
             self.assertEqual(selected["lomm_root"], r"C:\games\Legends of Might and Magic")
+            self.assertEqual(
+                selected["level"].preview_actor_visuals["princess"]["model"],
+                r"models\princess.abc",
+            )
+            self.assertEqual(
+                selected["level"].conversion_stage_dir,
+                os.path.join(tmp, "stage"),
+            )
 
     def test_lomm_root_setting_round_trips_through_editor_settings(self):
         with tempfile.TemporaryDirectory() as tmp:

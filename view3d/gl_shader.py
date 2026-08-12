@@ -11,10 +11,11 @@ valid GL context exists.
 
 Two shader programs are defined:
 
-  SOLID    — renders BSP geometry: interleaved vec3 position + vec3 normal,
-             flat-shaded with a single directional light and a per-model
-             category tint colour.  Optional linear depth fog: set uFogEnabled=1
-             and provide uFogNear / uFogFar / uFogColor.
+  SOLID    — renders BSP and ABC geometry: interleaved vec3 position + vec3
+             normal, with a single directional light and a per-model category
+             tint colour. BSP uploads use face normals; ABC uploads preserve
+             authored smoothing normals when available. Optional linear depth
+             fog: set uFogEnabled=1 and provide uFogNear / uFogFar / uFogColor.
 
   BILLBOARD — three-stage (vert + geom + frag) program that renders each
               WorldObject as a camera-facing quad sized in world units.
@@ -53,7 +54,9 @@ out vec2  vUV;        // texture coordinates from BSP surface planar projection
 void main() {
     vec4 clip    = uMVP * vec4(aPos, 1.0);
     gl_Position  = clip;
-    vNormal      = aNormal;          // already in world space (no non-uniform scale)
+    // BSP normals are in display space. ABC normals stay in model space and
+    // their draw path transforms uLightDir into that same local space.
+    vNormal      = aNormal;
     vEyeDist     = clip.w;           // equals eye-space distance; no extra matrix needed
     vUV          = aUV;
 }
@@ -70,6 +73,7 @@ out vec4  FragColor;
 uniform vec3      uColor;       // category tint used when uHasTex == 0
 uniform vec3      uLightDir;    // normalised direction *toward* the light source
 uniform float     uAlpha;       // overall opacity (1.0 = opaque)
+uniform int       uUnlit;       // 1 = authored colour without viewport lighting
 
 // Texture sampling (Stage 3)
 uniform sampler2D uTex;         // bound texture (texture unit 0)
@@ -96,7 +100,7 @@ void main() {
 
     vec3  n        = normalize(vNormal);
     float diffuse  = max(dot(n, normalize(uLightDir)), 0.0);
-    float light    = 0.25 + diffuse * 0.75;       // ambient + diffuse
+    float light    = (uUnlit == 1) ? 1.0 : (0.25 + diffuse * 0.75);
     vec3  litColor = baseColor * light;
 
     if (uFogEnabled == 1) {
@@ -108,6 +112,33 @@ void main() {
     // Multiply texture alpha by the per-model opacity uniform
     float outAlpha = (uHasTex == 1 && uUseTexAlpha == 1) ? texAlpha : 1.0;
     FragColor = vec4(litColor, outAlpha * uAlpha);
+}
+""".strip()
+
+
+# ---------------------------------------------------------------------------
+# SKY PORTAL shader — project SURF_SKY geometry into the stencil buffer
+# ---------------------------------------------------------------------------
+
+SKY_PORTAL_VERT = """
+#version 330 core
+
+layout(location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+""".strip()
+
+SKY_PORTAL_FRAG = """
+#version 330 core
+
+out vec4 FragColor;
+
+void main() {
+    // Color writes are disabled while this program builds the stencil mask.
+    FragColor = vec4(0.0);
 }
 """.strip()
 

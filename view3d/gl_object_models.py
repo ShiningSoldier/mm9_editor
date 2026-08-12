@@ -911,8 +911,6 @@ def _mesh_min_y(mesh: GpuMesh) -> Optional[float]:
 
 
 def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
-    if bsp_world is None or not _truthy_object_flag(obj, "MoveToFloor"):
-        return None
     pos = obj.get("Pos")
     if pos is None:
         return None
@@ -920,9 +918,59 @@ def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
         x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
     except Exception:
         return None
-    local_min_y = _mesh_min_y(mesh)
-    if local_min_y is None:
+
+    move_to_floor = _truthy_object_flag(obj, "MoveToFloor")
+    scale = _scale_value(obj.get("Scale") or 1.0)
+
+    if not move_to_floor:
+        # A subset of rigid NoAnimation models (notably shipped vegetation)
+        # carries a ground-oriented source pivot plus saved model-space
+        # positions translated down by approximately UserDims.Y.  Rendering
+        # the saved positions is correct for the model, but the DAT position
+        # still refers to that source pivot.  Restore the exact ABC-authored
+        # translation instead of special-casing object classes or filenames.
+        try:
+            bottom_pivot_offset_y = float(
+                getattr(mesh, "model_bottom_pivot_offset_y", 0.0)
+            )
+        except (TypeError, ValueError):
+            bottom_pivot_offset_y = 0.0
+        if bottom_pivot_offset_y > 0.0:
+            return y + bottom_pivot_offset_y * scale
+
+        if bsp_world is None:
+            return None
+
+        # Shipped static NoAnimation furniture is commonly authored with Pos
+        # on its supporting surface even though its ABC vertices are centred
+        # around a bone-local/model-space origin. Verify that floor anchor and
+        # preserve the DAT position as the bottom of the visual mesh.
+        if not bool(getattr(mesh, "model_no_animation", False)):
+            return None
+        local_min_y = _mesh_min_y(mesh)
+        if local_min_y is None:
+            return None
+        try:
+            from core import bsp as bsp_mod  # type: ignore
+            support_y = bsp_mod.raycast_floor_y(
+                bsp_world,
+                x,
+                z,
+                y_hint_min=y - 4.0,
+                y_hint_max=y + 4.0,
+                y_above=y + 4.0,
+                solid_only=True,
+                support_only=True,
+            )
+        except Exception:
+            return None
+        if support_y is None or abs(y - float(support_y)) > 4.0:
+            return None
+        return y - local_min_y * scale
+
+    if bsp_world is None:
         return None
+
     try:
         from core import bsp as bsp_mod  # type: ignore
         floor_y = bsp_mod.raycast_floor_y(
@@ -930,14 +978,35 @@ def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
             x,
             z,
             y_hint_min=y - 512.0,
-            y_hint_max=y + 16.0,
-            y_above=y + 16.0,
+            y_hint_max=y,
+            y_above=y,
+            solid_only=True,
+            support_only=True,
         )
     except Exception:
         return None
     if floor_y is None:
         return None
-    return float(floor_y) - local_min_y * _scale_value(obj.get("Scale") or 1.0)
+
+    user_dims = getattr(mesh, "model_user_dims", None)
+    try:
+        half_height = abs(float(user_dims[1]) * scale)
+    except (TypeError, IndexError, ValueError):
+        half_height = None
+
+    if half_height is not None:
+        # Match the LithTech Prop runtime: only move when the object is farther
+        # from its support than its animation half-height, then retain the
+        # engine's small separation epsilon.
+        if y - float(floor_y) > half_height:
+            return float(floor_y) + half_height + 0.1
+        return None
+
+    # Conservative fallback for unsupported ABC animation variants.
+    local_min_y = _mesh_min_y(mesh)
+    if local_min_y is None:
+        return None
+    return float(floor_y) - local_min_y * scale
 
 
 def _object_matrix(obj, y_override: Optional[float] = None) -> Optional[np.ndarray]:
@@ -971,6 +1040,38 @@ def _object_matrix(obj, y_override: Optional[float] = None) -> Optional[np.ndarr
     trans[2, 3] = z
 
     return (game_to_display_matrix() @ trans @ rot @ scale).astype(np.float32)
+
+
+def _light_dir_for_model(
+    light_dir: Tuple[float, float, float],
+    model: np.ndarray,
+) -> Tuple[float, float, float]:
+    """Convert a display-space light direction into model-local space.
+
+    ABC normals remain in authored model space while ``uMVP`` transforms only
+    positions.  Object transforms use a uniform scale, yaw, and the viewport's
+    X reflection, so applying the inverse linear transform to the light vector
+    produces the same dot product as rotating the normal into display space.
+    """
+    world_dir = np.asarray(light_dir, dtype=np.float64)
+    try:
+        local_dir = np.linalg.solve(
+            np.asarray(model[:3, :3], dtype=np.float64),
+            world_dir,
+        )
+    except (ValueError, np.linalg.LinAlgError):
+        local_dir = world_dir
+
+    length = float(np.linalg.norm(local_dir))
+    if not np.isfinite(length) or length <= 1.0e-12:
+        fallback_length = float(np.linalg.norm(world_dir))
+        if not np.isfinite(fallback_length) or fallback_length <= 1.0e-12:
+            return (0.0, 1.0, 0.0)
+        local_dir = world_dir
+        length = fallback_length
+
+    local_dir = local_dir / length
+    return tuple(float(value) for value in local_dir)
 
 
 class ObjectModelCache:
@@ -1161,7 +1262,7 @@ def draw_object_model_items(
     world_indices = set()
 
     with solid_prog as prog:
-        prog.set_vec3("uLightDir", light_dir)
+        prog.set_int("uUnlit", 0)
         prog.set_int("uFogEnabled", 1 if fog_enabled else 0)
         prog.set_float("uFogNear", fog_near)
         prog.set_float("uFogFar", fog_far)
@@ -1176,6 +1277,7 @@ def draw_object_model_items(
             if model is None:
                 continue
             prog.set_mat4("uMVP", (view_proj @ model).astype(np.float32))
+            prog.set_vec3("uLightDir", _light_dir_for_model(light_dir, model))
             selected = item.world_index == selected_index
             prog.set_vec3("uColor", (0.95, 0.95, 0.95) if selected else _DEFAULT_COLOR)
             prog.set_float("uAlpha", 1.0)

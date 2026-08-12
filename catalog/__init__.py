@@ -15,6 +15,20 @@ from .builder import (
     load_object_lto_dump,
     resolve_object_lto_dump,
     save_catalog,
+    save_catalog_atomic,
+)
+from .world_helpers import (
+    annotate_catalog_world_helpers,
+    classify_world_helper_entry,
+    is_model_resource,
+)
+from .lomm import (
+    DEFAULT_LOMM_CATALOG_PATH,
+    LommCatalogError,
+    build_lomm_catalog_from_root,
+    ensure_lomm_catalog,
+    lomm_catalog_sources,
+    validate_lomm_catalog,
 )
 
 __all__ = [
@@ -32,4 +46,14 @@ __all__ = [
     "load_object_lto_dump",
     "resolve_object_lto_dump",
     "save_catalog",
+    "save_catalog_atomic",
+    "annotate_catalog_world_helpers",
+    "classify_world_helper_entry",
+    "is_model_resource",
+    "DEFAULT_LOMM_CATALOG_PATH",
+    "LommCatalogError",
+    "build_lomm_catalog_from_root",
+    "ensure_lomm_catalog",
+    "lomm_catalog_sources",
+    "validate_lomm_catalog",
 ]

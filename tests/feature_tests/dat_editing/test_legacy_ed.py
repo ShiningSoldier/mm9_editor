@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from tests._path import ROOT  # noqa: F401
+from tests._investigation import investigation_test
 
 from features.dat_editing import legacy_ed
 
@@ -146,6 +147,7 @@ class LegacyEdTests(unittest.TestCase):
         formatted = legacy_ed.format_legacy_ed_node_layout_report(layout)
         self.assertIn("named_group_brush_nodes", formatted)
 
+    @investigation_test
     def test_shipped_full_level_ed_decompresses_and_recovers_brush_records(self):
         path = os.path.join(ROOT, "mm9_data", "WORLDS", "BEETHOVEN.ED")
         if not os.path.exists(path):

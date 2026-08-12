@@ -22,6 +22,34 @@ def read(path: str) -> bytes:
 
 
 class InstallManagerTests(unittest.TestCase):
+    def test_blocking_manifest_requires_explicit_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            batch = os.path.join(tmp, "output", "lomm")
+            game_data = os.path.join(tmp, "game", "data")
+            write(os.path.join(batch, "data", "WORLDS.REZ"), b"patched")
+            write(os.path.join(game_data, "WORLDS.REZ"), b"original")
+            with open(os.path.join(batch, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({
+                    "archives": [{
+                        "output_archive": os.path.join(batch, "data", "WORLDS.REZ"),
+                    }],
+                    "blocking_issues": [{
+                        "code": "unsupported_lomm_actors",
+                        "message": "One Orc is unsupported.",
+                    }],
+                }, f)
+
+            with self.assertRaisesRegex(install_manager.InstallError, "marked unsafe"):
+                install_manager.install_batch(batch, game_data)
+            self.assertEqual(read(os.path.join(game_data, "WORLDS.REZ")), b"original")
+
+            install_manager.install_batch(
+                batch,
+                game_data,
+                allow_blocking_issues=True,
+            )
+            self.assertEqual(read(os.path.join(game_data, "WORLDS.REZ")), b"patched")
+
     def test_install_batch_backs_up_and_replaces_archives(self):
         with tempfile.TemporaryDirectory() as tmp:
             batch = os.path.join(tmp, "output", "20260513_120000")

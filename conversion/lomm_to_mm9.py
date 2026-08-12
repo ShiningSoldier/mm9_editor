@@ -12,19 +12,17 @@ classes and the shared classes have slightly different property sets.
 This script reads a YAML config (default: ``conversion/lomm_to_mm9.yaml``)
 describing the conversion rules and applies them in order:
 
-    1.  ``convert_class`` rules clone a template from any MM9 level
-        and replay the source object's preserved fields on top of the
-        clone. Used for enemies (e.g. ``Orc`` -> ``LizardOrc``),
-        ``TreasureChest``, and ``Brazier``/``Fire``. Runs first so
-        retyped objects survive the unknown-class drop in stage 2.
-    2.  Drop every WorldObject whose class is still not in MM9's class
-        registry (the catalog scanned from ``catalog.json`` or
-        ``WORLDS.REZ``).
-    3.  ``patch_class`` rules add missing properties to shared classes
+    1.  Classify actors from the LoMM and MM9 object.lto registries and apply
+        the selected actor policy. Unsupported actors are preserved by
+        default; historical nearest-MM9 substitutions are opt-in.
+    2.  ``convert_class`` rules clone templates for non-actor conversions such
+        as ``TreasureChest`` and ``Brazier``/``Fire``.
+    3.  Drop unsupported non-actor WorldObjects while retaining MM9 world
+        helper classes and preserved actors.
+    4.  ``patch_class`` rules add missing properties to shared classes
         (e.g. ``StartPoint.MovePlayerToFloor = 1``,
         ``WorldProperties.CanSaveGame = 1``).
-        MODELS.REZ / SKINS.REZ, which need to be added from a LoMM
-        loose-files folder, and which can't be found anywhere.
+    5.  Audit model, skin, and sound references for staged asset copying.
 
 See ``conversion/lomm_to_mm9.yaml`` for the default rules and inline schema docs.
 
@@ -45,7 +43,7 @@ import json
 import os
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -65,6 +63,9 @@ from mm9_patcher.mm9_patch import (  # type: ignore  # noqa: E402
     serialize_objects,
 )
 from core.rezmgr import RezReader  # type: ignore  # noqa: E402
+from conversion.runtime_registry import (  # type: ignore  # noqa: E402
+    RuntimeClassRegistry,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +73,19 @@ from core.rezmgr import RezReader  # type: ignore  # noqa: E402
 # ---------------------------------------------------------------------------
 
 DEFAULT_CATALOG = os.path.join(PROJECT_ROOT, "catalog", "data", "catalog.json")
+DEFAULT_LOMM_CATALOG = os.path.join(
+    PROJECT_ROOT, "catalog", "data", "catalog_lomm.json",
+)
 DEFAULT_CONFIG = os.path.join(HERE, "lomm_to_mm9.yaml")
+
+ACTOR_POLICY_PRESERVE = "preserve"
+ACTOR_POLICY_LEGACY = "legacy"
+ACTOR_POLICY_REMOVE = "remove"
+ACTOR_POLICIES = (
+    ACTOR_POLICY_PRESERVE,
+    ACTOR_POLICY_LEGACY,
+    ACTOR_POLICY_REMOVE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +138,7 @@ class _Config:
     keep_classes: Set[str]
     patch_class: Dict[str, _PatchRule]
     convert_class: Dict[str, _ConvertRule]
+    actor_policy: str = ACTOR_POLICY_PRESERVE
 
 
 def _parse_propspec_dict(
@@ -195,12 +209,22 @@ def _parse_config(raw: Dict[str, Any]) -> _Config:
         raw.get("convert_class") or {}, where="convert_class",
     )
 
+    actor_policy = str(
+        raw.get("actor_policy", ACTOR_POLICY_PRESERVE)
+    ).strip().lower()
+    if actor_policy not in ACTOR_POLICIES:
+        raise ValueError(
+            f"actor_policy must be one of {', '.join(ACTOR_POLICIES)} "
+            f"(got {actor_policy!r})"
+        )
+
     return _Config(
         remove_unknown_classes=remove_unknown,
         extra_remove_classes=extra_remove,
         keep_classes=keep_classes,
         patch_class=patch_class,
         convert_class=convert_class,
+        actor_policy=actor_policy,
     )
 
 
@@ -386,6 +410,150 @@ class ConversionStats:
     audit_models: AssetAudit
     audit_skins: AssetAudit
     audit_sounds: AssetAudit
+    compatibility: "CompatibilityReport"
+    implicit_skin_refs: List["ImplicitSkinReference"] = field(default_factory=list)
+    preview_actor_visuals: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ImplicitSkinReference:
+    model: str
+    skin: str
+    object_class: str
+    object_name: str
+    variant_name: str
+    source_keys: Tuple[str, ...]
+    catalog_source: str
+    dat_model: str = ""
+    preview_model_override: bool = False
+
+
+@dataclass(frozen=True)
+class CompatibilityRecord:
+    source_index: int
+    object_name: str
+    source_class: str
+    source_position: Tuple[float, ...]
+    output_index: int
+    status: str
+    action: str
+    target_class: str = ""
+    reason: str = ""
+
+
+@dataclass
+class CompatibilityReport:
+    actor_policy: str
+    source_registry: str
+    target_registry: str
+    records: List[CompatibilityRecord] = field(default_factory=list)
+    registry_warnings: List[str] = field(default_factory=list)
+
+    @property
+    def status_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for record in self.records:
+            counts[record.status] = counts.get(record.status, 0) + 1
+        return counts
+
+    @property
+    def unresolved_actor_count(self) -> int:
+        return sum(
+            1 for record in self.records
+            if record.status == "unsupported_actor_preserved"
+        )
+
+    @property
+    def unresolved_actor_classes(self) -> List[str]:
+        return sorted({
+            record.source_class for record in self.records
+            if record.status == "unsupported_actor_preserved"
+        })
+
+
+_ACTOR_SIGNATURE_PROPS = frozenset({
+    "SightDistance",
+    "HearingDistance",
+    "TeamNbr",
+    "CanReachAll",
+    "CheckForAIBarrier",
+})
+
+
+def _looks_like_actor(obj: WorldObject, registry: RuntimeClassRegistry) -> bool:
+    if registry.is_actor(obj.type_str):
+        return True
+    prop_names = {prop.name for prop in obj.props}
+    return len(prop_names & _ACTOR_SIGNATURE_PROPS) >= 2
+
+
+def _position_tuple(obj: WorldObject) -> Tuple[float, ...]:
+    value = obj.get("Pos")
+    if not isinstance(value, (tuple, list)):
+        return ()
+    try:
+        return tuple(float(part) for part in value)
+    except (TypeError, ValueError):
+        return ()
+
+
+def _actor_compatibility(
+    world: World,
+    config: _Config,
+    actor_policy: str,
+    source_registry: RuntimeClassRegistry,
+    target_registry: RuntimeClassRegistry,
+) -> CompatibilityReport:
+    report = CompatibilityReport(
+        actor_policy=actor_policy,
+        source_registry=source_registry.source,
+        target_registry=target_registry.source,
+        registry_warnings=list(source_registry.warnings + target_registry.warnings),
+    )
+    for index, obj in enumerate(world.objects):
+        if not _looks_like_actor(obj, source_registry):
+            continue
+        cls = obj.type_str
+        target_available = target_registry.contains(cls) or cls in config.keep_classes
+        legacy_rule = config.convert_class.get(cls)
+        if actor_policy == ACTOR_POLICY_LEGACY and legacy_rule is not None:
+            target = legacy_rule.new_type or cls
+            status = "legacy_actor_substitution"
+            action = "replace"
+            reason = "Legacy compatibility rule selected explicitly."
+        elif target_available:
+            target = cls
+            status = "same_name_mm9_implementation"
+            action = "preserve"
+            reason = (
+                "MM9 registers this class name; its MM9 implementation may "
+                "differ from LoMM."
+            )
+        elif actor_policy == ACTOR_POLICY_REMOVE:
+            target = ""
+            status = "unsupported_actor_removed"
+            action = "remove"
+            reason = "The class is not registered by MM9 and removal was selected."
+        else:
+            target = ""
+            status = "unsupported_actor_preserved"
+            action = "preserve"
+            reason = (
+                "The class is not registered by MM9; it remains editable but "
+                "will not appear in the MM9 runtime until removed or replaced."
+            )
+        report.records.append(CompatibilityRecord(
+            source_index=index,
+            object_name=str(obj.get("Name") or ""),
+            source_class=cls,
+            source_position=_position_tuple(obj),
+            output_index=-1,
+            status=status,
+            action=action,
+            target_class=target,
+            reason=reason,
+        ))
+    return report
 
 
 def _convert_with_template(
@@ -509,6 +677,7 @@ def _stage_drop_classes(
     world: World,
     mm9_classes: Set[str],
     config: _Config,
+    protected_actor_classes: Set[str],
 ) -> Dict[str, int]:
     keep = config.keep_classes
     extra = config.extra_remove_classes
@@ -518,7 +687,7 @@ def _stage_drop_classes(
     removed: Dict[str, int] = {}
     for obj in world.objects:
         cls = obj.type_str
-        if cls in keep:
+        if cls in keep or cls in protected_actor_classes:
             kept.append(obj)
             continue
         is_unknown = cls not in mm9_classes
@@ -630,6 +799,208 @@ def _classify_asset_refs(
     return audit
 
 
+def _catalog_asset_path(value: object, root: str, extensions: Tuple[str, ...]) -> str:
+    path = str(value or "").strip().strip('"').replace("/", "\\").lstrip("\\")
+    if not path.casefold().endswith(tuple(ext.casefold() for ext in extensions)):
+        return ""
+    if not path.casefold().startswith(root.casefold() + "\\"):
+        path = root + "\\" + path
+    return path.casefold()
+
+
+def _variant_match_token(value: object) -> str:
+    return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
+
+
+def _catalog_variant_score(row: Dict[str, Any], wanted: Set[str]) -> int:
+    tokens = {_variant_match_token(row.get("name"))}
+    for source_key in row.get("source_keys") or ():
+        source = str(source_key)
+        tokens.add(_variant_match_token(source.split(":")[-1]))
+        if source.casefold().startswith("asset-name:"):
+            tokens.add(_variant_match_token(os.path.splitext(os.path.basename(source))[0]))
+    tokens.discard("")
+    if tokens & wanted:
+        return 30
+    if any(token.startswith(target) for token in tokens for target in wanted):
+        return 20
+    return 0
+
+
+def _catalog_class_entry(catalog: Dict[str, Any], class_name: str) -> Dict[str, Any]:
+    for name, entry in (catalog.get("classes") or {}).items():
+        if str(name).casefold() == str(class_name).casefold() and isinstance(entry, dict):
+            return entry
+    return {}
+
+
+def _implicit_catalog_skin_refs(
+    world: World,
+    lomm_catalog_json: Optional[str],
+) -> Tuple[List[ImplicitSkinReference], Dict[str, Dict[str, Any]]]:
+    """Resolve catalog skins and editor-only class model fallbacks."""
+    if not lomm_catalog_json or not os.path.isfile(lomm_catalog_json):
+        return [], {}
+    try:
+        with open(lomm_catalog_json, "r", encoding="utf-8") as fh:
+            catalog = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"invalid LoMM catalog {lomm_catalog_json!r}: {exc}") from exc
+    raw_variants = catalog.get("model_variants")
+    if not isinstance(raw_variants, dict):
+        raise ValueError(
+            f"invalid LoMM catalog {lomm_catalog_json!r}: model_variants is missing"
+        )
+    variants = {
+        key: rows
+        for raw_key, rows in raw_variants.items()
+        if (
+            key := _catalog_asset_path(raw_key, "models", (".abc", ".lta", ".ltb"))
+        )
+        and isinstance(rows, list)
+    }
+    model_resources = {
+        path
+        for raw_path in (catalog.get("model_resources") or ())
+        if (path := _catalog_asset_path(
+            raw_path, "models", (".abc", ".lta", ".ltb")
+        ))
+    }
+    model_resources.update(variants)
+
+    resolved: List[ImplicitSkinReference] = []
+    preview_actor_visuals: Dict[str, Dict[str, Any]] = {}
+    seen = set()
+    for obj in world.objects:
+        explicit_skins: List[str] = []
+        for prop_name in ("Skin", "SkinName", "Skin2", "Skin3"):
+            value = obj.get(prop_name)
+            for piece in str(value or "").split(";"):
+                skin = _catalog_asset_path(piece, "skins", (".dtx",))
+                if skin and skin not in explicit_skins:
+                    explicit_skins.append(skin)
+
+        dat_model = _catalog_asset_path(
+            obj.get("Filename"), "models", (".abc", ".lta", ".ltb")
+        )
+        if not dat_model:
+            continue
+
+        wanted = {
+            token
+            for token in (
+                _variant_match_token(getattr(obj, "type_str", "")),
+                _variant_match_token(obj.get("Name")),
+            )
+            if token
+        }
+        model = dat_model
+        rows = [row for row in variants.get(model, ()) if isinstance(row, dict)]
+        scored = [(_catalog_variant_score(row, wanted), row) for row in rows]
+
+        class_name = str(getattr(obj, "type_str", "") or "")
+        class_entry = _catalog_class_entry(catalog, class_name)
+        hierarchy = {
+            str(value).casefold()
+            for value in ((class_entry.get("object_lto") or {}).get("hierarchy") or ())
+        }
+        preview_model_override = False
+        if "actor" in hierarchy:
+            class_model = _catalog_asset_path(
+                f"models\\{class_name}.abc", "models", (".abc",)
+            )
+            class_rows = [
+                row for row in variants.get(class_model, ()) if isinstance(row, dict)
+            ]
+            class_scored = [
+                (_catalog_variant_score(row, wanted), row) for row in class_rows
+            ]
+            current_score = max((score for score, _row in scored), default=0)
+            class_score = max((score for score, _row in class_scored), default=0)
+            if (
+                class_model
+                and class_model != dat_model
+                and class_model in model_resources
+                and class_score > current_score
+            ):
+                model = class_model
+                scored = class_scored
+                preview_model_override = True
+
+        if not scored:
+            selected_rows: List[Dict[str, Any]] = []
+        else:
+            best_score = max(score for score, _row in scored)
+            if best_score:
+                selected_rows = [row for score, row in scored if score == best_score]
+            elif len(scored) == 1:
+                selected_rows = [scored[0][1]]
+            else:
+                # Multiple appearance variants with no class/name match are
+                # ambiguous; explicit DAT skin data is required in that case.
+                selected_rows = []
+
+        if preview_model_override and len(selected_rows) > 1:
+            # LoMM selects among cosmetic alternatives at runtime. The editor
+            # uses one stable appearance instead of treating alternatives as
+            # accessory textures for separate ABC pieces.
+            selected_rows = [sorted(
+                selected_rows,
+                key=lambda row: (
+                    str(row.get("name") or "").casefold(),
+                    tuple(str(value).casefold() for value in (row.get("skins") or ())),
+                ),
+            )[0]]
+
+        selected_skins = list(explicit_skins)
+        if not selected_skins:
+            for row in selected_rows:
+                for skin_value in row.get("skins") or ():
+                    skin = _catalog_asset_path(skin_value, "skins", (".dtx",))
+                    if skin and skin not in selected_skins:
+                        selected_skins.append(skin)
+
+        if preview_model_override:
+            preview_key = _variant_match_token(class_name)
+            preview_actor_visuals[preview_key] = {
+                "model": model,
+                "skins": selected_skins[:1],
+                "accessory_skins": selected_skins[1:],
+                "source_file": os.path.abspath(lomm_catalog_json),
+                "number": "",
+                "monster_name": class_name,
+                "type_picture": class_name,
+                "quirk": (
+                    f"LoMM class resource overrides DAT fallback {dat_model} "
+                    "for editor preview"
+                ),
+                "editor_preview_only": True,
+            }
+
+        if explicit_skins:
+            continue
+
+        for row in selected_rows:
+            for skin_value in row.get("skins") or ():
+                skin = _catalog_asset_path(skin_value, "skins", (".dtx",))
+                key = (model, skin, str(getattr(obj, "type_str", "")))
+                if not skin or key in seen:
+                    continue
+                seen.add(key)
+                resolved.append(ImplicitSkinReference(
+                    model=model,
+                    skin=skin,
+                    object_class=str(getattr(obj, "type_str", "") or ""),
+                    object_name=str(obj.get("Name") or ""),
+                    variant_name=str(row.get("name") or ""),
+                    source_keys=tuple(str(value) for value in (row.get("source_keys") or ())),
+                    catalog_source=os.path.abspath(lomm_catalog_json),
+                    dat_model=dat_model,
+                    preview_model_override=preview_model_override,
+                ))
+    return resolved, preview_actor_visuals
+
+
 def _stage_audit_assets(
     world: World,
     mm9_models_rez: Optional[str],
@@ -639,7 +1010,14 @@ def _stage_audit_assets(
     lomm_models_rez: Optional[str] = None,
     lomm_skins_rez: Optional[str] = None,
     lomm_sounds_rez: Optional[str] = None,
-) -> Tuple[AssetAudit, AssetAudit, AssetAudit]:
+    lomm_catalog_json: Optional[str] = None,
+) -> Tuple[
+    AssetAudit,
+    AssetAudit,
+    AssetAudit,
+    List[ImplicitSkinReference],
+    Dict[str, Dict[str, Any]],
+]:
     """Walk `world.objects`, gather all Filename, Skin, and Sound references,
     and return (model_audit, skin_audit, sound_audit)."""
     model_refs: Set[str] = set()
@@ -670,6 +1048,15 @@ def _stage_audit_assets(
                     if piece.lower().endswith(".wav"):
                         sound_refs.add(piece)
 
+    implicit_skin_refs, preview_actor_visuals = _implicit_catalog_skin_refs(
+        world, lomm_catalog_json
+    )
+    model_refs.update(
+        visual["model"] for visual in preview_actor_visuals.values()
+        if visual.get("model")
+    )
+    skin_refs.update(record.skin for record in implicit_skin_refs)
+
     mm9_models = _build_rez_asset_index(mm9_models_rez)
     mm9_skins = _build_rez_asset_index(mm9_skins_rez)
     mm9_sounds = _build_rez_asset_index(mm9_sounds_rez)
@@ -689,7 +1076,13 @@ def _stage_audit_assets(
     model_audit = _classify_asset_refs(model_refs, mm9_models, lomm_models)
     skin_audit = _classify_asset_refs(skin_refs, mm9_skins, lomm_skins)
     sound_audit = _classify_asset_refs(sound_refs, mm9_sounds, lomm_sounds)
-    return model_audit, skin_audit, sound_audit
+    return (
+        model_audit,
+        skin_audit,
+        sound_audit,
+        implicit_skin_refs,
+        preview_actor_visuals,
+    )
 
 
 def convert(
@@ -704,21 +1097,105 @@ def convert(
     lomm_models_rez: Optional[str] = None,
     lomm_skins_rez: Optional[str] = None,
     lomm_sounds_rez: Optional[str] = None,
+    source_registry: Optional[RuntimeClassRegistry] = None,
+    target_registry: Optional[RuntimeClassRegistry] = None,
+    actor_policy: Optional[str] = None,
+    lomm_catalog_json: Optional[str] = None,
 ) -> ConversionStats:
-    # 1. Apply convert rules (cloning/retyping).
-    #    Runs first so converted objects (e.g. Orc -> LizardOrc)
-    #    survive the unknown-class drop stage.
+    selected_policy = str(actor_policy or config.actor_policy).strip().lower()
+    if selected_policy not in ACTOR_POLICIES:
+        raise ValueError(
+            f"actor_policy must be one of {', '.join(ACTOR_POLICIES)} "
+            f"(got {selected_policy!r})"
+        )
+
+    catalog_classes = catalog.class_names(exclude_basename=input_basename)
+    if target_registry is None:
+        target_registry = RuntimeClassRegistry(
+            classes={}, source=catalog.catalog_source(),
+        )
+        from conversion.runtime_registry import RuntimeClass
+        target_registry.classes = {
+            name: RuntimeClass(name=name) for name in catalog_classes
+        }
+    if source_registry is None:
+        source_registry = RuntimeClassRegistry(source="source DAT property signatures")
+
+    compatibility = _actor_compatibility(
+        src_world,
+        config,
+        selected_policy,
+        source_registry,
+        target_registry,
+    )
+    actor_classes = {record.source_class for record in compatibility.records}
+    protected_actor_classes = {
+        record.source_class for record in compatibility.records
+        if record.action == "preserve"
+    }
+    remove_actor_indices = {
+        record.source_index for record in compatibility.records
+        if record.action == "remove"
+    }
+    if remove_actor_indices:
+        src_world.objects = [
+            obj for index, obj in enumerate(src_world.objects)
+            if index not in remove_actor_indices
+        ]
+
+    # 1. Apply non-actor convert rules. Actor substitutions are opt-in through
+    #    legacy mode; the default preserves LoMM actors for explicit editing.
+    selected_rules = {
+        cls: rule for cls, rule in config.convert_class.items()
+        if cls not in actor_classes or selected_policy == ACTOR_POLICY_LEGACY
+    }
     converted = _apply_convert_rules(
-        src_world, config.convert_class, catalog,
+        src_world, selected_rules, catalog,
     )
 
     # 2-3. Drop and patch.
-    mm9_classes = catalog.class_names(exclude_basename=input_basename)
-    removed = _stage_drop_classes(src_world, mm9_classes, config)
+    # Non-actor editor/world-helper classes may intentionally be marked as not
+    # runtime-loadable in object.lto while still being valid DAT content, so
+    # retain the visible/scanned catalog layer as well as loadable LTO classes.
+    # Actor compatibility above continues to require runtime_loadable=True.
+    mm9_classes = catalog_classes | target_registry.class_names
+    removed = _stage_drop_classes(
+        src_world, mm9_classes, config, protected_actor_classes,
+    )
+    for record in compatibility.records:
+        if record.status == "unsupported_actor_removed":
+            removed[record.source_class] = removed.get(record.source_class, 0) + 1
     patched = _stage_patch_classes(src_world, config.patch_class)
 
+    # Resolve preserved records to their converted-DAT baseline indices. The
+    # editor uses these stable indices so deleting an incompatible actor clears
+    # its install blocker even if the actor's properties are edited later.
+    claimed: Set[int] = set()
+    resolved_records: List[CompatibilityRecord] = []
+    for record in compatibility.records:
+        output_index = -1
+        if record.action == "preserve":
+            for index, obj in enumerate(src_world.objects):
+                if index in claimed or obj.type_str != record.source_class:
+                    continue
+                if str(obj.get("Name") or "") != record.object_name:
+                    continue
+                if _position_tuple(obj) != record.source_position:
+                    continue
+                output_index = index
+                claimed.add(index)
+                break
+        resolved_records.append(replace(record, output_index=output_index))
+    compatibility.records = resolved_records
+
     # 4. Asset audit (informational).
-    model_audit, skin_audit, sound_audit = _stage_audit_assets(
+    (
+        model_audit,
+        skin_audit,
+        sound_audit,
+        implicit_skin_refs,
+        preview_actor_visuals,
+    ) = _stage_audit_assets(
         src_world,
         mm9_models_rez,
         mm9_skins_rez,
@@ -727,6 +1204,7 @@ def convert(
         lomm_models_rez=lomm_models_rez,
         lomm_skins_rez=lomm_skins_rez,
         lomm_sounds_rez=lomm_sounds_rez,
+        lomm_catalog_json=lomm_catalog_json,
     )
 
     return ConversionStats(
@@ -736,6 +1214,9 @@ def convert(
         audit_models=model_audit,
         audit_skins=skin_audit,
         audit_sounds=sound_audit,
+        compatibility=compatibility,
+        implicit_skin_refs=implicit_skin_refs,
+        preview_actor_visuals=preview_actor_visuals,
     )
 
 
@@ -794,6 +1275,19 @@ def _print_audit(label: str, audit: AssetAudit) -> None:
 
 def _print_summary(stats: ConversionStats, world: World) -> None:
     print("== conversion summary ==")
+    compat = stats.compatibility
+    print(f"  actor policy                  : {compat.actor_policy}")
+    print(
+        f"  unsupported actors preserved  : "
+        f"{compat.unresolved_actor_count}"
+    )
+    for cls in compat.unresolved_actor_classes:
+        count = sum(
+            1 for record in compat.records
+            if record.status == "unsupported_actor_preserved"
+            and record.source_class == cls
+        )
+        print(f"      {count:>4}  {cls}")
     if stats.removed_by_class:
         total = sum(stats.removed_by_class.values())
         print(f"  unknown-class objects removed : {total}")
@@ -878,6 +1372,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--lomm-catalog",
+        "--lomm_catalog",
+        dest="lomm_catalog",
+        default=DEFAULT_LOMM_CATALOG,
+        help=(
+            "Path to the LoMM catalog used for runtime classes and implicit "
+            "model skins. It is built from --lomm_root when missing."
+        ),
+    )
+    parser.add_argument(
         "--backup_root",
         help=(
             "Folder for automatic WORLDS.REZ backups. Default: "
@@ -887,6 +1391,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Validate and convert, but do not modify MM9 WORLDS.REZ.",
+    )
+    parser.add_argument(
+        "--actor-policy", choices=ACTOR_POLICIES,
+        help=(
+            "How LoMM actors are handled. Defaults to actor_policy in the "
+            "conversion config (preserve in the bundled config)."
+        ),
+    )
+    parser.add_argument(
+        "--allow-incompatible-actors", action="store_true",
+        help=(
+            "Advanced override for live insertion when preserved actors are "
+            "not registered by MM9. Has no effect on --dry-run."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -900,6 +1418,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             converted_level_name=args.converted_level_name,
             config_path=args.config,
             catalog_json=args.catalog or None,
+            lomm_catalog_json=args.lomm_catalog or None,
+            actor_policy=args.actor_policy,
         )
 
         print(f"MM9 root     : {args.mm9_root}")
@@ -923,6 +1443,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = service.convert_and_insert_level(
             request,
             backup_root=args.backup_root,
+            allow_incompatible_actors=args.allow_incompatible_actors,
         )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)

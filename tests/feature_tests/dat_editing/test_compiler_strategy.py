@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from tests._path import ROOT  # noqa: F401
+from tests._investigation import investigation_test, slow_dat_to_ed_test
 
 from core import bsp
 from features.dat_editing import (
@@ -21,18 +22,7 @@ from features.dat_editing import (
 )
 
 
-RUN_SLOW_DAT_TO_ED_TESTS = os.environ.get("MM9_RUN_SLOW_DAT_TO_ED_TESTS", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-slow_dat_to_ed_test = unittest.skipUnless(
-    RUN_SLOW_DAT_TO_ED_TESTS,
-    "slow real-level DAT-to-ED regression; set MM9_RUN_SLOW_DAT_TO_ED_TESTS=1 to run",
-)
-
-
+@investigation_test
 class CompilerStrategyTests(unittest.TestCase):
     def test_compiled_validation_reuses_compiled_dat_world_and_reports_timings(self):
         bootcamp = os.path.join(ROOT, "mm9_data", "WORLDS", "BOOTCAMP.DAT")

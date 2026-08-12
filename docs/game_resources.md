@@ -62,15 +62,22 @@
 - LoMM-to-MM9 conversion is in place. The dropdown option
   `Conversion -> LoMM to MM9` opens a dialog that accepts a LoMM install folder,
   lists v66 DAT levels from LoMM `WORLDS.REZ`, asks for the new MM9 level name,
-  converts the DAT through the YAML pipeline, copies missing models, skins, and
-  sounds from LoMM archives/loose files into MM9's `MODELS.REZ`, `SKINS.REZ`, and
-  `SOUNDS.REZ` (if present), and transactionally applies these updates. Before
-  replacing the live archives, it writes backups of all modified archives under
-  `backups/lomm_to_mm9_<timestamp>/data/`, creates a `conversion_log.txt` detailing
-  all copied assets, and writes an `install_manifest.json` registering all changed
-  archives. The backup is fully compatible with the existing restore flow. After a
-  successful conversion, the editor opens the new level immediately. The last
-  successful LoMM install path is remembered in `editor_settings.json`.
+  converts the DAT through the YAML pipeline, and writes a separate installable
+  staging batch. The staged `MODELS.REZ`, `SKINS.REZ`, and `SOUNDS.REZ` are
+  complete patched MM9 archives; the live install is not modified. When a
+  converted level is active, the viewport uses its staged model and skin archives
+  and falls back independently to the live MM9 archive when either one is absent.
+  Switching back to an ordinary level restores the live MM9 resource view.
+- The conversion audit stages explicit DAT asset references and implicit skins
+  resolved from the LoMM catalog's `model_variants`. Each implicit resolution is
+  included in `manifest.json` and `conversion_log.txt`. A missing catalog is built
+  automatically when the editor is launched with a valid `--lomm-root`; existing
+  catalogs are never overwritten automatically. The last successful LoMM install
+  path is remembered in `editor_settings.json`.
+- LoMM catalogs also inventory model resources. Converted levels may carry
+  editor-only actor visual overrides when a class uses a misleading DAT model
+  fallback. The viewport uses the staged LoMM model/skin, while saved DAT
+  properties and MM9 compatibility classification remain unchanged.
 
 
 ## REZ Archives

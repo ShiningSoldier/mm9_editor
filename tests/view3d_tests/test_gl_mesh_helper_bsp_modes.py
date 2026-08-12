@@ -1,6 +1,8 @@
 import os
 import sys
+import types
 import unittest
+from unittest import mock
 
 
 from tests._path import ROOT  # noqa: F401
@@ -14,13 +16,21 @@ class _FakeCache:
     def __init__(self):
         self.uploaded = []
 
-    def get_or_upload(self, model, tex_cache=None, helper_mode="normal", helper_roles=None):
+    def get_or_upload(
+        self,
+        model,
+        tex_cache=None,
+        helper_mode="normal",
+        helper_roles=None,
+        model_helper_role=None,
+    ):
         self.uploaded.append((model.name, helper_mode, tuple(sorted(helper_roles or ()))))
         verts, indices, ranges = gl_mesh._triangulate_model(
             model,
             tex_cache=tex_cache,
             helper_mode=helper_mode,
             helper_roles=set(helper_roles or ()),
+            model_helper_role=model_helper_role,
         )
         if len(indices) == 0:
             return None
@@ -49,6 +59,56 @@ class _FakeTexCache:
 
     def alpha_info(self, _name):
         return self._alpha_info
+
+
+class _FakeProgram:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return False
+
+    def set_mat4(self, *_args):
+        pass
+
+    def set_vec3(self, *_args):
+        pass
+
+    def set_float(self, *_args):
+        pass
+
+    def set_int(self, *_args):
+        pass
+
+
+class _FakeGL:
+    GL_FALSE = 0
+    GL_TRUE = 1
+    GL_TEXTURE0 = 0
+    GL_TEXTURE_2D = 0
+    GL_TRIANGLES = 0
+    GL_UNSIGNED_INT = 0
+    draw_calls = 0
+
+    @classmethod
+    def glBindVertexArray(cls, *_args):
+        pass
+
+    @classmethod
+    def glActiveTexture(cls, *_args):
+        pass
+
+    @classmethod
+    def glBindTexture(cls, *_args):
+        pass
+
+    @classmethod
+    def glDepthMask(cls, *_args):
+        pass
+
+    @classmethod
+    def glDrawElements(cls, *_args):
+        cls.draw_calls += 1
 
 
 def _mesh(name: str, texture: str = "") -> bsp.WorldModelMesh:
@@ -111,6 +171,31 @@ class GlMeshHelperBspModeTests(unittest.TestCase):
         self.assertEqual(batch.items[0].mesh.helper_role, "collision")
         self.assertFalse(batch.items[0].wireframe)
         self.assertLess(batch.items[0].alpha, 1.0)
+
+    def test_named_hidden_helper_model_uses_existing_collision_group(self):
+        world = bsp.BspWorld(
+            version=66,
+            world_info="",
+            world_models=[_mesh("AIBarrier51", "Default")],
+        )
+
+        normal = gl_mesh.build_bsp_draw_batch(
+            world,
+            _FakeCache(),
+            helper_bsp_mode="normal",
+            hidden_helper_model_names={"aibarrier51"},
+        )
+        helpers = gl_mesh.build_bsp_draw_batch(
+            world,
+            _FakeCache(),
+            helper_bsp_mode="helpers",
+            helper_role_groups={"collision"},
+            hidden_helper_model_names={"aibarrier51"},
+        )
+
+        self.assertEqual(normal.items, [])
+        self.assertEqual(len(helpers.items), 1)
+        self.assertEqual(helpers.items[0].mesh.helper_role, "collision")
 
     def test_vis_bsp_is_hidden_outside_raw_mode(self):
         # VisBSP is visibility/PVS data, while PhysicsBSP contains some visible
@@ -184,6 +269,51 @@ class GlMeshHelperBspModeTests(unittest.TestCase):
 
         self.assertEqual(len(batch.items), 1)
         self.assertEqual([r.alpha_mode for r in batch.items[0].ranges], ["blend"])
+
+    def test_blended_glass_draws_only_in_translucent_bsp_pass(self):
+        alpha = TextureAlphaInfo(
+            pixel_format=6,
+            width=128,
+            height=128,
+            min_alpha=35,
+            max_alpha=255,
+            transparent_fraction=0.0,
+            mid_fraction=0.53,
+            nonopaque_fraction=0.53,
+        )
+        batch = gl_mesh.build_bsp_draw_batch(
+            bsp.BspWorld(
+                version=66,
+                world_info="",
+                world_models=[
+                    _mesh(
+                        "WorldObject0",
+                        r"TEXTURES\LevelTextures\Windows\StainedGlass2.dtx",
+                    ),
+                ],
+            ),
+            _FakeCache(),
+            tex_cache=_FakeTexCache(alpha),
+        )
+        fake_module = types.SimpleNamespace(GL=_FakeGL)
+        _FakeGL.draw_calls = 0
+
+        with mock.patch.dict(sys.modules, {"OpenGL": fake_module}):
+            gl_mesh.draw_bsp_batch(
+                batch,
+                _FakeProgram(),
+                None,
+                render_pass="opaque",
+            )
+            self.assertEqual(_FakeGL.draw_calls, 0)
+
+            gl_mesh.draw_bsp_batch(
+                batch,
+                _FakeProgram(),
+                None,
+                render_pass="translucent",
+            )
+            self.assertEqual(_FakeGL.draw_calls, 1)
 
 
 if __name__ == "__main__":

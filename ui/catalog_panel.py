@@ -48,6 +48,7 @@ class LevelPanel(tk.Frame):
         on_select_object: Callable[[int, patcher.WorldObject], None],
         on_place_preset: Optional[Callable[[str], None]] = None,
         preset_store: Optional[Any] = None,
+        on_delete_incompatible: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent, bg="#1a1d22")
         self.catalog          = catalog
@@ -55,6 +56,7 @@ class LevelPanel(tk.Frame):
         self.on_select_object = on_select_object
         self.on_place_preset  = on_place_preset
         self._preset_store    = preset_store
+        self.on_delete_incompatible = on_delete_incompatible
 
         self._level: Optional[P.LevelEdit] = None
         # Parallel list to listbox rows: (world_index, WorldObject)
@@ -92,6 +94,20 @@ class LevelPanel(tk.Frame):
                  relief="flat", font=("Segoe UI", 9),
                  ).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
+        self.incompatible_only_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            self,
+            text="Show incompatible LoMM actors only",
+            variable=self.incompatible_only_var,
+            command=self.refresh,
+            bg="#1a1d22",
+            fg="#d9a65a",
+            selectcolor="#23272d",
+            activebackground="#1a1d22",
+            activeforeground="#f2bd69",
+            anchor="w",
+        ).pack(fill="x", padx=8, pady=(0, 4))
+
         # Listbox
         lf = tk.Frame(self, bg="#1a1d22")
         lf.pack(fill="both", expand=True, padx=8, pady=(0, 4))
@@ -116,6 +132,17 @@ class LevelPanel(tk.Frame):
             command=self._do_add_object,
         )
         self.add_btn.pack(fill="x", padx=8, pady=(4, 8))
+        self.delete_incompatible_btn = tk.Button(
+            self,
+            text="Delete all incompatible actors",
+            bg="#663d35",
+            fg="white",
+            activebackground="#805047",
+            relief="flat",
+            state="disabled",
+            command=self._do_delete_incompatible,
+        )
+        self.delete_incompatible_btn.pack(fill="x", padx=8, pady=(0, 8))
 
     def _category_for_obj(self, obj: patcher.WorldObject) -> str:
         """Return the catalog category for an object, with live-data fallback."""
@@ -135,6 +162,13 @@ class LevelPanel(tk.Frame):
     def set_active_level(self, level: Optional[P.LevelEdit]) -> None:
         self._level = level
         self.add_btn.config(state="normal" if level else "disabled")
+        self.delete_incompatible_btn.config(
+            state=(
+                "normal" if level and level.unresolved_conversion_count() > 0
+                and self.on_delete_incompatible is not None
+                else "disabled"
+            )
+        )
         self.refresh()
 
     def refresh(self) -> None:
@@ -186,14 +220,19 @@ class LevelPanel(tk.Frame):
             cat     = self._category_for_obj(obj)
             color   = CATEGORY_COLORS.get(cat, CATEGORY_COLORS["other"])
             prefix  = "+ " if pending else "  "
+            incompatible = self._level.is_unresolved_conversion_object(world_idx)
 
             if flt and flt not in name.lower() and flt not in type_s.lower():
                 continue
+            if self.incompatible_only_var.get() and not incompatible:
+                continue
 
             self._items.append((world_idx, obj))
+            if incompatible:
+                prefix = "! "
             display = f"{prefix}{name}  ({type_s})"
             self.listbox.insert(tk.END, display)
-            self.listbox.itemconfig(tk.END, fg=color)
+            self.listbox.itemconfig(tk.END, fg="#f07862" if incompatible else color)
 
             if world_idx == prev_idx:
                 restore_row = len(self._items) - 1
@@ -204,6 +243,13 @@ class LevelPanel(tk.Frame):
         self.subheader.config(
             text=f"{level_name}  ·  {total} object{'s' if total != 1 else ''}"
                  + (f"  ({n} shown)" if n != total else "")
+        )
+        self.delete_incompatible_btn.config(
+            state=(
+                "normal" if self._level.unresolved_conversion_count() > 0
+                and self.on_delete_incompatible is not None
+                else "disabled"
+            )
         )
 
         # Restore selection
@@ -249,6 +295,10 @@ class LevelPanel(tk.Frame):
             self.on_place_preset(value)
         else:
             self.on_place_class(value)
+
+    def _do_delete_incompatible(self) -> None:
+        if self.on_delete_incompatible is not None:
+            self.on_delete_incompatible()
 
 
 # Keep the old name as an alias so any external code that imports

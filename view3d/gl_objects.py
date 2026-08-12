@@ -24,6 +24,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from catalog.world_helpers import (
+    helper_value,
+    object_has_actor_signature,
+    object_model_resource,
+)
 from view3d.coords import game_to_display_point
 
 # Colour table (RGB 0..1) — mirrors CATEGORY_COLORS from catalog.py but as
@@ -45,28 +50,87 @@ _CAT_COLORS: Dict[str, Tuple[float, float, float]] = {
     "other":       (0.50, 0.50, 0.50),   # neutral grey
 }
 _DEFAULT_COLOR = (0.50, 0.50, 0.50)
-_WORLD_HELPER_CATEGORIES = {"trigger", "sound", "marker", "world"}
-_WORLD_HELPER_CLASSES = {
-    "BlueWater", "StartPoint", "ScriptObject", "EffectsMgr", "WorldObject",
-    "EarthQuake", "Ladder", "Switch", "Fire", "Camera", "DestructableBrush",
-    "WeatherMan", "Fog", "Spawner", "Button", "Shooter", "AiRail", "DirLight",
-    "AIBarrier", "Light", "ExitTrigger", "Door", "RotatingDoor", "StaticSunLight"
-}
+_MODELED_CATEGORIES = {"npc_civilian", "npc_named", "monster", "creature", "prop"}
 
 def _cat_color(cat: str) -> Tuple[float, float, float]:
     return _CAT_COLORS.get(cat, _DEFAULT_COLOR)
 
 
-def is_world_helper_billboard(obj, categorize) -> bool:
-    """Return True for editor/control objects that are noisy as billboards."""
-    if getattr(obj, "type_str", "") in _WORLD_HELPER_CLASSES:
+def _object_is_visible(obj) -> bool:
+    """Mirror the model renderer's DAT ``Visible`` interpretation."""
+    visible = obj.get("Visible")
+    if visible is None:
         return True
-    return categorize(obj.type_str) in _WORLD_HELPER_CATEGORIES
+    try:
+        return bool(int(visible))
+    except Exception:
+        return bool(visible)
 
 
-def is_editor_helper_billboard(obj, categorize) -> bool:
+def _helper_metadata_for_type(metadata, type_name: str):
+    if not metadata:
+        return None
+    entry = metadata.get(type_name)
+    if entry is not None:
+        return entry
+    folded = type_name.casefold()
+    for name, candidate in metadata.items():
+        if str(name).casefold() == folded:
+            return candidate
+    return None
+
+
+def is_world_helper_billboard(obj, categorize, world_helper_metadata=None) -> bool:
+    """Return whether *obj* is a non-actor object without a model resource."""
+    # Per-instance DAT evidence wins over class metadata.  This matters for
+    # generic/special classes whose individual instances supply a model.
+    if object_model_resource(obj) or object_has_actor_signature(obj):
+        return False
+
+    type_name = str(getattr(obj, "type_str", "") or "")
+    decision = helper_value(
+        _helper_metadata_for_type(world_helper_metadata, type_name)
+    )
+    if decision is not None:
+        return decision
+
+    # Catalog-free fallback for older/custom levels.  Categories only identify
+    # broad visible-object families; no individual MM9 or LoMM classes live here.
+    category = categorize(type_name) if callable(categorize) else "other"
+    return category not in _MODELED_CATEGORIES
+
+
+def is_editor_helper_billboard(obj, categorize, world_helper_metadata=None) -> bool:
     """Backward-compatible alias for world/service helper billboards."""
-    return is_world_helper_billboard(obj, categorize)
+    return is_world_helper_billboard(obj, categorize, world_helper_metadata)
+
+
+def hidden_world_helper_model_names(
+    objects,
+    categorize,
+    world_helper_metadata=None,
+) -> set[str]:
+    """Return BSP model names owned by invisible world-helper objects.
+
+    LithTech pairs some service objects with a same-named BSP submodel.  The
+    submodel does not necessarily use a recognizable helper texture (MM9's
+    ``AIBarrier`` models use the material name ``Default``), so the object is
+    the authoritative visibility/classification record.
+    """
+    names: set[str] = set()
+    for obj in objects or ():
+        if _object_is_visible(obj):
+            continue
+        if not is_world_helper_billboard(
+            obj,
+            categorize,
+            world_helper_metadata,
+        ):
+            continue
+        name = str(obj.get("Name") or "").strip()
+        if name:
+            names.add(name.casefold())
+    return names
 
 
 def should_draw_billboard_for_modeled_object(
@@ -120,6 +184,7 @@ def _build_arrays(
     include_helpers: Optional[bool] = None,
     object_helper_indices=None,
     selected_index: int = -1,
+    world_helper_metadata=None,
 ) -> Tuple[np.ndarray, List[int]]:
     """
     Build the interleaved vertex array and parallel world_indices list.
@@ -135,10 +200,17 @@ def _build_arrays(
     object_helper_indices = set(object_helper_indices or ())
 
     for world_idx, obj in enumerate(objects):
+        # Invisible modeled/controller objects must not fall through to a
+        # billboard merely because the mesh pass intentionally omitted them.
+        # Keep a selected invisible object addressable in the viewport.
+        if world_idx != selected_index and not _object_is_visible(obj):
+            continue
         if (not include_world_helpers
                 and world_idx != selected_index
                 and world_idx not in object_helper_indices
-                and is_world_helper_billboard(obj, categorize)):
+                and is_world_helper_billboard(
+                    obj, categorize, world_helper_metadata
+                )):
             continue
 
         pos = obj.get("Pos")
@@ -172,6 +244,7 @@ def upload_objects(
     include_helpers: Optional[bool] = None,
     object_helper_indices=None,
     selected_index: int = -1,
+    world_helper_metadata=None,
 ) -> Optional[ObjectSprites]:
     """
     Build and upload the point-sprite VBO for all WorldObjects in *objects*.
@@ -187,6 +260,7 @@ def upload_objects(
         include_helpers=include_helpers,
         object_helper_indices=object_helper_indices,
         selected_index=selected_index,
+        world_helper_metadata=world_helper_metadata,
     )
     if verts.shape[0] == 0:
         return None

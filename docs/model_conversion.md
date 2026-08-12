@@ -57,8 +57,10 @@ For `GUARD.ABC`, this exports the three game-defined combinations:
 | Guard B | `GUARD2.DTX` | `GUARDPOLE.DTX` |
 | Guard C | `GUARD3.DTX` | `GUARDPOLE2.DTX` |
 
-LoMM catalogs use `object.lto`, level properties, and a conservative SKINS
-resource-name fallback. Build the catalog and export all Goblin appearances:
+LoMM catalogs use `object.lto`, level properties, complete model/skin resource
+inventories, and conservative resource-name matching. Starting the editor with
+`--lomm-root` builds a missing catalog automatically. To build one manually and
+export all Goblin appearances:
 
 ```powershell
 python catalog.py build-from-rez `

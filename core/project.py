@@ -28,7 +28,7 @@ import struct
 import tempfile
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
@@ -417,6 +417,9 @@ class LevelEdit:
     ops:         List[Any] = field(default_factory=list)
     redo_ops:    List[Any] = field(default_factory=list)
     display_name: str = ""              # short label for tabs / dropdowns
+    conversion_report: Optional[Dict[str, Any]] = None
+    conversion_stage_dir: str = ""
+    preview_actor_visuals: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     _next_id:    int = 0
     # Cached BSP geometry (lazily parsed on first map-view refresh)
     bsp:         Optional[Any] = None
@@ -586,6 +589,57 @@ class LevelEdit:
             idx for idx in range(len(self.world.objects))
             if idx not in deleted
         ]
+
+    def unresolved_conversion_indices(self) -> Set[int]:
+        report = self.conversion_report or {}
+        records = report.get("records") if isinstance(report, dict) else None
+        if not isinstance(records, list):
+            return set()
+        out: Set[int] = set()
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if record.get("status") != "unsupported_actor_preserved":
+                continue
+            try:
+                index = int(record.get("output_index", -1))
+            except (TypeError, ValueError):
+                continue
+            if index >= 0:
+                out.add(index)
+        return out
+
+    def unresolved_conversion_count(self) -> int:
+        deleted = {
+            op.target_index for op in self.ops if isinstance(op, DeleteOp)
+        }
+        return len(self.unresolved_conversion_indices() - deleted)
+
+    def is_unresolved_conversion_object(self, world_index: int) -> bool:
+        baseline_index = self.existing_index_for_materialized(world_index)
+        return (
+            baseline_index is not None
+            and baseline_index in self.unresolved_conversion_indices()
+        )
+
+    def conversion_blocking_issues(self) -> List[Dict[str, Any]]:
+        count = self.unresolved_conversion_count()
+        if not count:
+            return []
+        report = self.conversion_report or {}
+        classes = report.get("unresolved_actor_classes", [])
+        classes = [str(value) for value in classes] if isinstance(classes, list) else []
+        suffix = f": {', '.join(classes)}" if classes else ""
+        return [{
+            "code": "unsupported_lomm_actors",
+            "message": (
+                f"{count} LoMM actor(s) in {self.display_name or self.rez_vpath} "
+                f"are not registered by MM9{suffix}. Remove them before install."
+            ),
+            "count": count,
+            "classes": classes,
+            "level": self.display_name or self.rez_vpath or self.path,
+        }]
 
     def existing_index_for_materialized(
         self,
@@ -890,6 +944,10 @@ class Project:
                             prefab_imports,
                         )
                     )
+            blocking_issues = L.conversion_blocking_issues()
+            validation_warnings.extend(
+                issue["message"] for issue in blocking_issues
+            )
             plan.dats.append(DatWrite(
                 source_path=L.path,
                 output_path=L.output_path(self.work_dir, batch_id),
@@ -900,6 +958,7 @@ class Project:
                 door_clones=door_clones,
                 prefab_imports=prefab_imports,
                 validation_warnings=validation_warnings,
+                blocking_issues=blocking_issues,
             ))
             for op in L.ops:
                 if isinstance(op, AddOp) and op.rude:
@@ -933,6 +992,31 @@ class Project:
         for patch in archive_entries.values():
             plan.archive_patches.append(ArchivePatch(**patch))
 
+        # A staged conversion can also contain LoMM model/skin/sound assets.
+        # Carry those already-patched archives into subsequent editor batches.
+        carried = set()
+        for d in plan.dats:
+            L = d.level_edit
+            if not L or not L.conversion_stage_dir or not self.work_dir:
+                continue
+            stage_data = os.path.join(L.conversion_stage_dir, "data")
+            if not os.path.isdir(stage_data):
+                continue
+            for name in ("MODELS.REZ", "SKINS.REZ", "SOUNDS.REZ"):
+                source = os.path.join(stage_data, name)
+                key = os.path.abspath(source).casefold()
+                if key in carried or not os.path.isfile(source):
+                    continue
+                carried.add(key)
+                plan.archive_patches.append(ArchivePatch(
+                    source_archive=source,
+                    output_archive=os.path.join(
+                        self.work_dir, plan.batch_id, "data", name,
+                    ),
+                    entries=[],
+                    kind="conversion_asset",
+                ))
+
         if plan.rude_entries and self.rude_rez_path and self.work_dir and plan.batch_id:
             output = os.path.join(
                 self.work_dir, plan.batch_id, "data",
@@ -962,6 +1046,14 @@ class Project:
 
         for _archive_path, writes in rez_groups.items():
             log.extend(self._execute_rez_writes(writes))
+
+        for patch in plan.archive_patches:
+            if patch.kind != "conversion_asset":
+                continue
+            import shutil
+            os.makedirs(os.path.dirname(patch.output_archive), exist_ok=True)
+            shutil.copy2(patch.source_archive, patch.output_archive)
+            log.append(f"carried staged conversion asset archive {patch.output_archive}")
 
         if plan.rude_entries and plan.rude_archive_patch() is not None:
             log.extend(self.execute_rude_rez(plan))
@@ -1135,6 +1227,9 @@ class Project:
                 "version": 1,
                 "saved_at": plan.batch_id,
                 "archives": self._manifest_archives(plan),
+                "blocking_issues": [
+                    issue for d in plan.dats for issue in d.blocking_issues
+                ],
                 "dats": [
                     {
                         "source_path": d.source_path,
@@ -1146,6 +1241,7 @@ class Project:
                         "geometry_edits": d.geometry_manifest_details(),
                         "ops_summary": d.ops_summary,
                         "validation_warnings": d.validation_warnings,
+                        "blocking_issues": d.blocking_issues,
                     }
                     for d in plan.dats
                 ],
@@ -1341,6 +1437,7 @@ class DatWrite:
     door_clones: List[door_clone.DoorClonePlan] = field(default_factory=list)
     prefab_imports: List[prefab_import.PrefabBspImportPlan] = field(default_factory=list)
     validation_warnings: List[str] = field(default_factory=list)
+    blocking_issues: List[Dict[str, Any]] = field(default_factory=list)
     bsp_record_diff_report: Optional[Dict[str, Any]] = None
     dat_section_diff_report: Optional[Dict[str, Any]] = None
 

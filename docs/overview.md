@@ -30,9 +30,8 @@ The editor never writes over the live game archives during ordinary Save.
 Opened source archives are backed up under `backups/`; committed output goes
 under `output/<timestamp>/`. Installing output to the game is an explicit menu
 action that creates a separate install backup first. The LoMM-to-MM9
-conversion workflow is the explicit live-archive exception: it transactionally
-adds a converted level to `data/WORLDS.REZ` only after writing an automatic
-conversion backup.
+conversion workflow follows the same rule: it creates a separate installable
+staging batch, opens that batch for editing, and leaves the live game unchanged.
 
 ## Important files
 
@@ -138,9 +137,11 @@ Import/refactor rules:
 - Object and world helper billboards are both hidden by default in the 3-D
   view.  Use the viewport `Helpers` toolbar toggle, or
   `View -> Toggle object helpers`, to show billboards for objects that already
-  render with 3-D models. Use `View -> Toggle world helpers` to show
-  trigger/sound/marker/world handles, AI rails/barriers, doors, lights,
-  weather helpers, and `BlueWater` markers while debugging level logic.
+  render with 3-D models. Use `View -> Toggle world helpers` to show handles for
+  model-free service/control objects while debugging level logic. The catalog
+  derives that distinction from the active game's object.lto inheritance and
+  model resources observed in object.lto/DAT data, rather than a class-name
+  list, so the same behavior covers MM9 and LoMM classes.
 
 ## A note regarding levels geometry
 

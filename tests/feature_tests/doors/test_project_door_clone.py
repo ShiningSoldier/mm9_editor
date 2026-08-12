@@ -5,6 +5,7 @@ import unittest
 
 
 from tests._path import ROOT  # noqa: F401
+from tests._investigation import investigation_test
 
 from core import bsp
 from core import project as P
@@ -15,6 +16,7 @@ from mm9_patcher.mm9_patch import World
 DATA_ROOT = os.path.join(ROOT, "mm9_data")
 
 
+@investigation_test
 class ProjectDoorCloneTests(unittest.TestCase):
     def load_sturmford_level(self):
         path = os.path.join(DATA_ROOT, "WORLDS", "STURMFORDCITY.DAT")

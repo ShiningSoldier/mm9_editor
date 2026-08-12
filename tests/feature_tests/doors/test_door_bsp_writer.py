@@ -7,6 +7,7 @@ import unittest
 
 
 from tests._path import ROOT  # noqa: F401
+from tests._investigation import investigation_test
 
 from core import bsp
 from features.doors import clone as door_clone
@@ -19,6 +20,7 @@ from tests.core_tests.test_game_resources import write_minimal_rez
 DATA_ROOT = os.path.join(ROOT, "mm9_data")
 
 
+@investigation_test
 class DoorBspWriterTests(unittest.TestCase):
     def load_sturmford_bytes(self):
         path = os.path.join(DATA_ROOT, "WORLDS", "STURMFORDCITY.DAT")

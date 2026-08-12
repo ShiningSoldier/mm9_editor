@@ -34,9 +34,15 @@ Optional archives such as `SOUNDS.REZ` are used when present to load sound effec
 python mm9_editor.py
 # or
 python mm9_editor.py --game-root "C:\Path\To\Might and Magic 9"
+# with LoMM conversion support
+python mm9_editor.py --game-root "C:\Path\To\Might and Magic 9" \
+  --lomm-root "C:\Path\To\Legends of Might and Magic"
 ```
 
 On first launch the editor builds `catalog/data/catalog.json` from `data/WORLDS.REZ`.
+When `--lomm-root` is supplied, it also builds a missing
+`catalog/data/catalog_lomm.json` from the LoMM install. Use `--lomm-catalog` to
+select another output path. Existing catalogs are not overwritten automatically.
 Output files are written under `mm9_editor/output/`, and source archives are
 backed up under `mm9_editor/backups/`. If those folders are not writable, the
 editor falls back to `%LOCALAPPDATA%\mm9_editor\`.
@@ -100,7 +106,6 @@ Orbit mode:
 | `Q` / `E` | Nudge selected object down / up |
 | `[` / `]` | Rotate selected object yaw |
 | Hold `Shift` | Larger nudge / rotation steps |
-| `P` | Toggle render profiling output in the console |
 
 Fly mode:
 
@@ -110,7 +115,9 @@ Fly mode:
 | `W` / `S` | Move forward / back |
 | `A` / `D` | Strafe left / right |
 | `Q` / `E` | Move down / up |
+| Scroll | Dolly forward / back |
 | Hold `Shift` | Faster camera movement |
+| `F` | Fit level bounds |
 
 ### Performance Notes
 
@@ -119,12 +126,9 @@ ABC object render items per materialized object set. While dragging an object,
 the editor draws only the dragged ABC mesh plus object handles, then restores
 full detail after release.
 
-Press `P`, or launch with `MM9_EDITOR_PROFILE=1`, to print averaged render
-timings for frame, BSP, ABC, and sprite passes to stderr.
-| `F` | Reset to fit-to-bounds position |
-
-The **Fog** toggle fades distant geometry into the background colour, which
-can make large outdoor levels easier to read.
+Launch with `MM9_EDITOR_PROFILE=1` to print averaged render timings for frame,
+BSP, ABC, and sprite passes to stderr. This is a developer diagnostic rather
+than an interactive viewport control.
 
 ### User Presets
 
@@ -260,6 +264,7 @@ The bundled `mm9_patcher/` folder contains standalone tools:
 ```sh
 python mm9_rezmgr.py list "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
 python catalog.py build-from-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
+python catalog.py build-lomm "C:\Path\To\Legends of Might and Magic"
 ```
 
 The catalog builder can also attach a generated `object.lto` class dump for
@@ -283,31 +288,33 @@ for reverse-engineering work, but the GUI editor workflow is REZ-only.
 
 In the editor, select **LoMM to MM9** from the **Conversion** dropdown menu, choose the
 LoMM install folder, pick a LoMM level from its `WORLDS.REZ`, and enter the
-new MM9 level name. The editor uses the same transactional backup and
-archive-replacement flow as the standalone tool, then opens the converted
-level from MM9 `WORLDS.REZ` for inspection. The last successful LoMM install
+new MM9 level name. Choose whether LoMM actors are preserved (the recommended
+default), converted using the historical MM9 substitutions, or explicitly
+removed when unsupported. The editor creates a separate installable staging
+batch and opens its `WORLDS.REZ` for inspection without changing the live game.
+The last successful LoMM install
 folder is remembered in `editor_settings.json` and offered automatically the
 next time you open the conversion dialog. The selected LoMM install must have
 `data/WORLDS.REZ`, `data/RUDE.REZ`, and `data/SCRIPTS.REZ`.
 
-The converter prints a per-stage summary, writes a complete temporary
-`WORLDS.REZ`, backs up the original archive under
-`<mm9_root>/mm9_editor/backups/lomm_to_mm9_<timestamp>/data/`, installs the
-new archive with `os.replace()`, and verifies that the new level can be
-read back. The backup folder also gets an `install_manifest.json` with a
-`conversion` section recording the LoMM source level and new MM9 entry, so it
-can be inspected or restored through the existing backup-restore flow. PyYAML
+The converter reads each game's `object.lto` runtime registry (with generated
+catalog fallbacks), records per-object actor compatibility, writes patched
+archives under `output/lomm_to_mm9_<timestamp>/data/`, and verifies that the
+new level can be read back. Unsupported actors remain visible and selectable
+in the editor and mark the batch unsafe for installation until removed or
+replaced; installation has an explicit advanced override. PyYAML
 is a soft dependency; if it is not installed the loader falls back to JSON
 parsing for the config file.
 
 #### Editing the YAML config
 
-The default rules live in `conversion/lomm_to_mm9.yaml`. Three top-level sections:
+The default rules live in `conversion/lomm_to_mm9.yaml`:
 
 ```yaml
 remove_unknown_classes: true       # drop classes not in MM9 catalog
 extra_remove_classes: []           # additional classes to drop
 keep_classes: []                   # exempt classes (e.g. custom-registered)
+actor_policy: preserve             # preserve, legacy, or remove
 
 patch_class:
   StartPoint:

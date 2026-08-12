@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import BinaryIO, List, Optional, Tuple
 
 DAT_VERSION_V66 = 66
+SURF_SOLID = 1 << 0
 
 
 # --------------------------------------------------------------------------
@@ -270,6 +271,31 @@ class BspWorld:
 
 _RAYCAST_SANE = 1.0e6
 
+# Editor/helper materials can be solid in the BSP even though they are not a
+# physical support surface.  For example BOOTCAMP's AI rail lies above the
+# visible terrain.  Keep ordinary raycasts unchanged and filter these only for
+# object-placement queries.
+_NON_SUPPORT_TEXTURE_BASENAMES = frozenset({
+    "greenscreen.dtx",
+    "rail.dtx",
+    "skymarker.dtx",
+    "soundonly.dtx",
+    "watermarker.dtx",
+})
+
+
+def _is_object_support_polygon(
+    model: "WorldModelMesh",
+    polygon: "Polygon",
+) -> bool:
+    if model.name.casefold() == "visbsp":
+        return False
+    texture_name = model.texture_name_for(polygon)
+    if not texture_name:
+        return True
+    basename = texture_name.replace('\\', '/').rsplit('/', 1)[-1].casefold()
+    return basename not in _NON_SUPPORT_TEXTURE_BASENAMES
+
 
 def raycast_floor_y(
     bsp:          "BspWorld",
@@ -278,6 +304,8 @@ def raycast_floor_y(
     y_hint_min:   Optional[float] = None,
     y_hint_max:   Optional[float] = None,
     y_above:      float = 1.0e6,
+    solid_only:   bool = False,
+    support_only: bool = False,
 ) -> Optional[float]:
     """Cast a vertical ray downward from (x, y_above, z) and return the Y
     coordinate of the highest *floor* surface hit.
@@ -305,6 +333,9 @@ def raycast_floor_y(
     y_hint_max    : optional preferred vertical band. When supplied, hits
                     inside this band are preferred over hits outside it.
     y_above       : ray origin Y (default 1e6, safely above any MM9 geometry)
+    solid_only    : ignore polygons whose surface lacks ``SURF_SOLID``
+    support_only  : ignore editor/helper-only surfaces that do not physically
+                    support runtime objects
     """
     EPSILON = 1e-7
     sane    = _RAYCAST_SANE
@@ -315,6 +346,15 @@ def raycast_floor_y(
             continue
         pts = model.points
         for poly in model.polygons:
+            if solid_only:
+                try:
+                    surface = model.surfaces[poly.surface_index]
+                except (IndexError, TypeError):
+                    continue
+                if not (surface.flags & SURF_SOLID):
+                    continue
+            if support_only and not _is_object_support_polygon(model, poly):
+                continue
             vis = poly.vertex_indices
             nv  = len(vis)
             if nv < 3:

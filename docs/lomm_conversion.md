@@ -2,14 +2,14 @@
 
 ## Purpose
 
-`lomm_to_mm9.py` converts a Legends of Might and Magic level from LoMM `WORLDS.REZ` into MM9-compatible DAT bytes and inserts the converted level into MM9 `WORLDS.REZ` using a transactional archive replacement flow.
+`lomm_to_mm9.py` converts a Legends of Might and Magic level from LoMM `WORLDS.REZ` into MM9-compatible DAT bytes.
 
 The converter is available in two forms:
 
 - Standalone CLI launcher: `lomm_to_mm9.py`
 - Editor workflow: `Conversion -> LoMM to MM9`
 
-The editor workflow uses the same conversion service as the CLI, then opens the converted level from MM9 `WORLDS.REZ` for inspection.
+The editor workflow creates a separate installable staging batch and opens the converted level from the staged `WORLDS.REZ`. It does not modify the live game. The standalone CLI retains its transactional live-insertion command for backward compatibility; use `--dry-run` for a non-writing CLI preview. Live insertion refuses unresolved actors unless the advanced `--allow-incompatible-actors` override is supplied.
 
 ## Tested Baseline
 
@@ -77,32 +77,36 @@ The current pipeline is YAML-driven and implemented by `conversion/lomm_to_mm9.p
 
 Pipeline stages:
 
-1. **Convert classes via templates**
-   - Runs first.
-   - Replaces matching source objects, including LoMM-only enemies such as `Orc`, with clones of named MM9 template objects.
-   - Retyped objects survive the later unknown-class removal stage.
+1. **Analyze actor compatibility**
+   - Reads class hierarchies from each game's active `data/object.lto` when possible.
+   - Falls back to the generated MM9/LoMM catalog LTO layers, then to conservative DAT property signatures.
+   - Treats an actor as supported only when the MM9 runtime registry marks its class as loadable. Hidden classes such as MM9 `Dwarf` therefore remain valid.
+   - Records a per-object decision and registry provenance in the conversion report.
 
-2. **Drop unknown classes**
-   - Removes any WorldObject whose class is not registered in the MM9 catalog and was not converted by a rule.
+2. **Apply the selected actor policy and non-actor template rules**
+   - `preserve` (default) keeps unsupported actors for manual editing and does not apply historical actor substitutions.
+   - `legacy` explicitly enables the historical nearest-MM9 actor substitutions in the YAML.
+   - `remove` explicitly removes only actors that MM9 cannot construct.
+   - Non-actor conversions such as `TreasureChest`, `Fire`, and `Brazier` continue to use MM9 templates.
 
-3. **Patch shared classes**
+3. **Drop unknown non-actor classes**
+   - Removes non-actor WorldObjects absent from MM9's LTO/catalog layers.
+   - Unsupported actors are never silently removed under `preserve` or `legacy`.
+
+4. **Patch shared classes**
    - Adds missing MM9 properties to shared classes such as `StartPoint` and `WorldProperties`.
 
-4. **Audit and copy assets**
+5. **Audit and stage assets**
    - Walks each remaining object's model, skin, and sound references.
    - Classifies each referenced asset as `in MM9`, `in LoMM only`, or `missing`.
-   - Copies LoMM-only assets transactionally into MM9 `MODELS.REZ`, `SKINS.REZ`, or `SOUNDS.REZ`.
+   - Adds LoMM-only assets to staged `MODELS.REZ`, `SKINS.REZ`, or `SOUNDS.REZ` archives.
 
-5. **Write and verify archives**
-   - Writes a complete temporary `WORLDS.REZ`.
-   - Creates a backup under `<mm9_root>/mm9_editor/backups/lomm_to_mm9_<timestamp>/data/`.
-   - Replaces archives using `os.replace()`.
-   - Verifies that the new level can be read back.
+6. **Write and verify the editor batch**
+   - Writes `<output>/lomm_to_mm9_<timestamp>/data/*.REZ` plus `manifest.json` and `conversion_log.txt`.
+   - Verifies the new level and copied assets by reading them back from the staged archives.
+   - Marks the batch with a blocking issue while unsupported actors remain. Installation is rejected by default, with an explicit advanced override available.
 
-The backup folder also receives:
-
-- `install_manifest.json`, including a `conversion` section with the LoMM source level and new MM9 entry
-- `conversion_log.txt`, describing copied assets and conversion actions
+The live-insertion CLI path still creates backups and `install_manifest.json`. Both paths include the structured compatibility report in their conversion statistics.
 
 ## Standalone CLI Usage
 
@@ -110,9 +114,14 @@ The backup folder also receives:
 python lomm_to_mm9.py \
     --mm9_root "C:\Path\To\Might and Magic IX" \
     --lomm_root "C:\Path\To\Legends of Might and Magic" \
+    --lomm-catalog "C:\Path\To\catalog_lomm.json" \
     --level_to_convert CHATEAUESCAPE \
     --converted_level_name CHATEAUESCAPE_MM9
 ```
+
+If the selected LoMM catalog does not exist, the converter builds it from the
+LoMM install before starting conversion. An existing catalog is never
+overwritten automatically.
 
 Preview without modifying MM9 archives:
 
@@ -129,6 +138,14 @@ Use a different rule file:
 
 ```sh
 python lomm_to_mm9.py ... --config my_rules.yaml
+```
+
+Choose actor handling explicitly:
+
+```sh
+python lomm_to_mm9.py ... --actor-policy preserve
+python lomm_to_mm9.py ... --actor-policy legacy
+python lomm_to_mm9.py ... --actor-policy remove
 ```
 
 Force a fresh class scan instead of using `catalog.json`:
@@ -152,20 +169,28 @@ In the editor:
 3. Select the LoMM install folder.
 4. Pick a LoMM level from its `WORLDS.REZ`.
 5. Enter the new MM9 level name.
-6. Confirm the live archive replacement.
+6. Choose how actors are handled. Preserve is recommended and selected by default.
+7. Confirm creation of the staging batch.
 
 After success, the editor:
 
 - remembers the last successful LoMM install folder in `editor_settings.json`
 - offers that folder the next time the dialog opens
-- writes an automatic conversion backup of all modified archives
-- writes `install_manifest.json` and `conversion_log.txt`
-- opens the newly inserted MM9 level for inspection
-- refreshes the viewport cache so newly copied models and skins render immediately
+- leaves the live MM9 install unchanged
+- writes an installable batch with `manifest.json` and `conversion_log.txt`
+- opens the staged MM9 level for inspection
+- marks incompatible actors with `!` in red in the object list
+- offers an incompatible-only filter and a bulk delete action
+- carries staged model/skin/sound archives into later editor save batches
+- blocks installation by default while incompatible actors remain
 
 ## Class Compatibility
 
-In `CHATEAUESCAPE.DAT`, 5 classes are not registered in MM9. They account for 46 objects and must be removed or retyped before the level loads cleanly in MM9.
+Compatibility is based on the runtime class registry rather than the visible catalog alone. A same-named MM9 actor is reported as `same_name_mm9_implementation`: MM9 can construct it, but this does not promise identical LoMM behavior, stats, or visuals. An LoMM-only actor is reported as `unsupported_actor_preserved` until the user deletes it or opts into a substitution.
+
+In `HIDEOUT.DAT`, for example, MM9's active LTO contains a hidden but runtime-loadable `Dwarf`, so the three Dwarfs remain `Dwarf`. The five `Orc` instances and one `Princess` are preserved and flagged as unsupported instead of becoming `LizardOrc` or disappearing silently.
+
+In `CHATEAUESCAPE.DAT`, 5 classes are absent from MM9. Non-actor multiplayer helpers are removed by the general class filter; `Orc` remains editable under the default actor policy.
 
 | LoMM class | Count | LoMM purpose | MM9 nearest match / action |
 |---|---:|---|---|
@@ -190,6 +215,68 @@ The remaining 24 observed classes are registered in MM9, including:
 - `TreasureChest`
 - `Brazier`
 - `Fire`
+
+## Unsupported-LoMM Editor Preview
+
+Preservation-first conversion lets unsupported LoMM actors use their original
+visuals inside the editor without implying MM9 runtime compatibility.
+
+1. **The editor bootstraps a missing LoMM catalog from `--lomm-root`.**
+
+   - The editor accepts `--lomm-root` and validates it using the same install
+     checks as the conversion dialog.
+   - When `catalog/data/catalog_lomm.json` (or the path supplied with
+     `--lomm-catalog`) is absent and a valid LoMM root was provided, the editor
+     generates it from that install's `WORLDS.REZ`,
+     `object.lto`, and available model/skin resource indexes.
+   - Existing catalogs are not overwritten automatically, and generation
+     failures are reported before the editor opens.
+   - The builder writes through a temporary output and replaces the destination
+     only after a complete catalog has been validated, so interruption cannot
+     leave a partially written catalog.
+
+2. **Converted-level previews use staged model and skin archives.**
+
+   - A converted `LevelEdit` retains its conversion staging directory.
+   - When that level is active, prefer staged `MODELS.REZ` and `SKINS.REZ` for
+     viewport extraction and cache construction whenever those archives are
+     present. They are complete patched MM9 archives, not delta archives, so
+     normal MM9 assets remain available through the same resource view.
+   - Fall back independently to the detected live MM9 archive when a staged
+     archive is absent.
+   - The editor rebuilds the viewport's model and skin caches when switching
+     between staged and ordinary MM9 levels, and restores the normal MM9
+     resource view when the converted level is no longer active.
+
+3. **Conversion stages implicit LoMM skins discovered through the catalog.**
+
+   - Explicit DAT `Skin` references remain the first source of truth.
+   - For a model with no explicit skin, resolve normalized `Filename` entries
+     through `catalog_lomm.json` `model_variants`, including primary and
+     accessory skins when present.
+   - Copy resolved LoMM-only skins into a staged `SKINS.REZ` and record their
+     catalog provenance in the conversion report. For example,
+     `models\\dragonred.abc` resolves to `skins\\dragonred.dtx` even though the
+     placed `DragonRed` object has no `Skin` property.
+   - The incompatible-actor warning and installation blocker remain. Successful
+     editor preview must remain explicitly separate from MM9 runtime support.
+
+4. **Class-named LoMM models can replace misleading DAT fallbacks in previews.**
+
+   - The LoMM catalog inventories `MODELS.REZ` or the extracted `MODELS`
+     directory as well as skins.
+   - For actor classes whose DAT `Filename` is only a placeholder, conversion
+     can select a class-named LoMM resource when its catalog variants match the
+     class. The original DAT property is not changed.
+   - For example, `Princess` stores `models\\player\\king.abc` in the DAT and
+     `object.lto`, while LoMM ships `models\\princess.abc` and four color skins.
+     The editor deterministically previews `Princess Blue`, stages that model
+     and skin, and continues to mark the object as MM9-incompatible.
+
+The catalog and conversion paths were validated against `ISLEOFFIRE`: the
+`DragonRed` model resolves its implicit `skins\\dragonred.dtx`, that skin is
+staged and reported with catalog provenance, and `DragonRed` remains classified
+as unsupported by the MM9 runtime.
 
 ## Shared-Class Property Differences
 
@@ -230,6 +317,7 @@ Top-level sections:
 remove_unknown_classes: true
 extra_remove_classes: []
 keep_classes: []
+actor_policy: preserve
 
 patch_class:
   StartPoint:
@@ -252,7 +340,8 @@ convert_class:
 
 Meaning of major rule fields:
 
-- `remove_unknown_classes`: drop classes not registered in the MM9 catalog.
+- `actor_policy`: `preserve` (default), `legacy`, or `remove`.
+- `remove_unknown_classes`: drop non-actor classes not present in the MM9 LTO/catalog layers.
 - `extra_remove_classes`: explicitly drop additional classes.
 - `keep_classes`: exempt custom classes from unknown-class removal.
 - `patch_class`: add or override properties on classes that remain shared.
@@ -278,7 +367,7 @@ If PyYAML is unavailable, the config loader falls back to JSON parsing.
 
 ## Enemy Porting
 
-Enemy conversion rules clone MM9 host class instances. This brings MM9-compatible stats, AI, sound tables, and animation state machines.
+The bundled historical enemy rules clone MM9 host class instances. They are now applied only when `actor_policy: legacy` or `--actor-policy legacy` is selected. This makes the lossy nearest-equivalent conversion explicit.
 
 The default rule set covers:
 
@@ -293,7 +382,7 @@ The default rule set covers:
 - `EvilEye`
 - `EvilEyeTerror`
 
-Custom enemy conversion rules can be added in YAML using `template`, `new_type`, `preserve`, `overrides`, and `add_props`.
+Custom enemy conversion rules can be added in YAML using `template`, `new_type`, `preserve`, `overrides`, and `add_props`. Preserving an unsupported LoMM class does not make MM9 able to render it; importing LoMM assets alone is insufficient because MM9 also lacks the class/AI implementation. Such actors must be removed, replaced, or supported by a separately developed MM9 runtime extension.
 
 ## Asset Compatibility and Audit
 
@@ -375,20 +464,36 @@ To connect it to MM9 gameplay:
 
 The editor's transition wizard can apply this kind of transition setup.
 
-## LoMM Catalog for Rule Research
+## LoMM Catalog
 
-A separate LoMM catalog can be generated for experimental conversion-rule design:
+The recommended editor startup form generates a missing LoMM catalog
+automatically:
 
 ```powershell
-python catalog.py build-from-rez `
-  C:\lithtech\mm9_editor\lomm_data\worlds.rez `
-  --object-lto C:\lithtech\mm9_editor\lomm_data\object.lto `
+python mm9_editor.py `
+  --game-root "C:\Path\To\Might and Magic 9" `
+  --lomm-root "C:\Path\To\Legends of Might and Magic"
+```
+
+Use `--lomm-catalog <path>` to select a non-default catalog. Existing catalogs
+are loaded as-is and are not rebuilt automatically.
+
+A catalog can also be generated manually from a LoMM install:
+
+```powershell
+python catalog.py build-lomm `
+  "C:\Path\To\Legends of Might and Magic" `
   --out C:\lithtech\mm9_editor\catalog\data\catalog_lomm.json
 ```
 
+This install-root profile deliberately does not read MM9-style
+`ACTOR.TXT`/`MONSTERS.TXT` tables. It combines the LoMM `object.lto`, observed
+DAT properties, and the LoMM skin inventory.
+
 `catalog_lomm.json` mirrors the shape of MM9's `catalog/data/catalog.json` but indexes LoMM levels.
-The builder automatically indexes a sibling `SKINS.REZ` or extracted `SKINS`
-directory and writes model/skin combinations to `model_variants`. Exact DAT
+The builder automatically indexes sibling `MODELS.REZ`/`SKINS.REZ` archives or
+extracted `MODELS`/`SKINS` directories. It records `model_resources` and writes
+model/skin combinations to `model_variants`. Exact DAT
 and `object.lto` associations take precedence. For actor classes whose skin is
 implicit in the engine, conservative same-name variants such as
 `Goblin.dtx`/`GoblinChief.dtx` are included without treating accessory names

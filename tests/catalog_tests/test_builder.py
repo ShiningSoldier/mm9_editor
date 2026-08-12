@@ -11,6 +11,7 @@ from catalog import (
     ObjectLtoDumpError,
     build_catalog,
     generate_object_lto_dump,
+    load_catalog,
     load_object_lto_dump,
     resolve_object_lto_dump,
     save_catalog,
@@ -156,6 +157,92 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(props["Rotation"]["value"], [0.0, 0.0, 0.0, 0.0])
         self.assertEqual(catalog["summary"]["total_classes"], 1)
 
+    def test_world_helpers_are_derived_from_object_lto_hierarchy_and_resources(self):
+        actor = _object_lto_class("LoMMActor", parent="AIBase")
+        actor["hierarchy"] = ["BaseClass", "ModelObject", "Actor", "AIBase", "LoMMActor"]
+        object_lto_dump = _normalized_object_lto_dump({
+            "LoMMActor": actor,
+            "ServiceNode": _object_lto_class("ServiceNode"),
+            "ModeledEffect": _object_lto_class(
+                "ModeledEffect",
+                properties=[
+                    _object_lto_prop("Filename", 0, r"models\effects\visible.abc"),
+                ],
+            ),
+            "AmbientAudio": _object_lto_class(
+                "AmbientAudio",
+                properties=[
+                    _object_lto_prop("Filename", 0, r"sounds\ambient\wind.wav"),
+                ],
+            ),
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog = build_catalog(tmpdir, object_lto_dump=object_lto_dump)
+
+        helpers = {
+            name: entry["world_helper"]
+            for name, entry in catalog["classes"].items()
+        }
+        self.assertFalse(helpers["LoMMActor"]["is_helper"])
+        self.assertEqual(helpers["LoMMActor"]["reason"], "actor_hierarchy")
+        self.assertTrue(helpers["ServiceNode"]["is_helper"])
+        self.assertFalse(helpers["ModeledEffect"]["is_helper"])
+        self.assertTrue(helpers["AmbientAudio"]["is_helper"])
+
+    def test_dat_model_resource_prevents_helper_classification(self):
+        obj = patcher.WorldObject("CustomVisibleObject", [
+            patcher.Property("Name", 0, 0, "Visible0"),
+            patcher.Property("Pos", 1, 0, (1.0, 2.0, 3.0)),
+            patcher.Property("Filename", 0, 0, r"models\custom\visible.abc"),
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "CUSTOM.DAT")
+            patcher.World(
+                patcher.Header(
+                    patcher.DAT_VERSION,
+                    patcher.HEADER_SIZE,
+                    patcher.HEADER_SIZE,
+                    (0,) * 8,
+                ),
+                b"",
+                [obj],
+                b"",
+            ).save(path)
+            catalog = build_catalog(tmpdir)
+
+        entry = catalog["classes"]["CustomVisibleObject"]
+        self.assertEqual(
+            entry["dat_model_filenames"],
+            [r"models\custom\visible.abc"],
+        )
+        self.assertFalse(entry["world_helper"]["is_helper"])
+        self.assertEqual(entry["world_helper"]["reason"], "dat_model_resource")
+
+    def test_loading_an_old_catalog_adds_world_helper_metadata_in_memory(self):
+        old_catalog = {
+            "classes": {
+                "Timer": {
+                    "property_names": ["Name", "Pos"],
+                    "filenames": [],
+                    "object_lto": {
+                        "parent": "ObjectBase",
+                        "hierarchy": ["BaseClass", "ObjectBase", "Timer"],
+                        "template_properties": [],
+                    },
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "old_catalog.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(old_catalog, f)
+            loaded = load_catalog(path)
+
+        self.assertTrue(loaded["classes"]["Timer"]["world_helper"]["is_helper"])
+
     def test_existing_dat_class_keeps_observed_metadata_when_object_lto_merges(self):
         object_lto_dump = _normalized_object_lto_dump({
             "RedWolf": _object_lto_class(
@@ -251,6 +338,29 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(
             [row["skins"] for row in variants],
             [[r"skins\goblin.dtx"], [r"skins\goblinchief.dtx"]],
+        )
+
+    def test_skin_inventory_accepts_named_variants_without_plain_base_skin(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog = build_catalog(
+                tmpdir,
+                model_paths=[r"MODELS\PRINCESS.ABC"],
+                skin_paths=[
+                    r"SKINS\PRINCESSBLUE.DTX",
+                    r"SKINS\PRINCESSGOLD.DTX",
+                    r"SKINS\PRINCESSPINK.DTX",
+                    r"SKINS\PRINCESSPOLE.DTX",
+                ],
+            )
+
+        self.assertEqual(
+            catalog["model_resources"],
+            [r"models\princess.abc"],
+        )
+        variants = catalog["model_variants"][r"models\princess.abc"]
+        self.assertEqual(
+            [row["name"] for row in variants],
+            ["Princess Blue", "Princess Gold", "Princess Pink"],
         )
 
     def test_hidden_or_no_runtime_object_lto_classes_are_not_added_when_unobserved(self):

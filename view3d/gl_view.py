@@ -30,7 +30,6 @@ Mouse / keyboard in orbit mode
   PgUp/PgDn    — nudge selected object vertically
   Q / E        — nudge selected object down / up
   F            — fit camera to level bounds
-  P            — toggle render profiling to stderr
   Right-click  — cancel place mode
 
 Mouse / keyboard in place mode  (set_place_mode(True))
@@ -41,6 +40,7 @@ Mouse / keyboard in fly mode
   Left-drag    — look (yaw/pitch)
   W/A/S/D      — move forward/left/back/right
   Q / E        — move down / up
+  Scroll       — dolly forward / back along the viewing direction
   Shift        — 5× speed
   F            — reset to fit-to-bounds position
 
@@ -104,20 +104,39 @@ _INSTALL_HINT = (
 if OPENGL_AVAILABLE:
     import numpy as np
     from pyopengltk import OpenGLFrame          # type: ignore
+
+    # pyopengltk's Windows pixel descriptor defaults to zero stencil bits.
+    # Sky portals use stencil masking, so request it before tkMap creates the
+    # native GL context. The queried GL_STENCIL_BITS below remains authoritative
+    # in case a driver cannot provide the requested format.
+    if sys.platform.startswith("win32"):
+        try:
+            import pyopengltk.win32 as _pyopengltk_win32  # type: ignore
+            _pyopengltk_win32.pfd.cStencilBits = 8
+        except Exception:
+            pass
+
     from view3d.camera    import Camera
-    from view3d.coords    import display_to_game_point, game_to_display_bounds
+    from view3d.coords    import (display_to_game_point, game_to_display_bounds,
+                                  game_to_display_point)
     from view3d.gl_shader import ShaderProgram
-    from view3d.gl_shader import SOLID_VERT, SOLID_FRAG
+    from view3d.gl_shader import (SOLID_VERT, SOLID_FRAG,
+                                  SKY_PORTAL_VERT, SKY_PORTAL_FRAG)
     from view3d.gl_shader import BILLBOARD_VERT, BILLBOARD_GEOM, BILLBOARD_FRAG
     from view3d.gl_mesh   import (MeshCache, draw_mesh, raycast_mesh_array,
                                   build_bsp_draw_batch, draw_bsp_batch,
-                                  DEFAULT_HELPER_ROLE_GROUPS)
+                                  DEFAULT_HELPER_ROLE_GROUPS,
+                                  normal_render_world_bounds,
+                                  build_sky_draw_batch, draw_sky_batch)
     from view3d.gl_objects import (upload_objects, draw_sprites,
                                    decode_pick_color, delete_sprites,
                                    ObjectSprites,
+                                   hidden_world_helper_model_names,
                                    should_draw_billboard_for_modeled_object)
     from view3d.gl_object_models import (ObjectModelCache, build_render_items,
                                          draw_object_model_items)
+    from view3d.sky import (build_soft_sky_model, resolve_sky_scene,
+                            resolve_soft_sky_texture)
     import _path_setup     # type: ignore  # noqa: F401
     from catalog import categorize
 
@@ -142,6 +161,44 @@ _NUDGE_Y_STEP = 25.0
 _NUDGE_FAST_MULT = 5.0
 _ROTATE_YAW_STEP_DEG = 15.0
 _ROTATE_FAST_MULT = 3.0
+
+# Fly movement uses real timer deltas, capped so a stalled event loop cannot
+# teleport the camera on its next callback. One wheel notch dollies by this
+# fraction of a second at the configured fly speed.
+_MAX_FLY_TICK_SECONDS = 0.1
+_FLY_WHEEL_SECONDS = 0.25
+_VIEWPORT_KEYSYMS = frozenset({
+    "w", "a", "s", "d", "q", "e", "f",
+    "shift_l", "shift_r",
+    "up", "down", "left", "right",
+    "prior", "next", "page_up", "page_down",
+    "bracketleft", "bracketright", "braceleft", "braceright",
+})
+
+
+def _fly_elapsed_seconds(previous: Optional[float], current: float) -> float:
+    """Return a non-negative, stall-safe fly-camera timer delta."""
+    if previous is None:
+        return 0.0
+    return min(max(float(current) - float(previous), 0.0), _MAX_FLY_TICK_SECONDS)
+
+
+def _should_accept_viewport_key(
+    keysym: str,
+    *,
+    direct_to_canvas: bool,
+    focus_known: bool,
+    focus_in_viewport: bool,
+    pointer_over_canvas: bool,
+) -> bool:
+    """Pure policy for the guarded application-wide keyboard fallback."""
+    if str(keysym or "").lower() not in _VIEWPORT_KEYSYMS:
+        return False
+    if direct_to_canvas:
+        return True
+    if focus_known:
+        return bool(focus_in_viewport)
+    return bool(pointer_over_canvas)
 
 # ---------------------------------------------------------------------------
 # Placeholder widget (GL not available)
@@ -201,9 +258,14 @@ if OPENGL_AVAILABLE:
             self._camera       = Camera()
             self._mesh_cache   = MeshCache()
             self._bsp_draw_batch = None
+            self._sky_scene = None
+            self._sky_draw_batch = None
+            self._soft_sky_model = None
             self._sprites: Optional[ObjectSprites] = None
             self._solid_prog:     Optional[ShaderProgram] = None
+            self._sky_portal_prog: Optional[ShaderProgram] = None
             self._billboard_prog: Optional[ShaderProgram] = None
+            self._stencil_bits: int = 0
 
             # TextureCache — created in initgl() once GL is live.
             # Set _textures_dir/_models_dir before initgl fires (View3D does this).
@@ -214,6 +276,7 @@ if OPENGL_AVAILABLE:
             self._models_dir: Optional[str] = None
             self._obj_model_cache = None   # gl_object_models.ObjectModelCache or None
             self._actor_visuals: dict = {}
+            self._world_helper_metadata: dict = {}
 
             self._level        = None   # LevelEdit or None
             self._bsp_world    = None   # bsp.BspWorld or None
@@ -250,7 +313,8 @@ if OPENGL_AVAILABLE:
             self._last_render_time: float = 0.0
             self._render_min_interval_ms: int = 16
 
-            # Lightweight render profiler, toggled with P or env var.
+            # Lightweight developer profiler. It is intentionally available
+            # only through the debug environment setting, not a user shortcut.
             self._profile_enabled: bool = os.environ.get("MM9_EDITOR_PROFILE") == "1"
             self._profile_accum: dict = {}
             self._profile_frames: int = 0
@@ -258,6 +322,7 @@ if OPENGL_AVAILABLE:
             # Fly-mode key state
             self._fly_keys:  set = set()
             self._fly_after: Optional[str] = None
+            self._fly_last_tick: Optional[float] = None
 
             # Callbacks wired by View3D
             self._on_select_cb: Optional[Callable[[int], None]] = None
@@ -327,8 +392,9 @@ if OPENGL_AVAILABLE:
             self.bind("<FocusOut>",        self._on_focus_out)
 
             # Some pyopengltk/OpenGLFrame builds on Windows do not reliably
-            # receive KeyPress even after focus_set().  Guarded bind_all keeps
-            # fly controls live whenever this 3-D canvas is actually visible.
+            # receive KeyPress even after focus_set(). Guarded bind_all keeps
+            # controls working, while _accept_key_event requires the canvas to
+            # own focus (or the pointer when Tk reports no focus at all).
             self.bind_all("<KeyPress>",   self._on_key_down, add="+")
             self.bind_all("<KeyRelease>", self._on_key_up,   add="+")
             self.bind_all("<MouseWheel>", self._on_global_wheel, add="+")
@@ -349,9 +415,22 @@ if OPENGL_AVAILABLE:
                 GL.glClearColor(0.055, 0.063, 0.086, 1.0)  # editor dark bg
 
                 self._solid_prog     = ShaderProgram.build(SOLID_VERT, SOLID_FRAG)
+                self._sky_portal_prog = ShaderProgram.build(
+                    SKY_PORTAL_VERT, SKY_PORTAL_FRAG,
+                )
                 self._billboard_prog = ShaderProgram.build3(
                     BILLBOARD_VERT, BILLBOARD_GEOM, BILLBOARD_FRAG
                 )
+                try:
+                    self._stencil_bits = int(GL.glGetIntegerv(GL.GL_STENCIL_BITS))
+                except Exception:
+                    self._stencil_bits = 0
+                GL.glClearStencil(0)
+                if self._stencil_bits <= 0:
+                    print(
+                        "[view3d] sky portals disabled: framebuffer has no stencil buffer",
+                        file=sys.stderr,
+                    )
 
                 # Build texture cache if the textures directory is available
                 if self._textures_dir:
@@ -447,18 +526,11 @@ if OPENGL_AVAILABLE:
             frames = max(1, self._profile_frames)
             parts = [
                 f"{key}={self._profile_accum.get(key, 0.0) / frames:.2f}ms"
-                for key in ("frame", "bsp", "abc", "sprites")
+                for key in ("frame", "bsp", "sky", "abc", "sprites")
             ]
             print("[view3d profile] " + "  ".join(parts), file=sys.stderr)
             self._profile_accum.clear()
             self._profile_frames = 0
-
-        def _toggle_profile(self) -> None:
-            self._profile_enabled = not self._profile_enabled
-            self._profile_accum.clear()
-            self._profile_frames = 0
-            state = "on" if self._profile_enabled else "off"
-            print(f"[view3d profile] {state}", file=sys.stderr)
 
         # ------------------------------------------------------------------
         # Rendering
@@ -466,7 +538,7 @@ if OPENGL_AVAILABLE:
 
         def _render(self) -> None:
             frame_t0 = time.perf_counter()
-            timings = {"bsp": 0.0, "abc": 0.0, "sprites": 0.0}
+            timings = {"bsp": 0.0, "sky": 0.0, "abc": 0.0, "sprites": 0.0}
             w = self.winfo_width()
             h = self.winfo_height()
             if w < 1 or h < 1:
@@ -497,8 +569,56 @@ if OPENGL_AVAILABLE:
                     fog_near=fog_near,
                     fog_far=fog_far,
                     fog_color=_FOG_COLOR,
+                    render_pass="opaque",
                 )
             timings["bsp"] = (time.perf_counter() - t0) * 1000.0
+
+            # --- Camera-relative sky, clipped by visible SURF_SKY portals ---
+            self._last_sky_layers_drawn = 0
+            self._last_sky_tris_drawn = 0
+            t0 = time.perf_counter()
+            if (
+                self._stencil_bits > 0
+                and self._sky_scene is not None
+                and self._sky_draw_batch is not None
+                and self._sky_portal_prog is not None
+                and self._solid_prog is not None
+                and self._bsp_world is not None
+            ):
+                world_min = getattr(self._bsp_world, "world_extents_min", None)
+                world_max = getattr(self._bsp_world, "world_extents_max", None)
+                if world_min is None or world_max is None:
+                    bounds = normal_render_world_bounds(
+                        self._bsp_world,
+                        hidden_helper_model_names=self._hidden_helper_model_names(),
+                    )
+                    if bounds is not None:
+                        world_min, world_max = bounds
+                if world_min is not None and world_max is not None:
+                    camera_game = display_to_game_point(self._camera.eye)
+                    sky_eye_game = self._sky_scene.view_position(
+                        camera_game,
+                        world_min,
+                        world_max,
+                    )
+                    sky_eye = game_to_display_point(sky_eye_game)
+                    sky_mvp = self._camera.mvp_from_eye(
+                        tuple(float(v) for v in sky_eye),
+                        aspect,
+                        near=0.01,
+                        far=self._sky_scene.far_distance,
+                    )
+                    (
+                        self._last_sky_layers_drawn,
+                        self._last_sky_tris_drawn,
+                    ) = draw_sky_batch(
+                        self._sky_draw_batch,
+                        self._sky_portal_prog,
+                        self._solid_prog,
+                        mvp,
+                        sky_mvp,
+                    )
+            timings["sky"] = (time.perf_counter() - t0) * 1000.0
 
             # --- Supported WorldObject ABC meshes ---
             self._last_obj_models_drawn = 0
@@ -533,6 +653,25 @@ if OPENGL_AVAILABLE:
                         only_world_index=drag_world_index,
                     )
             timings["abc"] = (time.perf_counter() - t0) * 1000.0
+
+            # Translucent BSP belongs after the sky and opaque object models.
+            # BOOTCAMP's round church windows deliberately layer stained glass
+            # over SURF_SKY portals; drawing this pass earlier lets sky erase it.
+            t0 = time.perf_counter()
+            if self._solid_prog and self._bsp_draw_batch:
+                cam_far = self._camera.far
+                draw_bsp_batch(
+                    self._bsp_draw_batch,
+                    self._solid_prog,
+                    mvp,
+                    light_dir=_LIGHT_DIR,
+                    fog_enabled=self._fog_enabled,
+                    fog_near=cam_far * 0.20,
+                    fog_far=cam_far * 0.80,
+                    fog_color=_FOG_COLOR,
+                    render_pass="translucent",
+                )
+            timings["bsp"] += (time.perf_counter() - t0) * 1000.0
 
             # Flush any pending sprite-position VBO patches.
             if self._sprite_position_pending and self._sprites:
@@ -611,10 +750,12 @@ if OPENGL_AVAILABLE:
             tri  = getattr(self, "_last_tris_drawn",   0)
             omd  = getattr(self, "_last_obj_models_drawn", 0)
             otri = getattr(self, "_last_obj_tris_drawn",   0)
+            sky  = getattr(self, "_last_sky_layers_drawn", 0)
+            sky_text = f"  ·  {sky} sky" if self._sky_scene is not None else ""
             text = (f"{mode}  ·  "
                     f"eye ({eye[0]:.0f}, {eye[1]:.0f}, {eye[2]:.0f})  ·  "
                     f"{n} obj  ·  {md} BSP  {tri:,} tris  ·  "
-                    f"{omd} ABC  {otri:,} tris")
+                    f"{omd} ABC  {otri:,} tris{sky_text}")
             self._on_status_cb(text)
 
         # ------------------------------------------------------------------
@@ -728,7 +869,58 @@ if OPENGL_AVAILABLE:
                         item.world_index for item in self._object_model_items
                     ],
                     selected_index=self._selected_index,
+                    world_helper_metadata=self._world_helper_metadata,
                 )
+
+        def _hidden_helper_model_names(self) -> set[str]:
+            """Return catalog-derived BSP helpers hidden by normal rendering."""
+            return hidden_world_helper_model_names(
+                self._objects,
+                categorize,
+                self._world_helper_metadata,
+            )
+
+        def _fit_camera_to_level(self) -> bool:
+            """Fit to ordinary rendered BSP geometry in viewport coordinates."""
+            if self._bsp_world is None:
+                return False
+            bounds = normal_render_world_bounds(
+                self._bsp_world,
+                hidden_helper_model_names=self._hidden_helper_model_names(),
+            )
+            if bounds is None:
+                return False
+            display_lo, display_hi = game_to_display_bounds(*bounds)
+            self._camera.fit_to_bounds(display_lo, display_hi)
+            return True
+
+        def _rebuild_sky(self, force: bool = False) -> None:
+            """Resolve DAT sky objects and build the portal/layer draw batch."""
+            scene = resolve_sky_scene(self._objects)
+            if not force and scene == self._sky_scene and self._sky_draw_batch is not None:
+                return
+            if self._soft_sky_model is not None:
+                self._mesh_cache.discard_model(self._soft_sky_model)
+            self._sky_scene = scene
+            self._sky_draw_batch = None
+            self._soft_sky_model = None
+            if self._sky_scene is None or self._bsp_world is None:
+                return
+            soft_texture = resolve_soft_sky_texture(
+                self._sky_scene,
+                self._tex_cache,
+            )
+            self._soft_sky_model = build_soft_sky_model(
+                self._sky_scene,
+                soft_texture,
+            )
+            self._sky_draw_batch = build_sky_draw_batch(
+                self._bsp_world,
+                self._sky_scene,
+                self._mesh_cache,
+                tex_cache=self._tex_cache,
+                soft_sky_model=self._soft_sky_model,
+            )
 
         def load_level(self, level, bsp_world, objects) -> None:
             """
@@ -745,6 +937,7 @@ if OPENGL_AVAILABLE:
             self._discard_pending_transform_commit()
             self._mesh_cache.invalidate()
             self._bsp_draw_batch = None
+            self._sky_draw_batch = None
             self._delete_sprites()
 
             self._level      = level
@@ -777,20 +970,11 @@ if OPENGL_AVAILABLE:
                     tex_cache=self._tex_cache,
                     helper_bsp_mode=self._helper_bsp_mode,
                     helper_role_groups=self._helper_role_groups,
+                    hidden_helper_model_names=self._hidden_helper_model_names(),
                 )
+            self._rebuild_sky()
 
-            # Fit camera to the BSP bounding box (ignoring skyboxes)
-            if bsp_world and bsp_world.world_models:
-                visible = [m for m in bsp_world.world_models if not m.is_skybox()]
-                if visible:
-                    lo = (min(m.min_box[0] for m in visible),
-                          min(m.min_box[1] for m in visible),
-                          min(m.min_box[2] for m in visible))
-                    hi = (max(m.max_box[0] for m in visible),
-                          max(m.max_box[1] for m in visible),
-                          max(m.max_box[2] for m in visible))
-                    display_lo, display_hi = game_to_display_bounds(lo, hi)
-                    self._camera.fit_to_bounds(display_lo, display_hi)
+            self._fit_camera_to_level()
 
             self._request_render()
 
@@ -813,6 +997,7 @@ if OPENGL_AVAILABLE:
                         actor_visuals=self._actor_visuals,
                     )
                 self._rebuild_sprites()
+            self._rebuild_sky()
             self._request_render()
 
         def reload_level_state(self, bsp_world, objects) -> None:
@@ -840,6 +1025,7 @@ if OPENGL_AVAILABLE:
                     tex_cache=self._tex_cache,
                     helper_bsp_mode=self._helper_bsp_mode,
                     helper_role_groups=self._helper_role_groups,
+                    hidden_helper_model_names=self._hidden_helper_model_names(),
                 )
 
             if objects:
@@ -853,6 +1039,7 @@ if OPENGL_AVAILABLE:
                         actor_visuals=self._actor_visuals,
                     )
                 self._rebuild_sprites()
+            self._rebuild_sky(force=True)
             self._request_render()
 
         def set_show_object_helper_billboards(self, enabled: bool) -> None:
@@ -882,6 +1069,7 @@ if OPENGL_AVAILABLE:
                     tex_cache=self._tex_cache,
                     helper_bsp_mode=self._helper_bsp_mode,
                     helper_role_groups=self._helper_role_groups,
+                    hidden_helper_model_names=self._hidden_helper_model_names(),
                 )
             self._request_render()
 
@@ -896,6 +1084,7 @@ if OPENGL_AVAILABLE:
                     tex_cache=self._tex_cache,
                     helper_bsp_mode=self._helper_bsp_mode,
                     helper_role_groups=self._helper_role_groups,
+                    hidden_helper_model_names=self._hidden_helper_model_names(),
                 )
             self._request_render()
 
@@ -1516,7 +1705,8 @@ if OPENGL_AVAILABLE:
 
             # Shift+scroll — elevate the selected object along world Y.
             # Each notch moves 25 world units (≈ half a standing NPC height).
-            if (shift
+            if (self._camera.mode == "orbit"
+                    and shift
                     and self._selected_index >= 0
                     and self._sprites is not None
                     and (self._on_move_xyz_cb is not None
@@ -1540,8 +1730,13 @@ if OPENGL_AVAILABLE:
                     self._request_render()
                     return   # consumed — don't zoom camera
 
-            # Normal scroll: zoom camera
-            if scroll_up:
+            if self._camera.mode == "fly":
+                speed_multiplier = 5.0 if shift else 1.0
+                distance = self._camera.fly_speed * _FLY_WHEEL_SECONDS
+                self._camera.fly_dolly(
+                    distance * speed_multiplier * (1.0 if scroll_up else -1.0)
+                )
+            elif scroll_up:
                 self._camera.zoom(1.15)
             else:
                 self._camera.zoom(1.0 / 1.15)
@@ -1582,67 +1777,93 @@ if OPENGL_AVAILABLE:
             if not self._accept_key_event(e):
                 return
             k = e.keysym.lower()
-            if k == "p":
-                self._toggle_profile()
-                return "break"
             if k == "f":
                 self._refit()
                 return "break"
             if self._handle_orbit_nudge_key(e):
                 return "break"
-            if k in {"w", "a", "s", "d", "q", "e", "shift_l", "shift_r"}:
+            fly_key = k in {
+                "w", "a", "s", "d", "q", "e", "shift_l", "shift_r",
+            }
+            if self._camera.mode == "fly" and fly_key:
                 self._fly_keys.add(k)
-            if (self._camera.mode == "fly"
-                    and self._fly_after is None
-                    and self._fly_keys):
-                self._fly_tick()
-            return "break"
+                if self._fly_after is None and self._fly_keys:
+                    self._fly_last_tick = None
+                    self._fly_tick()
+                return "break"
+            return None
 
         def _on_key_up(self, e: tk.Event) -> None:
             if not self.winfo_viewable():
                 return
-            self._fly_keys.discard(e.keysym.lower())
-            return "break"
+            key = e.keysym.lower()
+            was_active = key in self._fly_keys
+            self._fly_keys.discard(key)
+            if not self._fly_keys:
+                self._cancel_fly_tick()
+            return "break" if was_active else None
 
         def _on_focus_out(self, _e: tk.Event) -> None:
             self._flush_transform_commit()
             self._fly_keys.clear()
+            self._cancel_fly_tick()
+
+        def _cancel_fly_tick(self) -> None:
             if self._fly_after is not None:
                 try:
                     self.after_cancel(self._fly_after)
                 except tk.TclError:
                     pass
                 self._fly_after = None
+            self._fly_last_tick = None
+
+        def _focus_is_in_viewport(self, widget) -> bool:
+            """Return whether *widget* is this canvas or one of its children."""
+            current = widget
+            while current is not None:
+                if current is self:
+                    return True
+                current = getattr(current, "master", None)
+            return False
 
         def _accept_key_event(self, e: tk.Event) -> bool:
             """Return True when a key event should drive the 3-D viewport."""
             if not self.winfo_viewable():
                 return False
 
-            k = e.keysym.lower()
-            allowed = {
-                "w", "a", "s", "d", "q", "e", "f", "p",
-                "shift_l", "shift_r",
-                "up", "down", "left", "right",
-                "prior", "next", "page_up", "page_down",
-                "bracketleft", "bracketright", "braceleft", "braceright",
-            }
-            if k not in allowed:
-                return False
-
-            focus = self.focus_get()
-            if focus is not None:
-                try:
-                    cls = focus.winfo_class()
-                except tk.TclError:
-                    cls = ""
-                if cls in {"Entry", "TEntry", "Text", "Spinbox", "TSpinbox", "TCombobox"}:
-                    return False
-
-            return True
+            # Direct canvas bindings are authoritative even on pyopengltk
+            # builds whose focus reporting is unreliable.
+            try:
+                focus = self.focus_get()
+            except tk.TclError:
+                focus = None
+            return _should_accept_viewport_key(
+                e.keysym,
+                direct_to_canvas=getattr(e, "widget", None) is self,
+                focus_known=focus is not None,
+                focus_in_viewport=(
+                    self._focus_is_in_viewport(focus)
+                    if focus is not None
+                    else False
+                ),
+                # Tk can transiently report no focused widget. In that narrow
+                # case, the global fallback is accepted only under the pointer.
+                pointer_over_canvas=(
+                    self._event_is_over_canvas()
+                    if focus is None
+                    else False
+                ),
+            )
 
         def _fly_tick(self) -> None:
-            """Advance fly-camera movement at ~60 fps while keys are held."""
+            """Advance fly-camera movement using actual elapsed timer time."""
+            if self._camera.mode != "fly" or not self._fly_keys:
+                self._fly_after = None
+                self._fly_last_tick = None
+                return
+            now = time.perf_counter()
+            dt = _fly_elapsed_seconds(self._fly_last_tick, now)
+            self._fly_last_tick = now
             fwd   = (1 if "w" in self._fly_keys else 0) - (1 if "s" in self._fly_keys else 0)
             right = (1 if "d" in self._fly_keys else 0) - (1 if "a" in self._fly_keys else 0)
             up    = (1 if "e" in self._fly_keys else 0) - (1 if "q" in self._fly_keys else 0)
@@ -1651,7 +1872,7 @@ if OPENGL_AVAILABLE:
                 orig = self._camera.fly_speed
                 self._camera.fly_speed = orig * (5.0 if fast else 1.0)
                 try:
-                    self._camera.fly_move(float(fwd), float(right), float(up), 1.0 / 60.0)
+                    self._camera.fly_move(float(fwd), float(right), float(up), dt)
                 finally:
                     self._camera.fly_speed = orig
                 self._request_render()
@@ -1661,18 +1882,16 @@ if OPENGL_AVAILABLE:
                 self._fly_after = None
 
         def _refit(self) -> None:
-            if self._bsp_world and self._bsp_world.world_models:
-                visible = [m for m in self._bsp_world.world_models
-                           if not m.is_skybox()]
-                if visible:
-                    lo = (min(m.min_box[0] for m in visible),
-                          min(m.min_box[1] for m in visible),
-                          min(m.min_box[2] for m in visible))
-                    hi = (max(m.max_box[0] for m in visible),
-                          max(m.max_box[1] for m in visible),
-                          max(m.max_box[2] for m in visible))
-                    self._camera.fit_to_bounds(lo, hi)
-                    self._request_render()
+            if self._fit_camera_to_level():
+                self._request_render()
+
+        def set_camera_mode(self, mode: str) -> None:
+            """Change camera mode and stop movement that no longer applies."""
+            if mode != "fly":
+                self._fly_keys.clear()
+                self._cancel_fly_tick()
+            self._camera.set_mode(mode)
+            self._request_render()
 
 
 # ---------------------------------------------------------------------------
@@ -1722,7 +1941,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         skins_dir:    Optional[str] = None,
         models_dir:   Optional[str] = None,
         actor_visuals: Optional[dict] = None,
-        on_object_helpers_changed: Optional[Callable[[bool], None]] = None,
+        world_helper_metadata: Optional[dict] = None,
     ) -> None:
         if _HAS_TK:
             super().__init__(parent, bg="#0e1116")
@@ -1738,7 +1957,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         self._skins_dir    = skins_dir
         self._models_dir   = models_dir
         self._actor_visuals = actor_visuals or {}
-        self._on_object_helpers_changed = on_object_helpers_changed
+        self._world_helper_metadata = world_helper_metadata or {}
 
         if not OPENGL_AVAILABLE:
             self._inner = _PlaceholderView(self, _MISSING)
@@ -1761,13 +1980,13 @@ class View3D(tk.Frame if _HAS_TK else object):
 
         def _set_orbit():
             self._mode_var.set("orbit")
-            self._canvas._camera.set_mode("orbit")
+            self._canvas.set_camera_mode("orbit")
             self._update_mode_buttons()
             self._canvas.focus_for_input()
 
         def _set_fly():
             self._mode_var.set("fly")
-            self._canvas._camera.set_mode("fly")
+            self._canvas.set_camera_mode("fly")
             self._update_mode_buttons()
             self._canvas.focus_for_input()
 
@@ -1789,42 +2008,6 @@ class View3D(tk.Frame if _HAS_TK else object):
         )
         self._btn_fly.pack(side="left", padx=(0, 12), pady=3)
 
-        # ── Object billboard toggle ──────────────────────────────────────
-        tk.Label(bar, text="Helpers:", bg="#15171b", fg="#aaaaaa",
-                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
-
-        self._helpers_var = tk.BooleanVar(value=False)
-
-        def _toggle_helpers():
-            enabled = self._helpers_var.get()
-            self._canvas.set_show_object_helper_billboards(enabled)
-            self._btn_helpers.config(
-                bg="#2c5e8a" if enabled else "#23272d",
-                fg="white"   if enabled else "#aaaaaa",
-            )
-            if self._on_object_helpers_changed is not None:
-                self._on_object_helpers_changed(enabled)
-            self._canvas.focus_for_input()
-
-        self._btn_helpers = tk.Checkbutton(
-            bar, text="On",
-            variable=self._helpers_var,
-            command=_toggle_helpers,
-            bg="#23272d", fg="#aaaaaa",
-            selectcolor="#23272d",
-            activebackground="#23272d",
-            relief="flat", font=("Segoe UI", 8),
-            indicatoron=False,
-            padx=6,
-        )
-        self._btn_helpers.pack(side="left", padx=(0, 8), pady=3)
-
-        tk.Label(bar,
-                 text="F = fit  ·  arrows = nudge  ·  PgUp/PgDn = height  "
-                      "·  [/] = rotate  ·  P = profile",
-                 bg="#15171b", fg="#555555",
-                 font=("Segoe UI", 7)).pack(side="right", padx=8)
-
         # ── GL canvas ─────────────────────────────────────────────────────
         self._canvas: _GLCanvas = _GLCanvas(self, width=800, height=600)
         self._canvas._on_select_cb   = self._on_select
@@ -1839,6 +2022,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         self._canvas._skins_dir     = self._skins_dir      # passed to initgl
         self._canvas._models_dir    = self._models_dir     # passed to initgl
         self._canvas._actor_visuals = self._actor_visuals
+        self._canvas._world_helper_metadata = self._world_helper_metadata
         self._canvas.pack(fill="both", expand=True)
 
         # ── Status bar ────────────────────────────────────────────────────
@@ -1947,14 +2131,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         """Toggle billboards for objects that already render as 3-D models."""
         if not OPENGL_AVAILABLE:
             return
-        self._helpers_var.set(enabled)
         self._canvas.set_show_object_helper_billboards(enabled)
-        self._btn_helpers.config(
-            bg="#2c5e8a" if enabled else "#23272d",
-            fg="white"   if enabled else "#aaaaaa",
-        )
-        if self._on_object_helpers_changed is not None:
-            self._on_object_helpers_changed(bool(enabled))
 
     def set_show_world_helper_billboards(self, enabled: bool) -> None:
         """Toggle editor service/world helper billboards."""
@@ -1983,7 +2160,7 @@ class View3D(tk.Frame if _HAS_TK else object):
         if not OPENGL_AVAILABLE:
             return
         self._mode_var.set(mode)
-        self._canvas._camera.set_mode(mode)
+        self._canvas.set_camera_mode(mode)
         self._update_mode_buttons()
         self._canvas.focus_for_input()
 
@@ -2020,6 +2197,12 @@ class View3D(tk.Frame if _HAS_TK else object):
                     self._canvas._obj_model_cache = ObjectModelCache(models_dir)
                 except Exception as exc:
                     print(f"[view3d] models cache update failed: {exc}", file=sys.stderr)
+
+    def update_actor_visuals(self, actor_visuals: Optional[dict]) -> None:
+        """Replace per-object actor visuals before loading the active level."""
+        self._actor_visuals = actor_visuals or {}
+        if OPENGL_AVAILABLE:
+            self._canvas._actor_visuals = self._actor_visuals
 
     def focus_for_input(self) -> None:
         """Focus the GL canvas so keyboard and wheel controls reach it."""
