@@ -19,7 +19,7 @@ adjust objects in the level view, configure NPC dialogue, and save patched
 - PyOpenGL dependencies:
 
 ```sh
-pip install PyOpenGL PyOpenGL_accelerate pyopengltk
+pip install PyOpenGL PyOpenGL_accelerate pyopengltk numpy
 ```
 
 Optional archives such as `SOUNDS.REZ` are used when present to load sound effects. The editor materializes only the needed files from these archives into its internal cache.
