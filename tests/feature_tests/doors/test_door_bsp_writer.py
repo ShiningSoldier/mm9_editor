@@ -10,6 +10,7 @@ from tests._path import ROOT  # noqa: F401
 from tests._investigation import investigation_test
 
 from core import bsp
+from features.dat_editing import bsp_record_inspector
 from features.doors import clone as door_clone
 from core import rezmgr as mm9_rezmgr
 from core import project as P
@@ -79,6 +80,20 @@ class DoorBspWriterTests(unittest.TestCase):
         self.assertAlmostEqual(cloned_model.points[0][0], source_model.points[0][0] + delta[0], places=3)
         self.assertAlmostEqual(cloned_model.points[0][1], source_model.points[0][1] + delta[1], places=3)
         self.assertAlmostEqual(cloned_model.points[0][2], source_model.points[0][2] + delta[2], places=3)
+        source_record = bsp_record_inspector.inspect_dat(
+            sturmford, ["Door32"], parsed_world=original_bsp
+        )["Door32"]
+        cloned_record = bsp_record_inspector.inspect_dat(
+            changed, ["Door32Clone"], parsed_world=changed_bsp
+        )["Door32Clone"]
+        self.assertIsNotNone(source_record.physics_block_origin)
+        self.assertIsNotNone(cloned_record.physics_block_origin)
+        for axis in range(3):
+            self.assertAlmostEqual(
+                cloned_record.physics_block_origin[axis],
+                source_record.physics_block_origin[axis] + delta[axis],
+                places=3,
+            )
 
     def test_rez_save_appends_paired_rotating_door_bsp_submodels(self):
         sturmford = self.load_sturmford_bytes()

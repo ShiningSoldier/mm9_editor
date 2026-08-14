@@ -26,9 +26,10 @@ import json
 import os
 import struct
 import tempfile
+import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
@@ -39,11 +40,26 @@ from features.doors import validation as door_clone_validation
 from features.dat_editing import bsp_record_inspector
 from features.dat_editing import output_validation
 from features.prefabs import import_static as prefab_import
+from features.prefabs import behavioral as prefab_behavioral
 from features.prefabs import validation as prefab_import_validation
 
 
 def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _script_rez_key(path: str) -> str:
+    normalized = str(path or "").replace("/", "\\").strip("\\").casefold()
+    return normalized[:-4] if normalized.endswith(".scr") else normalized
+
+
+def _prefab_file_version(path: str) -> int:
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(4)
+    except OSError:
+        return -1
+    return struct.unpack("<I", raw)[0] if len(raw) == 4 else -1
 
 
 # --------------------------------------------------------------------------
@@ -70,6 +86,33 @@ class AddOp:
         pos = self.overrides.get("Pos") or self.template.get("Pos") or (0, 0, 0)
         rude = " + RUDE" if self.rude else ""
         return f"+ {ts:20s} {name}  at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}){rude}"
+
+
+@dataclass
+class ImportResourcePrefabOp(AddOp):
+    """A prefab represented by a stock runtime model-backed object.
+
+    This deliberately subclasses :class:`AddOp`: after the representation has
+    been chosen, editing/moving/deleting it is exactly the same operation as a
+    normal object placement.  The extra fields retain the import provenance so
+    the choice can be audited and round-tripped through ``.mm9mod`` projects.
+    """
+
+    prefab_path: str = ""
+    candidate_id: str = ""
+    model_path: str = ""
+    skin_paths: Tuple[str, ...] = ()
+    source_fingerprint: str = ""
+
+    def summary(self) -> str:
+        name = self.overrides.get("Name") or self.template.get("Name") or ""
+        pos = self.overrides.get("Pos") or self.template.get("Pos") or (0, 0, 0)
+        model = self.model_path or self.overrides.get("Filename") or ""
+        return (
+            f"+ resource prefab {os.path.basename(self.prefab_path)} -> {name} "
+            f"as {self.template.type_str} ({model}) at "
+            f"({float(pos[0]):.0f}, {float(pos[1]):.0f}, {float(pos[2]):.0f})"
+        )
 
 
 @dataclass
@@ -206,8 +249,20 @@ class ImportPrefabBspOp:
     collision_mode: str = "none"
     collision_thickness: float = 8.0
     collision_segment_length: float = 512.0
+    placement_anchor: str = "bottom_center"
+    allow_unsafe_visibility: bool = False
+    worldobject_template: Optional[patcher.WorldObject] = None
+    invisiblebrush_template: Optional[patcher.WorldObject] = None
+    # Legacy ED geometry can still be useful in the viewport while designing,
+    # but it must never enter a game DAT.  The save planner enforces that hard
+    # boundary independently of UI validation.
+    preview_only: bool = False
 
-    def build_plan(self, level: "LevelEdit") -> prefab_import.PrefabBspImportPlan:
+    def build_plan(
+        self,
+        level: "LevelEdit",
+        target_object_names: Optional[Sequence[str]] = None,
+    ) -> prefab_import.PrefabBspImportPlan:
         bsp_world = level.get_bsp()
         if bsp_world is None:
             raise ValueError("prefab BSP import requires parsed target BSP geometry")
@@ -222,13 +277,24 @@ class ImportPrefabBspOp:
             collision_thickness=float(self.collision_thickness),
             collision_segment_length=float(self.collision_segment_length),
             target_dat_bytes=level.source_bytes(),
+            placement_anchor=self.placement_anchor,
+            allow_unsafe_visibility=bool(self.allow_unsafe_visibility),
+            target_object_names=target_object_names,
+            # Operations are materialized for editor preview here. Runtime
+            # save planning performs a second, strict validation pass.
+            allow_generated_bsp=True,
         )
 
     def object_names(self, level: Optional["LevelEdit"] = None) -> List[str]:
+        if level is not None:
+            try:
+                plan = self.build_plan(level)
+                return [*plan.visible_model_names, *plan.collision_model_names]
+            except Exception:
+                pass
         names = [self.new_name]
         if _normalized_prefab_collision_mode(self.collision_mode) in {"invisible_bsp", "box_approx"}:
-            collision_names = self._collision_submodel_names(level)
-            names.extend(collision_names or [f"{self.new_name}_Collision"])
+            names.append(f"{self.new_name}_Collision")
         return names
 
     def apply_to(self, world: patcher.World, level: Optional["LevelEdit"] = None) -> List[patcher.WorldObject]:
@@ -237,19 +303,29 @@ class ImportPrefabBspOp:
             obj_name = (obj.get("Name") or "").lower()
             if obj_name in wanted:
                 raise ValueError(f"object named {obj.get('Name')!r} already exists")
-        template = _find_static_worldobject_template(world)
-        new_obj = _make_prefab_worldobject(
-            template,
-            self.new_name,
-            self.target_pos,
-            self.target_yaw,
-            visible=1,
-            type_str="WorldObject",
-        )
-        created = [new_obj]
-        world.objects.append(new_obj)
+        plan = self.build_plan(level) if level is not None else None
+        visible_names = plan.visible_model_names if plan is not None else [self.new_name]
+        template = copy.deepcopy(self.worldobject_template) if self.worldobject_template else None
+        if template is None:
+            template = _find_static_worldobject_template(world)
+        created = []
+        for visible_name in visible_names:
+            new_obj = _make_prefab_worldobject(
+                template,
+                visible_name,
+                self.target_pos,
+                self.target_yaw,
+                visible=1,
+                type_str="WorldObject",
+            )
+            created.append(new_obj)
+            world.objects.append(new_obj)
         if _normalized_prefab_collision_mode(self.collision_mode) in {"invisible_bsp", "box_approx"}:
-            collision_template = _find_object_template(world, "InvisibleBrush") or template
+            collision_template = (
+                copy.deepcopy(self.invisiblebrush_template)
+                if self.invisiblebrush_template
+                else (_find_object_template(world, "InvisibleBrush") or template)
+            )
             for collision_name, collision_pos in self._collision_object_specs(level):
                 collision_obj = _make_prefab_worldobject(
                     collision_template,
@@ -266,6 +342,7 @@ class ImportPrefabBspOp:
     def summary(self) -> str:
         pos = self.target_pos
         roles = "" if not self.include_roles else f" roles={','.join(self.include_roles)}"
+        anchor = f" anchor={self.placement_anchor}"
         yaw = "" if abs(float(self.target_yaw)) < 1.0e-6 else f" yaw {self.target_yaw:.2f}"
         collision_mode = _normalized_prefab_collision_mode(self.collision_mode)
         collision = "" if collision_mode == "none" else f" collision={collision_mode}"
@@ -279,17 +356,17 @@ class ImportPrefabBspOp:
         )
         return (
             f"+ import prefab BSP {os.path.basename(self.prefab_path)} -> {self.new_name}"
-            f" at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}){yaw}{roles}{collision}{thickness}{segment}"
-            )
+            f" at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}){yaw}{anchor}{roles}{collision}{thickness}{segment}"
+            + (" [EDITOR PREVIEW ONLY]" if self.preview_only else "")
+        )
 
     def _collision_submodel_names(self, level: Optional["LevelEdit"]) -> List[str]:
         if level is None:
             return []
         try:
             return [
-                submodel.new_name
-                for submodel in self.build_plan(level).submodels
-                if "_collision" in submodel.new_name.lower()
+                str(name)
+                for name in self.build_plan(level).collision_model_names
             ]
         except Exception:
             return []
@@ -301,9 +378,10 @@ class ImportPrefabBspOp:
             plan = self.build_plan(level)
             specs = []
             for submodel in plan.submodels:
-                if "_collision" in submodel.new_name.lower():
-                    model = door_clone.translated_model_clone(submodel)
-                    specs.append((submodel.new_name, _bounds_center(model.min_box, model.max_box)))
+                name = getattr(submodel, "new_name", getattr(submodel, "name", ""))
+                if name in plan.collision_model_names:
+                    model = prefab_import.preview_submodel(submodel)
+                    specs.append((name, _bounds_center(model.min_box, model.max_box)))
             if specs:
                 return specs
         except Exception:
@@ -320,6 +398,272 @@ class ImportPrefabBspOp:
                 patcher.Property("PrefabPath", 0, 0, self.prefab_path),
             ],
         )
+
+
+@dataclass
+class ImportBehavioralPrefabOp:
+    """Serializable atomic operation for promoted behavioral capabilities."""
+
+    prefab_path: str
+    root_name: str
+    target_pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    target_yaw: float = 0.0
+    placement_anchor: str = "bottom_center"
+    source_fingerprint: str = ""
+    external_bindings: Dict[str, str] = field(default_factory=dict)
+    dependency_decisions: Dict[str, str] = field(default_factory=dict)
+    enabled_capabilities: Tuple[str, ...] = ()
+    class_templates: Dict[str, patcher.WorldObject] = field(default_factory=dict)
+    object_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    planned_object_names: Dict[str, str] = field(default_factory=dict)
+    script_sources: Dict[str, str] = field(default_factory=dict)
+    script_assets: Dict[str, str] = field(default_factory=dict)
+    planner_version: int = prefab_behavioral.PLANNER_VERSION
+    operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    def __post_init__(self) -> None:
+        if not str(self.operation_id).strip():
+            self.operation_id = uuid.uuid4().hex
+
+    def build_plan(
+        self,
+        *,
+        existing_names: Sequence[str] = (),
+        catalog: Optional[Dict[str, Any]] = None,
+    ) -> prefab_behavioral.BehavioralPrefabImportPlan:
+        analysis = self._analyze(catalog=catalog)
+        actual_fingerprint = analysis.graph.source_fingerprint
+        if self.source_fingerprint and self.source_fingerprint != actual_fingerprint:
+            raise ValueError(
+                "behavioral prefab source changed since this operation was created"
+            )
+        if int(self.planner_version) != prefab_behavioral.PLANNER_VERSION:
+            raise ValueError(
+                f"unsupported behavioral prefab planner version {self.planner_version}; "
+                f"expected {prefab_behavioral.PLANNER_VERSION}"
+            )
+        return prefab_behavioral.build_behavioral_import_plan(
+            analysis,
+            root_name=self.root_name,
+            target_pos=self.target_pos,
+            target_yaw=self.target_yaw,
+            existing_names=existing_names,
+            external_bindings=self.external_bindings,
+            dependency_decisions=self.dependency_decisions,
+            fixed_object_names=self.planned_object_names,
+        )
+
+    def apply_to(self, world: patcher.World) -> List[patcher.WorldObject]:
+        analysis, plan = self._analysis_and_plan(world.objects)
+        plan.require_ready()
+        created = prefab_behavioral.materialize_behavioral_plan(
+            analysis,
+            plan,
+            class_templates=self.class_templates,
+            placement_anchor=self.placement_anchor,
+            object_overrides=self.object_overrides,
+        )
+        used_names = {
+            str(obj.get("Name") or "").casefold()
+            for obj in world.objects
+            if str(obj.get("Name") or "")
+        }
+        for obj in created:
+            name = str(obj.get("Name") or "").strip()
+            if not name:
+                raise ValueError(
+                    f"behavioral prefab created an unnamed {obj.type_str} object"
+                )
+            if name.casefold() in used_names:
+                raise ValueError(f"object named {name!r} already exists")
+            used_names.add(name.casefold())
+        world.objects.extend(copy.deepcopy(created))
+        return list(created)
+
+    def pending_object_count(self, objects: Sequence[patcher.WorldObject]) -> int:
+        _analysis, plan = self._analysis_and_plan(objects)
+        return len(plan.objects)
+
+    def build_bsp_plan(
+        self,
+        target_bsp: bsp.BspWorld,
+        *,
+        existing_names: Sequence[str] = (),
+        require_runtime_bsp: bool = False,
+    ) -> Optional[prefab_import.PrefabBspImportPlan]:
+        analysis = self._analyze()
+        if self.source_fingerprint and self.source_fingerprint != analysis.graph.source_fingerprint:
+            raise ValueError(
+                "behavioral prefab source changed since this operation was created"
+            )
+        plan = prefab_behavioral.build_behavioral_import_plan(
+            analysis,
+            root_name=self.root_name,
+            target_pos=self.target_pos,
+            target_yaw=self.target_yaw,
+            existing_names=existing_names,
+            external_bindings=self.external_bindings,
+            dependency_decisions=self.dependency_decisions,
+            fixed_object_names=self.planned_object_names,
+        )
+        return prefab_behavioral.build_behavioral_bsp_import_plan(
+            target_bsp,
+            analysis,
+            plan,
+            placement_anchor=self.placement_anchor,
+            allow_generated_bsp=not require_runtime_bsp,
+            validate_runtime_bsp=require_runtime_bsp,
+        )
+
+    def retarget_from_object(
+        self,
+        objects: Sequence[patcher.WorldObject],
+        object_offset: int,
+        new_pos: Tuple[float, float, float],
+    ) -> None:
+        created = self._materialized_objects(objects)
+        if not (0 <= object_offset < len(created)):
+            return
+        old_pos = created[object_offset].get("Pos")
+        if not isinstance(old_pos, (tuple, list)) or len(old_pos) != 3:
+            return
+        delta = tuple(float(new_pos[axis]) - float(old_pos[axis]) for axis in range(3))
+        self.target_pos = tuple(
+            float(self.target_pos[axis]) + delta[axis] for axis in range(3)
+        )
+
+    def rerotate_from_object(
+        self,
+        objects: Sequence[patcher.WorldObject],
+        object_offset: int,
+        new_rot: Tuple[float, float, float, float],
+    ) -> None:
+        created = self._materialized_objects(objects)
+        if not (0 <= object_offset < len(created)):
+            return
+        old_rot = created[object_offset].get("Rotation")
+        if not isinstance(old_rot, (tuple, list)) or len(old_rot) < 2:
+            return
+        self.target_yaw = (
+            float(self.target_yaw) + float(new_rot[1]) - float(old_rot[1])
+        )
+
+    def set_object_overrides(
+        self,
+        object_offset: int,
+        overrides: Mapping[str, Any],
+    ) -> None:
+        analysis = self._analyze()
+        runtime_objects = analysis.graph.runtime_objects
+        if not (0 <= object_offset < len(runtime_objects)):
+            return
+        key = str(runtime_objects[object_offset].index)
+        values = self.object_overrides.setdefault(key, {})
+        values.update(copy.deepcopy(dict(overrides)))
+
+    def _analysis_and_plan(
+        self,
+        objects: Sequence[patcher.WorldObject],
+    ) -> Tuple[prefab_behavioral.PrefabAnalysis, prefab_behavioral.BehavioralPrefabImportPlan]:
+        if int(self.planner_version) != prefab_behavioral.PLANNER_VERSION:
+            raise ValueError(
+                f"unsupported behavioral prefab planner version {self.planner_version}; "
+                f"expected {prefab_behavioral.PLANNER_VERSION}"
+            )
+        analysis = self._analyze()
+        if self.source_fingerprint and self.source_fingerprint != analysis.graph.source_fingerprint:
+            raise ValueError(
+                "behavioral prefab source changed since this operation was created"
+            )
+        plan = prefab_behavioral.build_behavioral_import_plan(
+            analysis,
+            root_name=self.root_name,
+            target_pos=self.target_pos,
+            target_yaw=self.target_yaw,
+            existing_names=[str(obj.get("Name") or "") for obj in objects],
+            external_bindings=self.external_bindings,
+            dependency_decisions=self.dependency_decisions,
+            fixed_object_names=self.planned_object_names,
+        )
+        self._validate_script_assets(analysis, plan)
+        return analysis, plan
+
+    def _analyze(
+        self,
+        *,
+        catalog: Optional[Dict[str, Any]] = None,
+    ) -> prefab_behavioral.PrefabAnalysis:
+        loader = prefab_behavioral.script_loader_from_sources(self.script_sources)
+        return prefab_behavioral.analyze_prefab(
+            self.prefab_path,
+            catalog=catalog,
+            supported_classes=self.enabled_capabilities,
+            allow_scripts=True,
+            allowed_script_names=prefab_behavioral.PHASE6_REVIEWED_SCRIPTS,
+            script_loader=loader,
+        )
+
+    def _validate_script_assets(
+        self,
+        analysis: prefab_behavioral.PrefabAnalysis,
+        plan: prefab_behavioral.BehavioralPrefabImportPlan,
+    ) -> None:
+        expected_overrides, expected_assets = (
+            prefab_behavioral.build_script_import_assets(
+                analysis,
+                plan,
+                operation_id=self.operation_id,
+                script_loader=prefab_behavioral.script_loader_from_sources(
+                    self.script_sources
+                ),
+            )
+        )
+        if self.script_assets != expected_assets:
+            raise ValueError(
+                "behavioral prefab generated scripts no longer match its reviewed "
+                "source, namespace, and bindings"
+            )
+        for source_index, expected in expected_overrides.items():
+            actual = self.object_overrides.get(source_index, {})
+            for name, value in expected.items():
+                if actual.get(name) != value:
+                    raise ValueError(
+                        f"behavioral prefab script override {source_index}.{name} "
+                        "does not match its generated archive asset"
+                    )
+
+    def _materialized_objects(
+        self,
+        objects: Sequence[patcher.WorldObject],
+    ) -> Tuple[patcher.WorldObject, ...]:
+        analysis, plan = self._analysis_and_plan(objects)
+        return prefab_behavioral.materialize_behavioral_plan(
+            analysis,
+            plan,
+            class_templates=self.class_templates,
+            placement_anchor=self.placement_anchor,
+            object_overrides=self.object_overrides,
+        )
+
+    def summary(self) -> str:
+        pos = self.target_pos
+        yaw = "" if abs(float(self.target_yaw)) < 1.0e-6 else f" yaw {self.target_yaw:.2f}"
+        return (
+            f"+ behavioral prefab {os.path.basename(self.prefab_path)} -> {self.root_name} "
+            f"at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}){yaw} "
+            f"[{len(self.enabled_capabilities)} promoted class capabilities]"
+        )
+
+
+@dataclass
+class RemoveBehavioralPrefabOp:
+    """Undoable tombstone for one atomic behavioral prefab import."""
+
+    operation_id: str
+    root_name: str = ""
+
+    def summary(self) -> str:
+        return f"- behavioral prefab assembly {self.root_name or self.operation_id}"
 
 
 def _find_static_worldobject_template(world: patcher.World) -> patcher.WorldObject:
@@ -423,6 +767,52 @@ class LevelEdit:
     _next_id:    int = 0
     # Cached BSP geometry (lazily parsed on first map-view refresh)
     bsp:         Optional[Any] = None
+    # Editor consumers only read materialized snapshots.  Cache those snapshots
+    # and BSP preview plans by the baseline World identity plus a repr-based
+    # operation fingerprint.  The fingerprint also notices in-place edits to
+    # pending operations made by viewport drags and property controls.
+    _editor_materialized_cache: Optional[Tuple[Tuple[int, str], patcher.World]] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+    _door_plan_cache: Optional[
+        Tuple[Tuple[int, str], List[door_clone.DoorClonePlan]]
+    ] = field(default=None, init=False, repr=False, compare=False)
+    _prefab_plan_cache: Optional[
+        Tuple[Tuple[int, str], List[prefab_import.PrefabBspImportPlan]]
+    ] = field(default=None, init=False, repr=False, compare=False)
+    _preview_bsp_cache: Optional[Tuple[Tuple[int, str], Any]] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    def _editor_state_key(self) -> Tuple[int, str]:
+        """Return a cheap cache key that includes in-place operation edits."""
+        prefab_files = []
+        for op in self.ops:
+            if not isinstance(op, (ImportPrefabBspOp, ImportBehavioralPrefabOp)):
+                continue
+            path = os.path.abspath(op.prefab_path)
+            try:
+                stat = os.stat(path)
+                prefab_files.append((path, stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                prefab_files.append((path, None, None))
+        return id(self.world), f"{self.ops!r}|prefabs={prefab_files!r}"
+
+    def effective_ops(self) -> List[Any]:
+        """Return operations after applying behavioral-assembly tombstones."""
+        removed = {
+            op.operation_id
+            for op in self.ops
+            if isinstance(op, RemoveBehavioralPrefabOp)
+        }
+        return [
+            op for op in self.ops
+            if not isinstance(op, RemoveBehavioralPrefabOp)
+            and not (
+                isinstance(op, ImportBehavioralPrefabOp)
+                and op.operation_id in removed
+            )
+        ]
 
     def load(self) -> None:
         if self.world is not None and getattr(self, "_raw_bytes", None):
@@ -494,13 +884,15 @@ class LevelEdit:
         assert self.world is not None
         w = copy.deepcopy(self.world)
         deletes = []
-        for op in self.ops:
+        for op in self.effective_ops():
             if isinstance(op, DeleteOp):
                 deletes.append(op.target_index)
             elif isinstance(op, CloneDoorOp):
                 op.apply_to(self, w)
             elif isinstance(op, ImportPrefabBspOp):
                 op.apply_to(w, self)
+            elif isinstance(op, ImportBehavioralPrefabOp):
+                op.apply_to(w)
             else:
                 op.apply_to(w)
         for idx in sorted(deletes, reverse=True):
@@ -508,19 +900,32 @@ class LevelEdit:
         return w
 
     def editor_materialize(self) -> patcher.World:
-        """Return materialized WorldObjects plus editor-only prefab import handles."""
-        return self.materialize()
+        """Return a shared, read-only materialized snapshot for editor views."""
+        key = self._editor_state_key()
+        cached = self._editor_materialized_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        world = self.materialize()
+        self._editor_materialized_cache = (key, world)
+        return world
 
     def materialized_object_count(self) -> int:
-        return len(self.materialize().objects)
+        return len(self.editor_materialize().objects)
 
     def door_clone_plans(self) -> List[door_clone.DoorClonePlan]:
         """Return BSP/controller clone plans for pending CloneDoorOps."""
         assert self.world is not None
+        effective_ops = self.effective_ops()
+        if not any(isinstance(op, CloneDoorOp) for op in effective_ops):
+            return []
+        key = self._editor_state_key()
+        cached = self._door_plan_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
         w = copy.deepcopy(self.world)
         deletes = []
         plans: List[door_clone.DoorClonePlan] = []
-        for op in self.ops:
+        for op in effective_ops:
             if isinstance(op, DeleteOp):
                 deletes.append(op.target_index)
                 continue
@@ -532,19 +937,56 @@ class LevelEdit:
             if isinstance(op, ImportPrefabBspOp):
                 op.apply_to(w, self)
                 continue
+            if isinstance(op, ImportBehavioralPrefabOp):
+                op.apply_to(w)
+                continue
             op.apply_to(w)
         for idx in sorted(deletes, reverse=True):
             del w.objects[idx]
+        self._door_plan_cache = (key, plans)
         return plans
 
-    def prefab_import_plans(self) -> List[prefab_import.PrefabBspImportPlan]:
-        """Return BSP import plans for pending static prefab imports."""
+    def prefab_import_plans(
+        self,
+        *,
+        require_runtime_bsp: bool = False,
+    ) -> List[prefab_import.PrefabBspImportPlan]:
+        """Return BSP plans for static and passive behavioral imports."""
+        if not any(
+            isinstance(op, (ImportPrefabBspOp, ImportBehavioralPrefabOp))
+            for op in self.effective_ops()
+        ):
+            return []
+        key = self._editor_state_key()
+        cached = self._prefab_plan_cache
+        if not require_runtime_bsp and cached is not None and cached[0] == key:
+            return cached[1]
         base = self.get_bsp()
         if base is None:
             return []
         working_bsp = base
+        working_object_names = [
+            str(obj.get("Name") or "")
+            for obj in (self.world.objects if self.world is not None else [])
+        ]
         plans: List[prefab_import.PrefabBspImportPlan] = []
-        for op in self.ops:
+        for op in self.effective_ops():
+            if isinstance(op, ImportBehavioralPrefabOp):
+                before = self.objects_before_op(op)
+                existing_names = [
+                    str(obj.get("Name") or "") for obj in before
+                ]
+                plan = op.build_bsp_plan(
+                    working_bsp,
+                    existing_names=existing_names,
+                    require_runtime_bsp=require_runtime_bsp,
+                )
+                if plan is None:
+                    continue
+                plans.append(plan)
+                working_object_names.extend(plan.visible_model_names)
+                working_bsp = prefab_import.build_preview_bsp(working_bsp, [plan])
+                continue
             if not isinstance(op, ImportPrefabBspOp):
                 continue
             plan = prefab_import.build_static_import_plan(
@@ -558,16 +1000,118 @@ class LevelEdit:
                 collision_thickness=float(op.collision_thickness),
                 collision_segment_length=float(op.collision_segment_length),
                 target_dat_bytes=self.source_bytes(),
+                placement_anchor=op.placement_anchor,
+                allow_unsafe_visibility=bool(op.allow_unsafe_visibility),
+                target_object_names=working_object_names,
+                allow_generated_bsp=not require_runtime_bsp,
+                validate_runtime_bsp=require_runtime_bsp,
             )
             plans.append(plan)
+            working_object_names.extend(plan.visible_model_names)
+            working_object_names.extend(plan.collision_model_names)
             working_bsp = prefab_import.build_preview_bsp(working_bsp, [plan])
+        if not require_runtime_bsp:
+            self._prefab_plan_cache = (key, plans)
         return plans
+
+    def behavioral_prefab_import_plans(
+        self,
+    ) -> List[prefab_behavioral.BehavioralPrefabImportPlan]:
+        """Return deterministic plans for promoted behavioral prefab ops."""
+        plans = []
+        for op in self.effective_ops():
+            if not isinstance(op, ImportBehavioralPrefabOp):
+                continue
+            before = self.objects_before_op(op)
+            plan = op.build_plan(
+                existing_names=[str(obj.get("Name") or "") for obj in before]
+            )
+            plan.require_ready()
+            plans.append(plan)
+        return plans
+
+    def behavioral_prefab_blocking_issues(
+        self,
+        plans: Sequence[prefab_behavioral.BehavioralPrefabImportPlan],
+        materialized: patcher.World,
+    ) -> List[Dict[str, Any]]:
+        """Reject links that became dangling after placement or later edits."""
+        if not plans:
+            return []
+        target_bsp = self.get_bsp()
+        target_bytes = self.source_bytes()
+        target_names = [str(obj.get("Name") or "") for obj in materialized.objects]
+        issues: List[Dict[str, Any]] = []
+        for plan in plans:
+            for message in prefab_behavioral.validate_plan_target_bindings(
+                plan,
+                target_object_names=target_names,
+                target_bsp=target_bsp,
+                target_dat_bytes=target_bytes,
+            ):
+                full_message = (
+                    f"Behavioral prefab {os.path.basename(plan.source_path)} -> "
+                    f"{plan.root_name}: {message}. Update the binding or remove the import."
+                )
+                issues.append({
+                    "code": "behavioral_prefab_dangling_binding",
+                    "message": full_message,
+                    "level": self.display_name or self.rez_vpath or self.path,
+                    "prefab": plan.source_path,
+                    "root_name": plan.root_name,
+                })
+        return issues
+
+    def runtime_unsafe_prefab_reasons(self) -> List[str]:
+        """Return non-overridable reasons this edit cannot produce a game DAT."""
+        reasons: List[str] = []
+        label = self.display_name or self.rez_vpath or self.path
+        for op in self.effective_ops():
+            if isinstance(op, ImportPrefabBspOp):
+                version = _prefab_file_version(op.prefab_path)
+                if op.preview_only or version == 1249:
+                    reasons.append(
+                        f"{label}: {os.path.basename(op.prefab_path)} -> {op.new_name} "
+                        "uses editor-preview ED BSP. Replace it with a catalog game "
+                        "model or a DEdit-compiled v66 DAT import."
+                    )
+                if _normalized_prefab_collision_mode(op.collision_mode) == "box_approx":
+                    reasons.append(
+                        f"{label}: {op.new_name} uses a generated collision box. "
+                        "Choose authored PhysicsBSP collision or no helper."
+                    )
+            elif isinstance(op, ImportBehavioralPrefabOp):
+                if _prefab_file_version(op.prefab_path) != 1249:
+                    continue
+                try:
+                    if op._analyze().graph.brushes:
+                        reasons.append(
+                            f"{label}: behavioral prefab "
+                            f"{os.path.basename(op.prefab_path)} contains ED brushes. "
+                            "Compile it to a v66 DAT with DEdit or import only its "
+                            "runtime objects."
+                        )
+                except Exception as exc:
+                    reasons.append(
+                        f"{label}: cannot validate behavioral prefab "
+                        f"{os.path.basename(op.prefab_path)}: {exc}"
+                    )
+        return reasons
 
     def preview_bsp(self):
         """Return BSP geometry plus pending physical door clone previews."""
         base = self.get_bsp()
         if base is None:
             return None
+        if not any(
+            isinstance(op, (CloneDoorOp, ImportPrefabBspOp, ImportBehavioralPrefabOp))
+            for op in self.effective_ops()
+        ):
+            return base
+        key = self._editor_state_key()
+        cached = self._preview_bsp_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
         plans = self.door_clone_plans()
         prefab_plans = self.prefab_import_plans()
         preview = base
@@ -575,6 +1119,7 @@ class LevelEdit:
             preview = door_clone.build_preview_bsp(preview, plans)
         if prefab_plans:
             preview = prefab_import.build_preview_bsp(preview, prefab_plans)
+        self._preview_bsp_cache = (key, preview)
         return preview
 
     def materialized_existing_indices(self) -> List[int]:
@@ -582,7 +1127,7 @@ class LevelEdit:
         assert self.world is not None
         deleted = {
             op.target_index
-            for op in self.ops
+            for op in self.effective_ops()
             if isinstance(op, DeleteOp)
         }
         return [
@@ -611,7 +1156,7 @@ class LevelEdit:
 
     def unresolved_conversion_count(self) -> int:
         deleted = {
-            op.target_index for op in self.ops if isinstance(op, DeleteOp)
+            op.target_index for op in self.effective_ops() if isinstance(op, DeleteOp)
         }
         return len(self.unresolved_conversion_indices() - deleted)
 
@@ -655,7 +1200,7 @@ class LevelEdit:
         counts: List[int] = []
         w = copy.deepcopy(self.world)
         deletes = []
-        for op in self.ops:
+        for op in self.effective_ops():
             if isinstance(op, DeleteOp):
                 deletes.append(op.target_index)
                 continue
@@ -666,6 +1211,10 @@ class LevelEdit:
                 continue
             if isinstance(op, ImportPrefabBspOp):
                 created = op.apply_to(w, self)
+                counts.append(len(created))
+                continue
+            if isinstance(op, ImportBehavioralPrefabOp):
+                created = op.apply_to(w)
                 counts.append(len(created))
                 continue
             if isinstance(op, AddOp):
@@ -681,7 +1230,7 @@ class LevelEdit:
         """Return materialized object state immediately before *target_op*."""
         assert self.world is not None
         w = copy.deepcopy(self.world)
-        for op in self.ops:
+        for op in self.effective_ops():
             if op is target_op:
                 return w.objects
             if isinstance(op, DeleteOp):
@@ -692,6 +1241,9 @@ class LevelEdit:
             if isinstance(op, ImportPrefabBspOp):
                 op.apply_to(w, self)
                 continue
+            if isinstance(op, ImportBehavioralPrefabOp):
+                op.apply_to(w)
+                continue
             op.apply_to(w)
         return w.objects
 
@@ -699,7 +1251,10 @@ class LevelEdit:
         offset = world_index - len(self.materialized_existing_indices())
         if offset < 0:
             return None
-        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))]
+        add_ops = [
+            op for op in self.effective_ops()
+            if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp, ImportBehavioralPrefabOp))
+        ]
         cursor = 0
         for op, count in zip(add_ops, self._pending_add_counts()):
             if cursor <= offset < cursor + count:
@@ -713,7 +1268,10 @@ class LevelEdit:
             return None
         import_index = 0
         cursor = 0
-        add_ops = [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))]
+        add_ops = [
+            op for op in self.effective_ops()
+            if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp, ImportBehavioralPrefabOp))
+        ]
         for op, count in zip(add_ops, self._pending_add_counts()):
             if cursor <= offset < cursor + count:
                 return import_index if isinstance(op, ImportPrefabBspOp) else None
@@ -726,7 +1284,9 @@ class LevelEdit:
         offset = self.prefab_import_offset_for_materialized(world_index)
         if offset is None:
             return None
-        imports = [op for op in self.ops if isinstance(op, ImportPrefabBspOp)]
+        imports = [
+            op for op in self.effective_ops() if isinstance(op, ImportPrefabBspOp)
+        ]
         return imports[offset] if offset < len(imports) else None
 
     def add_offset_for_materialized(self, world_index: int) -> Optional[int]:
@@ -736,7 +1296,10 @@ class LevelEdit:
         add_index = 0
         cursor = 0
         for op, count in zip(
-            [op for op in self.ops if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp))],
+            [
+                op for op in self.effective_ops()
+                if isinstance(op, (AddOp, CloneDoorOp, ImportPrefabBspOp, ImportBehavioralPrefabOp))
+            ],
             self._pending_add_counts(),
         ):
             if cursor <= offset < cursor + count:
@@ -856,6 +1419,7 @@ class LevelEdit:
 class Project:
     levels: List[LevelEdit] = field(default_factory=list)
     rude_rez_path: Optional[str] = None
+    scripts_rez_path: Optional[str] = None
     next_npc_nbr: int = 437
     work_dir:    Optional[str] = None      # where save() writes by default
     backup_root: Optional[str] = None      # where backups live
@@ -912,7 +1476,7 @@ class Project:
             return None
 
     def has_pending(self) -> bool:
-        return any(L.ops for L in self.levels)
+        return any(L.effective_ops() for L in self.levels)
 
     # ---------- save planning (explicit; user reviews before commit) ----------
 
@@ -920,11 +1484,23 @@ class Project:
         batch_id = _timestamp()
         plan = SavePlan(batch_id=batch_id)
         for L in self.levels:
-            if not L.ops:
+            effective_ops = L.effective_ops()
+            if not effective_ops:
                 continue
+            unsafe_prefabs = L.runtime_unsafe_prefab_reasons()
+            if unsafe_prefabs:
+                raise ValueError(
+                    "Cannot build an MM9 DAT from preview-grade prefab geometry:\n\n"
+                    + "\n".join(f"- {message}" for message in unsafe_prefabs)
+                )
             materialized = L.materialize()
             door_clones = L.door_clone_plans()
-            prefab_imports = L.prefab_import_plans()
+            prefab_imports = L.prefab_import_plans(require_runtime_bsp=True)
+            behavioral_prefab_imports = L.behavioral_prefab_import_plans()
+            resource_prefab_imports = [
+                op for op in effective_ops
+                if isinstance(op, ImportResourcePrefabOp)
+            ]
             validation_warnings: List[str] = []
             if door_clones and getattr(L, "_raw_bytes", None):
                 bsp_world = L.get_bsp()
@@ -945,22 +1521,30 @@ class Project:
                         )
                     )
             blocking_issues = L.conversion_blocking_issues()
+            blocking_issues.extend(
+                L.behavioral_prefab_blocking_issues(
+                    behavioral_prefab_imports,
+                    materialized,
+                )
+            )
             validation_warnings.extend(
                 issue["message"] for issue in blocking_issues
             )
             plan.dats.append(DatWrite(
                 source_path=L.path,
                 output_path=L.output_path(self.work_dir, batch_id),
-                ops_summary=[op.summary() for op in L.ops],
+                ops_summary=[op.summary() for op in effective_ops],
                 materialized=materialized,
                 level_edit=L,
                 backup_path=L.backup_path,
                 door_clones=door_clones,
                 prefab_imports=prefab_imports,
+                behavioral_prefab_imports=behavioral_prefab_imports,
+                resource_prefab_imports=resource_prefab_imports,
                 validation_warnings=validation_warnings,
                 blocking_issues=blocking_issues,
             ))
-            for op in L.ops:
+            for op in effective_ops:
                 if isinstance(op, AddOp) and op.rude:
                     plan.rude_entries.append(RudeRegistration(**op.rude))
         self._populate_archive_patches(plan)
@@ -991,6 +1575,63 @@ class Project:
 
         for patch in archive_entries.values():
             plan.archive_patches.append(ArchivePatch(**patch))
+
+        script_assets: Dict[str, Tuple[str, bytes]] = {}
+        for d in plan.dats:
+            L = d.level_edit
+            if L is None:
+                continue
+            for op in L.effective_ops():
+                if not isinstance(op, ImportBehavioralPrefabOp):
+                    continue
+                for raw_path, raw_text in op.script_assets.items():
+                    virtual_path = str(raw_path or "").replace("/", "\\").strip("\\")
+                    folded = _script_rez_key(virtual_path)
+                    if (
+                        not folded.startswith("scripts\\mm9editor\\")
+                        or os.path.splitext(virtual_path)[1].casefold() != ".scr"
+                    ):
+                        raise ValueError(
+                            f"behavioral prefab generated an unsafe script path {raw_path!r}"
+                        )
+                    try:
+                        data = str(raw_text).encode("latin-1")
+                    except UnicodeEncodeError as exc:
+                        raise ValueError(
+                            f"generated script {virtual_path} is not Latin-1 encodable"
+                        ) from exc
+                    previous = script_assets.get(folded)
+                    if previous is not None and previous[1] != data:
+                        raise ValueError(
+                            f"conflicting generated behavioral scripts target {virtual_path}"
+                        )
+                    script_assets[folded] = (virtual_path, data)
+        if script_assets:
+            if not self.scripts_rez_path or not os.path.isfile(self.scripts_rez_path):
+                raise FileNotFoundError(
+                    "SCRIPTS.REZ is required to save this scripted prefab import"
+                )
+            if not self.work_dir or not plan.batch_id:
+                raise ValueError(
+                    "an output work directory is required to stage generated scripts"
+                )
+            output = os.path.join(
+                self.work_dir,
+                plan.batch_id,
+                "data",
+                os.path.basename(self.scripts_rez_path),
+            )
+            additions = {
+                path: data
+                for _key, (path, data) in sorted(script_assets.items())
+            }
+            plan.archive_patches.append(ArchivePatch(
+                source_archive=self.scripts_rez_path,
+                output_archive=output,
+                entries=list(additions),
+                kind="behavioral_scripts",
+                additions=additions,
+            ))
 
         # A staged conversion can also contain LoMM model/skin/sound assets.
         # Carry those already-patched archives into subsequent editor batches.
@@ -1055,6 +1696,10 @@ class Project:
             shutil.copy2(patch.source_archive, patch.output_archive)
             log.append(f"carried staged conversion asset archive {patch.output_archive}")
 
+        script_patch = plan.behavioral_scripts_archive_patch()
+        if script_patch is not None:
+            log.extend(self.execute_behavioral_scripts_rez(script_patch))
+
         if plan.rude_entries and plan.rude_archive_patch() is not None:
             log.extend(self.execute_rude_rez(plan))
 
@@ -1062,6 +1707,35 @@ class Project:
         if manifest:
             log.append(f"wrote {manifest}")
         return log
+
+    def execute_behavioral_scripts_rez(self, patch: "ArchivePatch") -> List[str]:
+        """Write reviewed per-import script copies into a complete SCRIPTS.REZ."""
+        source_rez = patch.source_archive
+        output_rez = patch.output_archive
+        if not source_rez or not os.path.isfile(source_rez):
+            raise FileNotFoundError("SCRIPTS.REZ source archive was not found")
+        self._maybe_backup_archive(source_rez)
+        os.makedirs(os.path.dirname(os.path.abspath(output_rez)) or ".", exist_ok=True)
+
+        from core import rezmgr
+
+        with rezmgr.RezReader(source_rez) as reader:
+            existing_paths = {
+                _script_rez_key(path): path
+                for path in reader.list_paths()
+            }
+        log = []
+        with rezmgr.RezWriter(source_rez, output_rez) as writer:
+            for virtual_path, data in sorted(patch.additions.items()):
+                existing = existing_paths.get(_script_rez_key(virtual_path))
+                if existing is None:
+                    writer.add(virtual_path, data)
+                else:
+                    writer.replace(existing, data)
+                self._write_changed_entry_copy(output_rez, virtual_path, data)
+                log.append(f"  staged {virtual_path}")
+            writer.commit()
+        return [f"wrote {output_rez}"] + log
 
     def _execute_rez_writes(self, writes: List["DatWrite"]) -> List[str]:
         """Write one patched REZ per source archive.
@@ -1174,6 +1848,19 @@ class Project:
             required_bsp_names=required_names,
         )
         validation.raise_for_errors()
+        prefab_names = [
+            sub.new_name for plan in d.prefab_imports for sub in plan.submodels
+        ]
+        if prefab_names and validation.parsed_bsp is not None:
+            imported_models = [
+                validation.parsed_bsp.model_by_name(name)
+                for name in prefab_names
+            ]
+            prefab_import.validate_compiled_runtime_models(
+                data,
+                validation.parsed_bsp,
+                [model for model in imported_models if model is not None],
+            )
         for warning in validation.warnings:
             if warning not in d.validation_warnings:
                 d.validation_warnings.append(warning)
@@ -1238,6 +1925,8 @@ class Project:
                         "objects_after": d.stats()["objects_after"],
                         "door_clones": d.stats()["door_clones"],
                         "prefab_imports": d.stats()["prefab_imports"],
+                        "resource_prefab_imports": d.stats()["resource_prefab_imports"],
+                        "behavioral_prefab_imports": d.stats()["behavioral_prefab_imports"],
                         "geometry_edits": d.geometry_manifest_details(),
                         "ops_summary": d.ops_summary,
                         "validation_warnings": d.validation_warnings,
@@ -1436,6 +2125,10 @@ class DatWrite:
     backup_path: Optional[str] = None
     door_clones: List[door_clone.DoorClonePlan] = field(default_factory=list)
     prefab_imports: List[prefab_import.PrefabBspImportPlan] = field(default_factory=list)
+    behavioral_prefab_imports: List[
+        prefab_behavioral.BehavioralPrefabImportPlan
+    ] = field(default_factory=list)
+    resource_prefab_imports: List[ImportResourcePrefabOp] = field(default_factory=list)
     validation_warnings: List[str] = field(default_factory=list)
     blocking_issues: List[Dict[str, Any]] = field(default_factory=list)
     bsp_record_diff_report: Optional[Dict[str, Any]] = None
@@ -1448,6 +2141,11 @@ class DatWrite:
             "door_bsp_models": sum(len(plan.submodels) for plan in self.door_clones),
             "prefab_imports": len(self.prefab_imports),
             "prefab_bsp_models": sum(len(plan.submodels) for plan in self.prefab_imports),
+            "resource_prefab_imports": len(self.resource_prefab_imports),
+            "behavioral_prefab_imports": len(self.behavioral_prefab_imports),
+            "behavioral_prefab_objects": sum(
+                len(plan.objects) for plan in self.behavioral_prefab_imports
+            ),
         }
 
     def has_geometry_bsp_write(self) -> bool:
@@ -1466,7 +2164,7 @@ class DatWrite:
                     "object_count": len(plan.objects),
                     "models": [
                         {
-                            **_manifest_model_summary(sub.new_name, door_clone.translated_model_clone(sub)),
+                            **_manifest_model_summary(sub.new_name, prefab_import.preview_submodel(sub)),
                             "source_name": sub.source_name,
                             "raw_record_bytes": len(sub.raw_bytes),
                             "info_flags_override": sub.info_flags_override,
@@ -1482,12 +2180,17 @@ class DatWrite:
                     "new_name": plan.new_name,
                     "target_pos": list(plan.target_pos),
                     "target_yaw": plan.target_yaw,
+                    "placement_anchor": plan.placement_anchor,
+                    "source_pivot": list(plan.source_pivot),
+                    "visible_model_names": list(plan.visible_model_names),
+                    "collision_model_names": list(plan.collision_model_names),
                     "source_model_names": list(plan.source_model_names),
                     "source_model_roles": list(plan.source_model_roles),
                     "info_flags_overrides": list(plan.info_flags_overrides),
+                    "import_mode": plan.import_mode,
                     "models": [
                         {
-                            **_manifest_model_summary(sub.new_name, door_clone.translated_model_clone(sub)),
+                            **_manifest_model_summary(sub.new_name, prefab_import.preview_submodel(sub)),
                             "source_name": sub.source_name,
                             "raw_record_bytes": len(sub.raw_bytes),
                             "info_flags_override": sub.info_flags_override,
@@ -1496,6 +2199,21 @@ class DatWrite:
                     ],
                 }
                 for plan in self.prefab_imports
+            ],
+            "resource_prefab_imports": [
+                {
+                    "source_path": op.prefab_path,
+                    "candidate_id": op.candidate_id,
+                    "target_class": op.template.type_str,
+                    "name": op.overrides.get("Name") or op.template.get("Name"),
+                    "model": op.model_path,
+                    "skins": list(op.skin_paths),
+                    "source_fingerprint": op.source_fingerprint,
+                }
+                for op in self.resource_prefab_imports
+            ],
+            "behavioral_prefab_imports": [
+                plan.manifest_dict() for plan in self.behavioral_prefab_imports
             ],
             "dat_section_diff_report": self.dat_section_diff_report or {},
             "bsp_record_diff_report": self.bsp_record_diff_report or {},
@@ -1870,6 +2588,7 @@ class ArchivePatch:
     output_archive: str
     entries: List[str] = field(default_factory=list)
     kind: str = "archive"
+    additions: Dict[str, bytes] = field(default_factory=dict, repr=False)
 
 
 @dataclass
@@ -1882,5 +2601,11 @@ class SavePlan:
     def rude_archive_patch(self) -> Optional[ArchivePatch]:
         for patch in self.archive_patches:
             if patch.kind == "rude":
+                return patch
+        return None
+
+    def behavioral_scripts_archive_patch(self) -> Optional[ArchivePatch]:
+        for patch in self.archive_patches:
+            if patch.kind == "behavioral_scripts":
                 return patch
         return None

@@ -53,7 +53,8 @@ editor falls back to `%LOCALAPPDATA%\mm9_editor\`.
 
 Click **Open from WORLDS.REZ...** or press `Ctrl+O`, then choose a level from
 the archive picker. You can load multiple levels in one session and switch
-between them with the **Level** dropdown.
+between them with the **Level** dropdown. The editor starts maximized and shows
+one centered **Loading...** indicator while a selected level is prepared.
 
 ### Placing Objects
 
@@ -121,14 +122,18 @@ Fly mode:
 
 ### Performance Notes
 
-The 3D viewport caches static BSP draw batches per loaded level and caches
-ABC object render items per materialized object set. While dragging an object,
-the editor draws only the dragged ABC mesh plus object handles, then restores
-full detail after release.
+The 3D viewport keeps the two most recently used BSP uploads resident and
+caches ABC object render items per materialized object set. While dragging an
+object, the editor draws only the dragged ABC mesh plus object handles, then
+restores full detail after release.
 
 Launch with `MM9_EDITOR_PROFILE=1` to print averaged render timings for frame,
 BSP, ABC, and sprite passes to stderr. This is a developer diagnostic rather
 than an interactive viewport control.
+
+Launch with `MM9_EDITOR_PROFILE_LOAD=1` to print one-time level-opening stages,
+including asset selection, BSP preview, materialization, object-model setup,
+BSP upload, sky setup, camera fitting, and object-panel population.
 
 ### User Presets
 
@@ -248,11 +253,6 @@ work.
 
 ## Known Caveats
 
-- **Mirrored Level Editing:** The editor renders the level in OpenGL's
-  right-handed coordinate system, but the LithTech game engine uses a
-  left-handed coordinate system. This results in the horizontal layout
-  (left-to-right) being mirrored between the editor view and the running game.
-  When positioning objects, remember to swap left and right relative to the target entities.
 - No undo UI yet. Close without saving to discard pending edits.
 - `.mm9mod` project files store operations, not full level bytes. The source
   game archives must remain accessible.

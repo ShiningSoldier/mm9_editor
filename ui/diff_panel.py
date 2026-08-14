@@ -61,6 +61,11 @@ class SaveDialog(tk.Toplevel):
                 dat_text.insert("end",
                     f"  prefab BSP imports: {d.stats()['prefab_imports']} "
                     f"({d.stats()['prefab_bsp_models']} BSP model(s))\n")
+            if d.stats().get("behavioral_prefab_imports", 0):
+                dat_text.insert("end",
+                    f"  behavioral prefab imports: "
+                    f"{d.stats()['behavioral_prefab_imports']} "
+                    f"({d.stats()['behavioral_prefab_objects']} object(s))\n")
             for line in d.ops_summary:
                 dat_text.insert("end", f"  {line}\n")
             geometry_report = d.geometry_risk_report()

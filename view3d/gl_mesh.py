@@ -242,6 +242,17 @@ def normal_render_world_bounds(
     hidden_helpers = {
         str(name).casefold() for name in (hidden_helper_model_names or ())
     }
+    cache_key = frozenset(hidden_helpers)
+    bounds_cache = getattr(bsp_world, "_normal_render_bounds_cache", None)
+    if bounds_cache is None:
+        bounds_cache = {}
+        try:
+            setattr(bsp_world, "_normal_render_bounds_cache", bounds_cache)
+        except Exception:
+            bounds_cache = None
+    if bounds_cache is not None and cache_key in bounds_cache:
+        return bounds_cache[cache_key]
+
     visible_points = []
     for model in getattr(bsp_world, "world_models", []) or []:
         is_hidden_helper = (
@@ -255,15 +266,21 @@ def normal_render_world_bounds(
             visible_points.append(model_points)
 
     if not visible_points:
-        return None
+        result = None
+        if bounds_cache is not None:
+            bounds_cache[cache_key] = result
+        return result
 
     points = np.concatenate(visible_points, axis=0)
     lo = np.min(points, axis=0)
     hi = np.max(points, axis=0)
-    return (
+    result = (
         (float(lo[0]), float(lo[1]), float(lo[2])),
         (float(hi[0]), float(hi[1]), float(hi[2])),
     )
+    if bounds_cache is not None:
+        bounds_cache[cache_key] = result
+    return result
 
 
 def _is_physics_world_ceiling_cap(model, pv: np.ndarray) -> bool:  # type: ignore[type-arg]
@@ -514,10 +531,9 @@ def _triangulate_model(
             texture_sizes[tex_name] = size if size is not None else (128, 128)
         return texture_sizes[tex_name]
 
-    vert_rows:     List[np.ndarray] = []
+    vert_rows:     List[List[float]] = []
     index_list:    List[int]        = []
     tri_tex_names: List[str]        = []   # one entry per accepted triangle
-    base = 0
 
     for poly in mesh.polygons:
         vis   = poly.vertex_indices
@@ -583,51 +599,52 @@ def _triangulate_model(
         else:
             uvs = [(0.0, 0.0)] * n_vis   # fallback: no surface data
 
-        # Fan-triangulate from vertex 0; check each triangle individually
-        poly_verts:   List[np.ndarray] = []
-        poly_indices: List[int]        = []
-        tri_base = base
-
+        # Fan-triangulate from vertex 0; check each triangle individually.
+        # Scalar cross products are substantially cheaper here than tens of
+        # thousands of tiny np.cross/np.linalg.norm dispatches.
         for k in range(1, n_vis - 1):
             v0, v1, v2 = pv[0], pv[k], pv[k + 1]
             uv0, uv1, uv2 = uvs[0], uvs[k], uvs[k + 1]
 
             # ── degenerate triangle check ──────────────────────────────
-            e1    = v1 - v0
-            e2    = v2 - v0
-            n_vec = np.cross(e1, e2)
-            n_len = float(np.linalg.norm(n_vec))
+            # Keep the intermediate arithmetic in float32, matching the old
+            # vectorised implementation's degeneracy decisions exactly.
+            e1x = v1[0] - v0[0]
+            e1y = v1[1] - v0[1]
+            e1z = v1[2] - v0[2]
+            e2x = v2[0] - v0[0]
+            e2y = v2[1] - v0[1]
+            e2z = v2[2] - v0[2]
+            nx = e1y * e2z - e1z * e2y
+            ny = e1z * e2x - e1x * e2z
+            nz = e1x * e2y - e1y * e2x
+            n_len = float(np.sqrt(nx * nx + ny * ny + nz * nz))
             if n_len < _AREA_EPSILON:
                 continue   # zero-area triangle — drop silently
 
-            n_unit = (n_vec / n_len).astype(np.float32)
+            inv_len = 1.0 / n_len
+            normal = (nx * inv_len, ny * inv_len, nz * inv_len)
+            first_index = len(vert_rows)
 
             # Emit three vertices: position + normal + UV
             for v, uv in zip((v0, v1, v2), (uv0, uv1, uv2)):
-                poly_verts.append(np.array(
-                    [v[0], v[1], v[2],
-                     n_unit[0], n_unit[1], n_unit[2],
-                     float(uv[0]), float(uv[1])],
-                    dtype=np.float32,
-                ))
+                vert_rows.append([
+                    float(v[0]), float(v[1]), float(v[2]),
+                    normal[0], normal[1], normal[2],
+                    float(uv[0]), float(uv[1]),
+                ])
 
-            poly_indices.extend([
-                tri_base + len(poly_verts) - 3,
-                tri_base + len(poly_verts) - 2,
-                tri_base + len(poly_verts) - 1,
+            index_list.extend([
+                first_index,
+                first_index + 1,
+                first_index + 2,
             ])
             tri_tex_names.append(tex_name)   # one per accepted triangle
-
-        if poly_verts:
-            vdata = np.array(poly_verts, dtype=np.float32).reshape(-1, 8)
-            vert_rows.append(vdata)
-            index_list.extend(poly_indices)
-            base += len(poly_verts)
 
     if not vert_rows:
         return _empty
 
-    verts   = np.vstack(vert_rows).astype(np.float32)
+    verts   = np.asarray(vert_rows, dtype=np.float32).reshape(-1, 8)
     indices = np.array(index_list, dtype=np.uint32)
     n_tris  = len(tri_tex_names)
 
@@ -1379,11 +1396,15 @@ def draw_bsp(
 class MeshCache:
     """
     Caches GpuMesh objects by Python id() of the source WorldModelMesh.
-    Call invalidate() when a new level is loaded to free stale GPU memory.
+
+    The two most recently activated levels remain resident so switching back
+    does not repeat CPU triangulation and GPU upload.  Older levels are evicted
+    as a bounded LRU to keep GPU memory usage predictable.
     """
 
     def __init__(self) -> None:
         self._cache: Dict[tuple, Optional[GpuMesh]] = {}
+        self._resident_levels: Dict[Tuple[int, Optional[int]], Set[int]] = {}
 
     def get_or_upload(
         self,
@@ -1423,6 +1444,75 @@ class MeshCache:
                 except Exception:
                     pass
         self._cache.clear()
+        self._resident_levels.clear()
+
+    def activate_level(
+        self,
+        level_token,
+        meshes,
+        tex_cache=None,
+        max_resident_levels: int = 2,
+    ) -> None:
+        """Keep a bounded LRU of complete level uploads.
+
+        ``level_token`` is normally the LevelEdit instance.  Updating a BSP
+        preview for the active level replaces that level's model-id set while
+        retaining unchanged uploads.  Cache variants for evicted source models
+        are deleted only when no other resident level references them.
+        """
+        if level_token is None:
+            return
+        texture_id = id(tex_cache) if tex_cache is not None else None
+        resident_key = (id(level_token), texture_id)
+        model_ids = {id(mesh) for mesh in meshes or []}
+
+        # The same level may be reopened against a different staged texture
+        # archive.  Its old upload variants cannot be reused and should not
+        # consume one of the two resident-level slots.
+        for old_key in list(self._resident_levels):
+            if old_key[0] != resident_key[0] or old_key == resident_key:
+                continue
+            old_ids = self._resident_levels.pop(old_key)
+            self._delete_unreferenced_level_models(old_ids, old_key[1])
+
+        previous_ids = self._resident_levels.pop(resident_key, set())
+        self._resident_levels[resident_key] = model_ids
+
+        removed_ids = previous_ids - model_ids
+        if removed_ids:
+            self._delete_unreferenced_level_models(removed_ids, texture_id)
+
+        limit = max(1, int(max_resident_levels))
+        while len(self._resident_levels) > limit:
+            oldest_key = next(iter(self._resident_levels))
+            oldest_ids = self._resident_levels.pop(oldest_key)
+            self._delete_unreferenced_level_models(oldest_ids, oldest_key[1])
+
+    def _delete_unreferenced_level_models(
+        self,
+        model_ids: Set[int],
+        texture_id: Optional[int],
+    ) -> None:
+        if not model_ids:
+            return
+        protected = set()
+        for (_level_id, resident_texture_id), resident_model_ids in (
+            self._resident_levels.items()
+        ):
+            if resident_texture_id == texture_id:
+                protected.update(resident_model_ids)
+
+        stale_ids = model_ids - protected
+        for key, gm in list(self._cache.items()):
+            cached_texture_id = key[1] if len(key) > 1 else None
+            if key[0] not in stale_ids or cached_texture_id != texture_id:
+                continue
+            if gm is not None:
+                try:
+                    delete_mesh(gm)
+                except Exception:
+                    pass
+            del self._cache[key]
 
     def discard_model(self, mesh) -> None:
         """Delete every cached upload belonging to one source mesh."""

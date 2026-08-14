@@ -1,4 +1,8 @@
+import io
+import os
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
@@ -87,6 +91,25 @@ class CameraStateTests(unittest.TestCase):
 
 
 class CameraFitTests(unittest.TestCase):
+    def test_normal_bounds_are_cached_per_helper_filter(self):
+        world = bsp.BspWorld(
+            version=66,
+            world_info="",
+            world_models=[
+                _mesh("MainWorld", (-2.0, 0.0, -3.0), (4.0, 5.0, 6.0))
+            ],
+        )
+
+        with mock.patch(
+            "view3d.gl_mesh._normal_render_model_points",
+            wraps=gl_mesh._normal_render_model_points,
+        ) as model_points:
+            first = gl_mesh.normal_render_world_bounds(world)
+            second = gl_mesh.normal_render_world_bounds(world)
+
+        self.assertEqual(second, first)
+        model_points.assert_called_once()
+
     def test_normal_bounds_ignore_helper_polygons_inside_visible_model(self):
         surfaces = [
             bsp.Surface(
@@ -211,6 +234,33 @@ class ViewportInputOwnershipTests(unittest.TestCase):
         )
 
         self.assertFalse(accepted)
+
+
+class LoadProfilingTests(unittest.TestCase):
+    def test_load_profile_is_opt_in_and_reports_named_stages(self):
+        level = SimpleNamespace(display_name="BOOTCAMP")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(gl_view._new_load_profile(level))
+
+        with mock.patch.dict(
+            os.environ,
+            {"MM9_EDITOR_PROFILE_LOAD": "1"},
+            clear=True,
+        ):
+            profile = gl_view._new_load_profile(level)
+        profile["started"] = 10.0
+        profile["stages"] = [("preview_bsp", 0.25)]
+        stderr = io.StringIO()
+        with mock.patch(
+            "view3d.gl_view.time.perf_counter",
+            return_value=11.0,
+        ), mock.patch("sys.stderr", stderr):
+            gl_view._emit_load_profile(profile)
+
+        output = stderr.getvalue()
+        self.assertIn("[view3d load] BOOTCAMP", output)
+        self.assertIn("total=1.000s", output)
+        self.assertIn("preview_bsp=0.250s", output)
 
 
 if __name__ == "__main__":

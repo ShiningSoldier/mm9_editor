@@ -17,7 +17,6 @@ from typing import List, Sequence
 
 import _path_setup  # noqa: F401
 from core import bsp
-from features.doors import clone as door_clone
 from . import import_static as prefab_import
 from . import inspector as prefab_inspector
 
@@ -70,10 +69,15 @@ def _validate_one_plan(plan: prefab_import.PrefabBspImportPlan) -> List[str]:
         for warning in info.parse_warnings[:5]:
             warnings.append(f"{label}: source parse warning: {warning}")
 
-    if info.object_count:
-        classes = ", ".join(f"{name}={count}" for name, count in sorted(info.object_classes.items()))
+    behavioral = str(getattr(plan, "import_mode", "static")).casefold() == "behavioral"
+    if info.behavior_objects and not behavioral:
+        classes = ", ".join(
+            f"{name}={count}"
+            for name, count in sorted(info.behavior_object_classes.items())
+        )
         warnings.append(
-            f"{label}: source prefab contains WorldObjects ({classes}); static BSP import ignores them"
+            f"{label}: source prefab contains behavior/controller objects ({classes}); "
+            "static BSP import ignores them"
         )
 
     if not plan.submodels:
@@ -99,28 +103,43 @@ def _validate_one_plan(plan: prefab_import.PrefabBspImportPlan) -> List[str]:
             f"{label}: imports VisBSP only; collision behavior in-game is not confirmed yet"
         )
     if has_collision_helper:
+        source_kind = (
+            "authored solid DEdit brush geometry"
+            if info.source_format == "legacy_ed"
+            else "authored PhysicsBSP geometry"
+        )
         warnings.append(
-            f"{label}: adds an experimental InvisibleBrush collision helper; "
-            "this matches shipped blocker/controller patterns but needs in-game confirmation"
+            f"{label}: imports {source_kind} through a hidden "
+            "InvisibleBrush controller; verify collision in-game"
         )
     if has_collision_box:
         warnings.append(
             f"{label}: adds an experimental scaled InvisibleBrush box collision helper; "
             "this matches shipped blocker/controller patterns but needs in-game confirmation"
         )
-    if not (has_collision_helper or has_collision_box):
+    if not behavioral and not (has_collision_helper or has_collision_box):
         warnings.append(f"{label}: imports visible geometry without a collision helper")
 
     for submodel in plan.submodels:
-        model = submodel.source_model
+        model = prefab_import.preview_submodel(submodel)
         role = _role_for_submodel(plan, submodel)
         if not submodel.raw_bytes:
-            warnings.append(f"{label}: source model {submodel.source_name!r} has empty raw bytes")
+            warnings.append(
+                f"{label}: source model "
+                f"{getattr(submodel, 'source_name', getattr(submodel, 'name', ''))!r} "
+                "has empty raw bytes"
+            )
         if not model.polygons:
-            warnings.append(f"{label}: source model {submodel.source_name!r} has no polygons")
+            warnings.append(
+                f"{label}: source model "
+                f"{getattr(submodel, 'source_name', getattr(submodel, 'name', ''))!r} "
+                "has no polygons"
+            )
         if any(str(tex or "").lower() == "default" for tex in model.texture_names):
             warnings.append(
-                f"{label}: source model {submodel.source_name!r} uses Default texture names"
+                f"{label}: source model "
+                f"{getattr(submodel, 'source_name', getattr(submodel, 'name', ''))!r} "
+                "uses Default texture names"
             )
         if len(model.polygons) > 5000:
             warnings.append(
@@ -143,15 +162,8 @@ def _role_for_submodel(
 
 
 def _collision_shape_warnings(label: str, submodel) -> List[str]:
-    model = submodel.source_model
-    min_box, max_box = door_clone.transform_bounds(
-        model.min_box,
-        model.max_box,
-        submodel.source_pivot,
-        submodel.target_pivot,
-        submodel.yaw_radians,
-        scale=submodel.scale,
-    )
+    model = prefab_import.preview_submodel(submodel)
+    min_box, max_box = model.min_box, model.max_box
     sizes = [
         abs(float(max_box[0]) - float(min_box[0])),
         abs(float(max_box[1]) - float(min_box[1])),

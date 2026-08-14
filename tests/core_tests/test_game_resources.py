@@ -129,6 +129,16 @@ class GameResourcesTests(unittest.TestCase):
             self.assertEqual(res.archive_for("RUDE/NPC1"), rez_path)
             self.assertEqual(res.locate("RUDE/NPC1").source, "rez")
 
+    def test_resolves_sound_dependencies_with_or_without_wav_extension(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rez_path = os.path.join(tmp, "game", "data", "SOUNDS.REZ")
+            write_minimal_rez(rez_path, {"SOUNDS/DOORS/OPEN": b"wav"})
+            res = game_resources.GameResources(archives={"sounds": rez_path})
+
+            self.assertTrue(res.exists("SOUNDS/DOORS/OPEN"))
+            self.assertTrue(res.exists("sounds\\doors\\open.wav"))
+            self.assertEqual(res.archive_for("SOUNDS/DOORS/OPEN.WAV"), rez_path)
+
     def test_cache_archive_tree_materializes_root_relative_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             rez_path = os.path.join(tmp, "game", "data", "TEXTURES.REZ")

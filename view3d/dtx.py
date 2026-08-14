@@ -4,13 +4,13 @@ dtx.py
 
 LithTech 2 / v66 DTX texture loader for the MM9 3-D viewer.
 
-Parses the 164-byte DTX header, identifies the pixel format, and uploads
-mip level 0 to the GPU as an OpenGL texture object.
+Parses the 164-byte DTX header, identifies the pixel format, and uploads the
+available mip chain to the GPU as an OpenGL texture object.
 
 Supported pixel formats  (field at header offset 26)
 ------------------------------------------------------
-  4 -> DXT1   software-decoded to RGBA8        ~73 % of MM9 textures (opaque)
-  6 -> DXT5   software-decoded to RGBA8        ~ 7 % of MM9 textures (alpha)
+  4 -> DXT1   compressed GPU upload; RGBA8 fallback  ~73 % of MM9 textures
+  6 -> DXT5   compressed GPU upload; RGBA8 fallback  ~ 7 % of MM9 textures
   3 -> BGRA32 GL_BGRA / GL_UNSIGNED_BYTE         ~14 % (uncompressed, tiled)
   0 -> BGRA32 same; used in a handful of v4 files
 
@@ -37,12 +37,9 @@ Pixel data sizes  (bytes per mip level)
 
 Implementation note
 -------------------
-Earlier versions uploaded DXT1/DXT5 directly through
-glCompressedTexImage2D.  That made rendering depend on the local OpenGL
-driver exposing S3TC support and on PyOpenGL's compressed-texture wrapper.
-The current loader decodes DXT blocks on the CPU and uploads all texture
-formats as normal RGBA/BGRA data.  This is slightly less memory-efficient but
-much more predictable for the editor.
+DXT1/DXT5 textures use their authored mip chain and remain compressed when
+the OpenGL driver accepts S3TC uploads.  Unsupported drivers and wrappers
+fall back transparently to the existing CPU decoder and RGBA8 upload path.
 
 TextureCache
 ------------
@@ -346,9 +343,119 @@ def inspect_dtx_alpha_file(path: str) -> Optional[TextureAlphaInfo]:
 # GL upload
 # ---------------------------------------------------------------------------
 
+def _dxt_mip_payloads(
+    data: bytes,
+    pixel_fmt: int,
+    w: int,
+    h: int,
+    mip_count: int,
+) -> Optional[List[Tuple[int, int, int, bytes]]]:
+    """Return complete authored DXT mip payloads, or ``None`` if truncated."""
+    if pixel_fmt not in (_FMT_DXT1, _FMT_DXT5):
+        return None
+    payloads: List[Tuple[int, int, int, bytes]] = []
+    offset = _HEADER_SIZE
+    mip_w = int(w)
+    mip_h = int(h)
+    for level in range(max(1, int(mip_count))):
+        size = _mip0_size(pixel_fmt, mip_w, mip_h)
+        end = offset + size
+        if end > len(data):
+            return None
+        payloads.append((level, mip_w, mip_h, data[offset:end]))
+        offset = end
+        mip_w = max(1, mip_w // 2)
+        mip_h = max(1, mip_h // 2)
+    return payloads
+
+
+def _clear_gl_errors(GL) -> None:
+    get_error = getattr(GL, "glGetError", None)
+    if get_error is None:
+        return
+    no_error = int(getattr(GL, "GL_NO_ERROR", 0))
+    for _ in range(8):
+        if int(get_error()) == no_error:
+            return
+
+
+def _try_upload_compressed_dxt(
+    GL,
+    data: bytes,
+    pixel_fmt: int,
+    w: int,
+    h: int,
+    mip_count: int,
+) -> bool:
+    """Upload authored S3TC mips; return False when the path is unavailable.
+
+    A driver rejection raises so the caller can discard the partially defined
+    texture object and retry through the CPU RGBA fallback.
+    """
+    upload = getattr(GL, "glCompressedTexImage2D", None)
+    if upload is None:
+        return False
+    payloads = _dxt_mip_payloads(data, pixel_fmt, w, h, mip_count)
+    if not payloads:
+        return False
+
+    if pixel_fmt == _FMT_DXT1:
+        internal_format = int(
+            getattr(GL, "GL_COMPRESSED_RGBA_S3TC_DXT1_EXT", 0x83F1)
+        )
+    elif pixel_fmt == _FMT_DXT5:
+        internal_format = int(
+            getattr(GL, "GL_COMPRESSED_RGBA_S3TC_DXT5_EXT", 0x83F3)
+        )
+    else:
+        return False
+
+    _clear_gl_errors(GL)
+    for level, mip_w, mip_h, payload in payloads:
+        upload(
+            GL.GL_TEXTURE_2D,
+            level,
+            internal_format,
+            mip_w,
+            mip_h,
+            0,
+            len(payload),
+            payload,
+        )
+        get_error = getattr(GL, "glGetError", None)
+        if get_error is not None:
+            error = int(get_error())
+            if error != int(getattr(GL, "GL_NO_ERROR", 0)):
+                raise RuntimeError(f"compressed texture upload GL error 0x{error:04x}")
+
+    max_level = getattr(GL, "GL_TEXTURE_MAX_LEVEL", None)
+    if max_level is not None:
+        GL.glTexParameteri(
+            GL.GL_TEXTURE_2D,
+            max_level,
+            payloads[-1][0],
+        )
+    return True
+
+
+def _configure_bound_texture(GL) -> None:
+    GL.glTexParameteri(
+        GL.GL_TEXTURE_2D,
+        GL.GL_TEXTURE_MIN_FILTER,
+        GL.GL_LINEAR_MIPMAP_LINEAR,
+    )
+    GL.glTexParameteri(
+        GL.GL_TEXTURE_2D,
+        GL.GL_TEXTURE_MAG_FILTER,
+        GL.GL_LINEAR,
+    )
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT)
+
+
 def load_dtx_bytes(data: bytes) -> Optional[int]:
     """
-    Parse a DTX blob and upload mip level 0 to the GPU.
+    Parse a DTX blob and upload it to the GPU.
 
     Returns the OpenGL texture ID on success, or ``None`` if the format is
     unrecognised, the data is too short, or a GL error occurs.
@@ -359,7 +466,7 @@ def load_dtx_bytes(data: bytes) -> Optional[int]:
     hdr = parse_header(data)
     if hdr is None:
         return None
-    pixel_fmt, w, h, _mips = hdr
+    pixel_fmt, w, h, mip_count = hdr
 
     expected = _mip0_size(pixel_fmt, w, h)
     if len(data) < _HEADER_SIZE + expected:
@@ -371,16 +478,32 @@ def load_dtx_bytes(data: bytes) -> Optional[int]:
     try:
         tex = int(GL.glGenTextures(1))
         GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
+        _configure_bound_texture(GL)
 
-        # GL_LINEAR_MIPMAP_LINEAR (trilinear) for min — requires mipmaps,
-        # which we generate below after uploading mip 0.
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER,
-                           GL.GL_LINEAR_MIPMAP_LINEAR)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT)
+        compressed_uploaded = False
+        if pixel_fmt in (_FMT_DXT1, _FMT_DXT5):
+            try:
+                compressed_uploaded = _try_upload_compressed_dxt(
+                    GL,
+                    data,
+                    pixel_fmt,
+                    w,
+                    h,
+                    mip_count,
+                )
+            except Exception:
+                # A failed compressed call can leave texture storage partially
+                # defined.  Retry with a fresh object through the proven CPU
+                # decoder rather than relying on driver-specific recovery.
+                GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+                GL.glDeleteTextures([tex])
+                tex = int(GL.glGenTextures(1))
+                GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
+                _configure_bound_texture(GL)
 
-        if pixel_fmt == _FMT_DXT1:
+        if compressed_uploaded:
+            pass
+        elif pixel_fmt == _FMT_DXT1:
             rgba = _decode_dxt1_rgba(pix, w, h)
             GL.glTexImage2D(
                 GL.GL_TEXTURE_2D, 0,
@@ -411,9 +534,10 @@ def load_dtx_bytes(data: bytes) -> Optional[int]:
                 np.frombuffer(pix, dtype=np.uint8),
             )
 
-        # Generate the full mipmap chain from mip 0.  This eliminates
-        # shimmering on distant surfaces and is fast on GPU.
-        GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
+        if not compressed_uploaded:
+            # CPU/BGRA fallback uploads mip 0, then lets the GPU generate a
+            # complete chain.  Compressed uploads retain the authored mips.
+            GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
 
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
         return tex
@@ -431,7 +555,7 @@ def load_dtx_bytes(data: bytes) -> Optional[int]:
 
 
 def load_dtx_file(path: str) -> Optional[int]:
-    """Load a .dtx file and upload mip 0.  Returns GL texture ID or ``None``."""
+    """Load a .dtx file and upload it.  Returns GL texture ID or ``None``."""
     try:
         with open(path, "rb") as f:
             return load_dtx_bytes(f.read())

@@ -8,12 +8,23 @@ from tests._path import ROOT  # noqa: F401
 from core import bsp
 from features.prefabs import import_static as prefab_import
 from features.prefabs import validation as prefab_import_validation
+from tests.feature_tests.prefabs._fixtures import write_prefab_fixtures
 
 
 DATA_ROOT = os.path.join(ROOT, "mm9_data")
 
 
 class PrefabImportValidationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.fence_path, cls.door_path = write_prefab_fixtures(cls._tmp.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
     def load_bootcamp_bsp(self):
         path = os.path.join(DATA_ROOT, "WORLDS", "BOOTCAMP.DAT")
         if not os.path.exists(path):
@@ -21,16 +32,10 @@ class PrefabImportValidationTests(unittest.TestCase):
         return bsp.parse_path(path)
 
     def fence_prefab_path(self):
-        path = os.path.join(DATA_ROOT, "PreFabs", "Fences&Gates", "OldWoodFence1.dat")
-        if not os.path.exists(path):
-            self.skipTest(f"missing converted prefab: {path}")
-        return path
+        return self.fence_path
 
     def door_prefab_path(self):
-        path = os.path.join(DATA_ROOT, "PreFabs", "Doors", "A1_Door.dat")
-        if not os.path.exists(path):
-            self.skipTest(f"missing converted prefab: {path}")
-        return path
+        return self.door_path
 
     def test_warns_for_system_only_fence_default_texture(self):
         target_bsp = self.load_bootcamp_bsp()

@@ -229,6 +229,18 @@ def build_cloned_world_model_record(
         polygon_offsets,
         point_offsets,
     ) = _world_bsp_patch_offsets(raw, submodel.source_model)
+    # PhysicsBlockTable immediately follows the fixed-size point records and
+    # begins with dimensions, cell size, then origin. Keep the established
+    # patch-offset tuple shape because the BSP diff inspector also consumes it.
+    pblock_start = (
+        point_offsets[-1][0] + 24
+        if point_offsets else None
+    )
+    physics_origin_offset = (
+        pblock_start + 24
+        if pblock_start is not None and pblock_start + 36 <= len(raw)
+        else None
+    )
 
     old_name_len = struct.unpack_from("<H", raw, name_length_pos)[0]
     old_name_total = 2 + old_name_len
@@ -329,6 +341,21 @@ def build_cloned_world_model_record(
             submodel.yaw_radians,
             submodel.scale,
         ))
+
+    if physics_origin_offset is not None and abs(float(submodel.yaw_radians)) <= 1.0e-7:
+        old_origin = struct.unpack_from("<3f", raw, adj(physics_origin_offset))
+        struct.pack_into(
+            "<3f",
+            raw,
+            adj(physics_origin_offset),
+            *door_clone.transform_point(
+                old_origin,
+                submodel.source_pivot,
+                submodel.target_pivot,
+                submodel.yaw_radians,
+                scale=submodel.scale,
+            ),
+        )
 
     struct.pack_into("<I", raw, 0, next_world_item)
     return bytes(raw)

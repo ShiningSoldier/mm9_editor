@@ -22,6 +22,7 @@ from .world_helpers import (
     classify_world_helper_entry,
     is_model_resource,
 )
+from .templates import class_template_from_catalog
 from .lomm import (
     DEFAULT_LOMM_CATALOG_PATH,
     LommCatalogError,
@@ -50,6 +51,7 @@ __all__ = [
     "annotate_catalog_world_helpers",
     "classify_world_helper_entry",
     "is_model_resource",
+    "class_template_from_catalog",
     "DEFAULT_LOMM_CATALOG_PATH",
     "LommCatalogError",
     "build_lomm_catalog_from_root",

@@ -118,8 +118,18 @@ def hidden_world_helper_model_names(
     the authoritative visibility/classification record.
     """
     names: set[str] = set()
+    normally_rendered_controller_classes = {
+        "bluewater",
+        "clearwater",
+        "dirtywater",
+    }
     for obj in objects or ():
         if _object_is_visible(obj):
+            continue
+        if str(getattr(obj, "type_str", "") or "").casefold() in normally_rendered_controller_classes:
+            # Water controller objects are authored invisible, but their
+            # same-named BSP is the visible water surface. Marker/material
+            # classification controls its normal/helper rendering.
             continue
         if not is_world_helper_billboard(
             obj,

@@ -20,6 +20,19 @@ class CompiledWorldModelRecord:
     model: bsp.WorldModelMesh
     raw_bytes: bytes
 
+    @property
+    def new_name(self) -> str:
+        """Match the copied-record interface consumed by the DAT writer."""
+        return self.name
+
+    @property
+    def source_name(self) -> str:
+        return "generated_geometry"
+
+    @property
+    def info_flags_override(self) -> int:
+        return 2
+
 
 @dataclass(frozen=True)
 class CompiledPolygonDiagnostics:

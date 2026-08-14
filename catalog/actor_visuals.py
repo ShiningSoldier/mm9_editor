@@ -17,6 +17,64 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 _TABLE_FILENAMES = ("ACTOR.TXT", "MONSTERS.TXT")
 _GENERIC_TYPE_PREFIXES = {"peasant"}
+
+# Adult civilian class names omit two details that are present in the actor
+# table's Type/Picture field:
+#
+# * the first human body set is written as ``Human`` in a DAT class but as
+#   ``Human1`` in ACTOR/MONSTERS;
+# * the role selects the appearance group (Commoner=A, Town=B,
+#   Shopkeeper=C, Prisoner=D), while the class's trailing A/B selects the row
+#   variant inside that group.
+#
+# For example, ``CommonerHumanFemaleA`` corresponds to
+# ``Commoner / Peasant Human1 FemaleA A`` rather than to the literal token
+# produced from the class name.
+_CIVILIAN_ADULT_GROUPS = {
+    "commoner": "a",
+    "town": "b",
+    "shopkeeper": "c",
+    "prisoner": "d",
+}
+_CIVILIAN_CHILD_GROUPS = {
+    "commonerchild": "a",
+    "townsfolkchild": "b",
+}
+
+
+def _civilian_actor_table_keys(value: str) -> List[str]:
+    """Return precise ACTOR/MONSTERS lookup keys for a DAT civilian name."""
+    token = _token(value)
+
+    adult = re.fullmatch(
+        r"(commoner|town|shopkeeper|prisoner)"
+        r"(dwarf|elf|human2?|halforc)(female|male)([ab])",
+        token,
+    )
+    if adult:
+        role, race, gender, variant = adult.groups()
+        group = _CIVILIAN_ADULT_GROUPS[role]
+        race = "human1" if race == "human" else race
+        if race == "halforc":
+            # Half-orcs have one table row per role.  The final class suffix
+            # is the usual DAT civilian variant marker, but there is no second
+            # A/B table dimension for these rows.
+            return [f"{role}{race}{gender}{group}"]
+        return [f"{role}{race}{gender}{group}{variant}"]
+
+    child = re.fullmatch(
+        r"(commonerchild|townsfolkchild)"
+        r"(dwarf|elf|human2?|halforc)child([ab])",
+        token,
+    )
+    if child:
+        role, race, _variant = child.groups()
+        group = _CIVILIAN_CHILD_GROUPS[role]
+        return [f"{role}{race}child{group}"]
+
+    return []
+
+
 @dataclass(frozen=True)
 class ActorVisualRule:
     source_file: str
@@ -304,6 +362,8 @@ def object_actor_keys(
         add(key)
 
     for raw in (type_str, _strip_instance_suffix(object_name)):
+        for key in _civilian_actor_table_keys(raw):
+            add(key)
         add(raw)
 
     return out

@@ -28,6 +28,14 @@ Format version history
 10 retired direct BSP vertex edit operations
 11 retired direct BSP submodel replacement operations
 12 rejects retired editable mesh-sidecar operations on load/save
+13 conversion preview metadata
+14 hardened static-prefab anchors and canonical controller templates
+15 experimental behavioral-prefab planning operations
+16 object-only behavioral prefab materialization and catalog templates
+17 linked behavioral graphs and atomic assembly deletion
+18 Phase-6 reviewed script sources and generated SCRIPTS.REZ assets
+19 behavioral prefab import promoted to supported; experimental flag retired
+20 hybrid prefab representations and preview-only ED BSP safety metadata
 """
 
 from __future__ import annotations
@@ -123,6 +131,18 @@ def dict_to_worldobject(d: Dict[str, Any]) -> patcher.WorldObject:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def op_to_dict(op: Any) -> Dict[str, Any]:
+    if isinstance(op, P.ImportResourcePrefabOp):
+        return {
+            "op": "import_resource_prefab",
+            "template": worldobject_to_dict(op.template),
+            "overrides": _overrides_to_json(op.overrides),
+            "rude": op.rude,
+            "prefab_path": op.prefab_path,
+            "candidate_id": op.candidate_id,
+            "model_path": op.model_path,
+            "skin_paths": list(op.skin_paths),
+            "source_fingerprint": op.source_fingerprint,
+        }
     if isinstance(op, P.AddOp):
         return {
             "op":        "add",
@@ -168,6 +188,49 @@ def op_to_dict(op: Any) -> Dict[str, Any]:
             "collision_mode": op.collision_mode,
             "collision_thickness": float(op.collision_thickness),
             "collision_segment_length": float(op.collision_segment_length),
+            "placement_anchor": op.placement_anchor,
+            "allow_unsafe_visibility": bool(op.allow_unsafe_visibility),
+            "worldobject_template": (
+                worldobject_to_dict(op.worldobject_template)
+                if op.worldobject_template is not None else None
+            ),
+            "invisiblebrush_template": (
+                worldobject_to_dict(op.invisiblebrush_template)
+                if op.invisiblebrush_template is not None else None
+            ),
+            "preview_only": bool(op.preview_only),
+        }
+    if isinstance(op, P.ImportBehavioralPrefabOp):
+        return {
+            "op": "import_behavioral_prefab",
+            "prefab_path": op.prefab_path,
+            "root_name": op.root_name,
+            "target_pos": list(op.target_pos),
+            "target_yaw": float(op.target_yaw),
+            "placement_anchor": op.placement_anchor,
+            "source_fingerprint": op.source_fingerprint,
+            "external_bindings": dict(op.external_bindings),
+            "dependency_decisions": dict(op.dependency_decisions),
+            "enabled_capabilities": list(op.enabled_capabilities),
+            "class_templates": {
+                name: worldobject_to_dict(template)
+                for name, template in op.class_templates.items()
+            },
+            "object_overrides": {
+                str(index): _overrides_to_json(values)
+                for index, values in op.object_overrides.items()
+            },
+            "planned_object_names": dict(op.planned_object_names),
+            "script_sources": dict(op.script_sources),
+            "script_assets": dict(op.script_assets),
+            "planner_version": int(op.planner_version),
+            "operation_id": op.operation_id,
+        }
+    if isinstance(op, P.RemoveBehavioralPrefabOp):
+        return {
+            "op": "remove_behavioral_prefab",
+            "operation_id": op.operation_id,
+            "root_name": op.root_name,
         }
     raise TypeError(f"Unknown op type: {type(op)}")
 
@@ -186,6 +249,17 @@ def _overrides_to_json(overrides: Dict[str, Any]) -> Dict[str, Any]:
 
 def dict_to_op(d: Dict[str, Any]) -> Any:
     kind = d["op"]
+    if kind == "import_resource_prefab":
+        return P.ImportResourcePrefabOp(
+            template=dict_to_worldobject(d["template"]),
+            overrides=d.get("overrides", {}),
+            rude=d.get("rude"),
+            prefab_path=str(d.get("prefab_path", "")),
+            candidate_id=str(d.get("candidate_id", "")),
+            model_path=str(d.get("model_path", "")),
+            skin_paths=tuple(str(value) for value in d.get("skin_paths", ())),
+            source_fingerprint=str(d.get("source_fingerprint", "")),
+        )
     if kind == "add":
         return P.AddOp(
             template  = dict_to_worldobject(d["template"]),
@@ -226,6 +300,64 @@ def dict_to_op(d: Dict[str, Any]) -> Any:
             collision_mode = str(d.get("collision_mode", "none")),
             collision_thickness = float(d.get("collision_thickness", 8.0)),
             collision_segment_length = float(d.get("collision_segment_length", 512.0)),
+            placement_anchor = str(d.get("placement_anchor", "original_origin")),
+            allow_unsafe_visibility = bool(d.get("allow_unsafe_visibility", False)),
+            worldobject_template = (
+                dict_to_worldobject(d["worldobject_template"])
+                if d.get("worldobject_template") is not None else None
+            ),
+            invisiblebrush_template = (
+                dict_to_worldobject(d["invisiblebrush_template"])
+                if d.get("invisiblebrush_template") is not None else None
+            ),
+            preview_only = bool(d.get("preview_only", False)),
+        )
+    if kind == "import_behavioral_prefab":
+        return P.ImportBehavioralPrefabOp(
+            prefab_path=str(d["prefab_path"]),
+            root_name=str(d["root_name"]),
+            target_pos=tuple(float(x) for x in d.get("target_pos", (0.0, 0.0, 0.0))),
+            target_yaw=float(d.get("target_yaw", 0.0)),
+            placement_anchor=str(d.get("placement_anchor", "bottom_center")),
+            source_fingerprint=str(d.get("source_fingerprint", "")),
+            external_bindings={
+                str(key): str(value)
+                for key, value in dict(d.get("external_bindings") or {}).items()
+            },
+            dependency_decisions={
+                str(key): str(value)
+                for key, value in dict(d.get("dependency_decisions") or {}).items()
+            },
+            enabled_capabilities=tuple(
+                str(value) for value in d.get("enabled_capabilities", ())
+            ),
+            class_templates={
+                str(name): dict_to_worldobject(value)
+                for name, value in dict(d.get("class_templates") or {}).items()
+            },
+            object_overrides={
+                str(index): dict(values)
+                for index, values in dict(d.get("object_overrides") or {}).items()
+            },
+            planned_object_names={
+                str(key): str(value)
+                for key, value in dict(d.get("planned_object_names") or {}).items()
+            },
+            script_sources={
+                str(key): str(value)
+                for key, value in dict(d.get("script_sources") or {}).items()
+            },
+            script_assets={
+                str(key): str(value)
+                for key, value in dict(d.get("script_assets") or {}).items()
+            },
+            planner_version=int(d.get("planner_version", 1)),
+            operation_id=str(d.get("operation_id") or ""),
+        )
+    if kind == "remove_behavioral_prefab":
+        return P.RemoveBehavioralPrefabOp(
+            operation_id=str(d["operation_id"]),
+            root_name=str(d.get("root_name", "")),
         )
     if kind in RETIRED_OP_KINDS:
         raise _retired_op_error(kind)
@@ -273,8 +405,10 @@ def dict_to_leveledit(d: Dict[str, Any]) -> P.LevelEdit:
 # Project save / load
 # ─────────────────────────────────────────────────────────────────────────────
 
-FORMAT_VERSION = 13
-SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+FORMAT_VERSION = 20
+SUPPORTED_FORMAT_VERSIONS = {
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+}
 
 
 def project_to_json(project: P.Project, path: str) -> None:

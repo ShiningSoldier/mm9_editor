@@ -116,10 +116,10 @@ Import/refactor rules:
 | `mm9_patcher/mm9_patch.py` | DAT v66 parser/serializer. Trusted core for `World`, `WorldObject`, and `Property`. |
 | `catalog/` + `catalog.py` | Builds/loads catalog data. `catalog.py` is a compatibility CLI wrapper; implementation lives in `catalog/builder.py`, actor table parsing in `catalog/actor_visuals.py`, and generated JSON in `catalog/data/`. |
 | `conversion/` + `lomm_to_mm9.py` | LoMM-to-MM9 conversion. `lomm_to_mm9.py` is a compatibility CLI wrapper; reusable service/insertion logic and default YAML rules live under `conversion/`. |
-| `ui/` | Tk panels and dialogs: level catalog panel, Add Object dialog, properties inspector, fresh NPC dialog, save/commit dialog, preset dialogs, REZ picker, LoMM conversion dialog, and door clone dialog. |
+| `ui/` | Tk panels and dialogs: level catalog panel, Add Object dialog, properties inspector, fresh NPC dialog, save/commit dialog, preset dialogs, REZ picker, LoMM conversion dialog, and the unified prefab import workspace. |
 | `features/presets/manager.py` | User preset persistence. |
 | `features/doors/` | Physical-door matching, clone planning, validation, and BSP writing. |
-| `features/prefabs/` | Converted prefab inspection, static BSP import planning, and save-plan validation. |
+| `features/prefabs/` | ED/DAT inspection, runtime-safe representation selection, catalog-backed Prop import, compiled BSP planning, behavioral graphs, and save validation. |
 | `features/model_conversion/` | Static LOD0 ABC export to glTF/GLB or OBJ, DTX-to-PNG conversion, explicit piece skins, and catalog-driven material variants. See `docs/model_conversion.md`. |
 | `tests/` | Test package grouped by area: `tests/app_tests/`, `tests/catalog_tests/`, `tests/core_tests/`, `tests/feature_tests/doors/`, `tests/feature_tests/prefabs/`, and `tests/view3d_tests/`. Shared test path setup lives in `tests/_path.py`; folder names avoid shadowing production packages during `unittest discover`. |
 

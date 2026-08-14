@@ -26,9 +26,10 @@ Editor template). We follow the lithtech_2 (== v66) code paths.
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
-from typing import BinaryIO, List, Optional, Tuple
+from typing import BinaryIO, Dict, List, Optional, Tuple
 
 DAT_VERSION_V66 = 66
 SURF_SOLID = 1 << 0
@@ -230,6 +231,13 @@ class BspWorld:
     world_extents_min: Optional[Tuple[float, float, float]] = None
     world_extents_max: Optional[Tuple[float, float, float]] = None
     world_tree: Optional[WorldTreeLayout] = None
+    # Floor probes are frequent while the 3-D editor prepares object models.
+    # Keep one lazily-built spatial index for each filter combination used by
+    # raycast_floor_y().  Parsed/preview BSP worlds are treated as immutable;
+    # preview builders create a fresh BspWorld when geometry changes.
+    _floor_raycast_indexes: Dict[
+        Tuple[bool, bool], "_FloorRaycastIndex"
+    ] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def all_edges_xz(self) -> List[Tuple[Tuple[float, float], Tuple[float, float], int]]:
         """Yield (xz_a, xz_b, model_index) for every edge of every polygon.
@@ -270,6 +278,9 @@ class BspWorld:
 # --------------------------------------------------------------------------
 
 _RAYCAST_SANE = 1.0e6
+_RAYCAST_EPSILON = 1.0e-7
+_FLOOR_INDEX_CELL_SIZE = 256.0
+_FLOOR_INDEX_MAX_TRIANGLE_CELLS = 4096
 
 # Editor/helper materials can be solid in the BSP even though they are not a
 # physical support surface.  For example BOOTCAMP's AI rail lies above the
@@ -295,6 +306,171 @@ def _is_object_support_polygon(
         return True
     basename = texture_name.replace('\\', '/').rsplit('/', 1)[-1].casefold()
     return basename not in _NON_SUPPORT_TEXTURE_BASENAMES
+
+
+@dataclass(frozen=True)
+class _FloorRaycastTriangle:
+    """Precomputed triangle coefficients used by vertical floor probes."""
+
+    v0x: float
+    v0y: float
+    v0z: float
+    e1x: float
+    e1y: float
+    e1z: float
+    e2x: float
+    e2y: float
+    e2z: float
+    a: float
+
+
+@dataclass
+class _FloorRaycastIndex:
+    """Uniform XZ grid of upward-facing triangles for one filter mode."""
+
+    cells: Dict[Tuple[int, int], List[_FloorRaycastTriangle]]
+    overflow: List[_FloorRaycastTriangle]
+    triangle_count: int
+    cell_size: float = _FLOOR_INDEX_CELL_SIZE
+
+    def candidates(self, x: float, z: float):
+        cell = (
+            math.floor(float(x) / self.cell_size),
+            math.floor(float(z) / self.cell_size),
+        )
+        yield from self.cells.get(cell, ())
+        yield from self.overflow
+
+
+def _build_floor_raycast_index(
+    bsp: "BspWorld",
+    *,
+    solid_only: bool,
+    support_only: bool,
+) -> _FloorRaycastIndex:
+    """Build the filtered triangle grid consumed by :func:`raycast_floor_y`.
+
+    Very large triangles are kept in a small overflow list instead of being
+    copied into thousands of grid buckets.  The bounding-box padding mirrors
+    the barycentric tolerance used by the ray test, including points accepted
+    just beyond an edge that crosses a grid-cell boundary.
+    """
+    cells: Dict[Tuple[int, int], List[_FloorRaycastTriangle]] = {}
+    overflow: List[_FloorRaycastTriangle] = []
+    triangle_count = 0
+    sane = _RAYCAST_SANE
+    epsilon = _RAYCAST_EPSILON
+    cell_size = _FLOOR_INDEX_CELL_SIZE
+
+    for model in bsp.world_models:
+        if model.is_skybox():
+            continue
+        pts = model.points
+        for poly in model.polygons:
+            if solid_only:
+                try:
+                    surface = model.surfaces[poly.surface_index]
+                except (IndexError, TypeError):
+                    continue
+                if not (surface.flags & SURF_SOLID):
+                    continue
+            if support_only and not _is_object_support_polygon(model, poly):
+                continue
+
+            vis = poly.vertex_indices
+            nv = len(vis)
+            if nv < 3:
+                continue
+            try:
+                v0 = pts[vis[0]]
+            except IndexError:
+                continue
+
+            for k in range(1, nv - 1):
+                try:
+                    v1 = pts[vis[k]]
+                    v2 = pts[vis[k + 1]]
+                except IndexError:
+                    continue
+                if (
+                    abs(v0[0]) > sane
+                    or abs(v0[1]) > sane
+                    or abs(v0[2]) > sane
+                    or abs(v1[0]) > sane
+                    or abs(v1[1]) > sane
+                    or abs(v1[2]) > sane
+                    or abs(v2[0]) > sane
+                    or abs(v2[1]) > sane
+                    or abs(v2[2]) > sane
+                ):
+                    continue
+
+                e1x = v1[0] - v0[0]
+                e1y = v1[1] - v0[1]
+                e1z = v1[2] - v0[2]
+                e2x = v2[0] - v0[0]
+                e2y = v2[1] - v0[1]
+                e2z = v2[2] - v0[2]
+                a = e1z * e2x - e1x * e2z
+                if a < epsilon:
+                    continue
+
+                triangle = _FloorRaycastTriangle(
+                    float(v0[0]),
+                    float(v0[1]),
+                    float(v0[2]),
+                    float(e1x),
+                    float(e1y),
+                    float(e1z),
+                    float(e2x),
+                    float(e2y),
+                    float(e2z),
+                    float(a),
+                )
+                triangle_count += 1
+
+                # u and v may each be accepted slightly outside [0, 1].
+                # Expand the XZ bounds by their maximum coordinate-space
+                # effect so those edge hits are placed in the queried cell.
+                pad_x = 2.0 * epsilon * (abs(e1x) + abs(e2x)) + 1.0e-6
+                pad_z = 2.0 * epsilon * (abs(e1z) + abs(e2z)) + 1.0e-6
+                min_ix = math.floor((min(v0[0], v1[0], v2[0]) - pad_x) / cell_size)
+                max_ix = math.floor((max(v0[0], v1[0], v2[0]) + pad_x) / cell_size)
+                min_iz = math.floor((min(v0[2], v1[2], v2[2]) - pad_z) / cell_size)
+                max_iz = math.floor((max(v0[2], v1[2], v2[2]) + pad_z) / cell_size)
+                covered_cells = (max_ix - min_ix + 1) * (max_iz - min_iz + 1)
+
+                if covered_cells > _FLOOR_INDEX_MAX_TRIANGLE_CELLS:
+                    overflow.append(triangle)
+                    continue
+                for ix in range(min_ix, max_ix + 1):
+                    for iz in range(min_iz, max_iz + 1):
+                        cells.setdefault((ix, iz), []).append(triangle)
+
+    return _FloorRaycastIndex(
+        cells=cells,
+        overflow=overflow,
+        triangle_count=triangle_count,
+        cell_size=cell_size,
+    )
+
+
+def _floor_raycast_index(
+    bsp: "BspWorld",
+    *,
+    solid_only: bool,
+    support_only: bool,
+) -> _FloorRaycastIndex:
+    key = (bool(solid_only), bool(support_only))
+    index = bsp._floor_raycast_indexes.get(key)
+    if index is None:
+        index = _build_floor_raycast_index(
+            bsp,
+            solid_only=key[0],
+            support_only=key[1],
+        )
+        bsp._floor_raycast_indexes[key] = index
+    return index
 
 
 def raycast_floor_y(
@@ -337,83 +513,46 @@ def raycast_floor_y(
     support_only  : ignore editor/helper-only surfaces that do not physically
                     support runtime objects
     """
-    EPSILON = 1e-7
-    sane    = _RAYCAST_SANE
+    EPSILON = _RAYCAST_EPSILON
     hits: List[float] = []
 
-    for model in bsp.world_models:
-        if model.is_skybox():
+    index = _floor_raycast_index(
+        bsp,
+        solid_only=solid_only,
+        support_only=support_only,
+    )
+    for triangle in index.candidates(x, z):
+        f = 1.0 / triangle.a
+        # s = ray_origin − v0
+        sx = x - triangle.v0x
+        sy = y_above - triangle.v0y
+        sz = z - triangle.v0z
+
+        # u = f * (s · h),  h = (−e2z, 0, e2x)
+        u = f * (-sx * triangle.e2z + sz * triangle.e2x)
+        if u < -EPSILON or u > 1.0 + EPSILON:
             continue
-        pts = model.points
-        for poly in model.polygons:
-            if solid_only:
-                try:
-                    surface = model.surfaces[poly.surface_index]
-                except (IndexError, TypeError):
-                    continue
-                if not (surface.flags & SURF_SOLID):
-                    continue
-            if support_only and not _is_object_support_polygon(model, poly):
-                continue
-            vis = poly.vertex_indices
-            nv  = len(vis)
-            if nv < 3:
-                continue
-            # Fan-triangulate the polygon from vertex 0
-            try:
-                v0 = pts[vis[0]]
-            except IndexError:
-                continue
-            for k in range(1, nv - 1):
-                try:
-                    v1 = pts[vis[k]]
-                    v2 = pts[vis[k + 1]]
-                except IndexError:
-                    continue
-                # Drop corrupted geometry.
-                if (abs(v0[0]) > sane or abs(v0[1]) > sane or abs(v0[2]) > sane
-                        or abs(v1[0]) > sane or abs(v1[1]) > sane or abs(v1[2]) > sane
-                        or abs(v2[0]) > sane or abs(v2[1]) > sane or abs(v2[2]) > sane):
-                    continue
 
-                # Edge vectors
-                e1x = v1[0] - v0[0]; e1y = v1[1] - v0[1]; e1z = v1[2] - v0[2]
-                e2x = v2[0] - v0[0];                        e2z = v2[2] - v0[2]
+        # q = s × e1
+        qx = sy * triangle.e1z - sz * triangle.e1y
+        qy = sz * triangle.e1x - sx * triangle.e1z
+        qz = sx * triangle.e1y - sy * triangle.e1x
 
-                # a = (e1 × e2).y  — see derivation above
-                a = e1z * e2x - e1x * e2z
+        # v = f * (D · q),  D = (0, −1, 0)  →  −f·q.y
+        v = -f * qy
+        if v < -EPSILON or u + v > 1.0 + EPSILON:
+            continue
 
-                # Skip walls (a ≈ 0) and ceilings (a < 0)
-                if a < EPSILON:
-                    continue
+        # t = f * (e2 · q);  hit_y = y_above − t  (D.y = −1)
+        t = f * (
+            triangle.e2x * qx
+            + triangle.e2y * qy
+            + triangle.e2z * qz
+        )
+        if t < EPSILON:
+            continue  # behind or coincident with ray origin
 
-                f  = 1.0 / a
-                # s = ray_origin − v0
-                sx = x       - v0[0]
-                sy = y_above - v0[1]
-                sz = z       - v0[2]
-
-                # u = f * (s · h),  h = (−e2z, 0, e2x)
-                u = f * (-sx * e2z + sz * e2x)
-                if u < -EPSILON or u > 1.0 + EPSILON:
-                    continue
-
-                # q = s × e1
-                qx = sy * e1z - sz * e1y
-                qy = sz * e1x - sx * e1z
-                qz = sx * e1y - sy * e1x
-
-                # v = f * (D · q),  D = (0, −1, 0)  →  −f·q.y
-                v = -f * qy
-                if v < -EPSILON or u + v > 1.0 + EPSILON:
-                    continue
-
-                # t = f * (e2 · q);  hit_y = y_above − t  (D.y = −1)
-                t = f * (e2x * qx + (v2[1] - v0[1]) * qy + e2z * qz)
-                if t < EPSILON:
-                    continue   # behind or coincident with ray origin
-
-                hits.append(y_above - t)
+        hits.append(y_above - t)
 
     if not hits:
         return None

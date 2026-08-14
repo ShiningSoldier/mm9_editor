@@ -109,7 +109,7 @@ such as `Trigger hDoor Use`, `Unlock`, or `Open` (see `BASEDOOR.INC` for AI
 door handling), but these two Sturmford examples are explained by their DAT
 properties alone.
 
-Physical-door clone implementation status:
+Legacy physical-door clone compatibility:
 
 - `core/bsp.py` preserves source byte ranges for parsed world-model records, so
   door submodels such as `Door32`, `ChurchdoorR`, and `ChurchdoorL` can be
@@ -124,10 +124,12 @@ Physical-door clone implementation status:
   compatibility through the existing op stack, pending-object index mapping,
   and save-plan `door_clones` metadata. `core/project_io.py` serializes this op in
   `.mm9mod` files.
-- `app/editor.py` exposes the workflow through `Tools -> Clone Physical
-  Door...` and a toolbar `Clone Door...` button. The dialog lists existing
-  physical door links in the active level and suggests a collision-free clone
-  name. After the user confirms, the next BSP click creates the pending clone.
+- Phase 7 retired the `Clone Physical Door` creation command and its dialog.
+  New doors use `Tools -> Import Prefab...`, which supports simple, paired,
+  rotating, and compound authored door assemblies.
+- The `CloneDoorOp` model, materialization, editing, preview, writer, and
+  serializer remain intentionally available for old `.mm9mod` files. Loading an
+  existing project therefore never orphans a cloned controller or BSP model.
 - The level object list displays pending clone objects. Pending clone objects
   can be selected, dragged/elevated, and deleted before save.
 - Pending clone preview is BSP-aware. `LevelEdit.preview_bsp()` appends
@@ -138,13 +140,6 @@ Physical-door clone implementation status:
   required after drag, keyboard nudge/elevate/rotate, or Properties-panel
   `Pos`/`Rotation` edits; otherwise the billboard and physical BSP can drift or
   snap back to the op's previous transform.
-- The clone dialog updates the suggested new name when the source door changes.
-  Numeric and side-suffix paired doors use pair-friendly names, for example
-  `MonsterDoor1` -> `MonsterDoorClone1`/`MonsterDoorClone2` and
-  `StoreDoorLeft` -> `StoreDoorCloneLeft`/`StoreDoorCloneRight`.
-- The clone dialog also shows source details: door class, paired leaf, portal
-  name, and polygon count. This makes it easier to avoid cloning a control door
-  or unexpected portal-linked door.
 - Save preview includes physical door clone counts plus validation warnings.
   The manifest records `door_clones` and `validation_warnings` per DAT write.
 - Current warnings include reused `PortalName`, incomplete clone/controller
@@ -169,122 +164,158 @@ Physical-door clone implementation status:
   original BSP tree.
 
 
-## Converted Prefabs
+## Static Prefabs
 
-Converted DEdit prefab `.dat` files are valid DAT v66 mini-worlds, but they do
-not all have the same shape:
+The shared `C:\lithtech\PreFabs` corpus contains DEdit source `.ed` files
+(version 1249). These sources contain useful objects, brush geometry, names,
+textures, and ownership information, but they are not runtime-compiled BSP.
+The editor's small additive serializer produces polygons for preview/research;
+it does not produce the complete node tree, root, physics block table, and
+other structures required by the MM9 loader. Direct ED brush output is
+therefore **editor preview only** and is blocked by the DAT save planner.
 
-- `PreFabs/Doors/A1_Door.dat` contains one `RotatingDoor` object named
-  `Door1`, plus BSP models named `Door1`, `PhysicsBSP`, and `VisBSP`.
-  The same-name `Door1` BSP model is controller geometry, similar to physical
-  doors in shipped levels.
-- `PreFabs/Fences&Gates/OldWoodFence1.dat` contains no WorldObjects. Its
-  geometry is only in system-named BSP records: `PhysicsBSP` and `VisBSP`, each
-  with 345 polygons and matching bounds.
+The unified `Tools -> Import Prefab...` workspace now chooses among runtime
+representations instead of treating every prefab as new BSP:
 
-`features/prefabs/inspector.py` is the Stage 1 read-only layer for this work. It parses a
-converted prefab DAT, classifies BSP model roles (`geometry`,
+- **Use catalog game model** resolves a brush-shaped prefab such as Bookcase
+  to ranked MM9 `Prop` model/skin variants. The selected stock-style object is
+  materialized from an observed/catalog template and emits no BSP record.
+- **Import DEdit-compiled BSP** accepts only v66 DAT input and validates every
+  selected record for a real node tree/root and physics block table before
+  placement and again before save. Raw compiled records are copied; they are
+  not rebuilt by the editor.
+- **Full behavior** continues to materialize supported runtime object graphs.
+  Object-only ED sources remain supported. Any behavioral ED source with
+  brushes must first be compiled to v66 DAT by DEdit.
+- **ED brush preview only** keeps the recovered mesh visible and editable in
+  the viewport, while the save/install path reports a non-overridable error
+  until the operation is replaced by a game model or compiled DAT.
+
+`features/prefabs/inspector.py` is the Stage 1 read-only layer for this work. It
+dispatches DEdit ED v1249 and compiled DAT v66 files, classifies model roles (`geometry`,
 `controller_geometry`, `physics`, `visibility`, `skybox`), reports object
 classes, bounds, polygon/point/texture counts, and carries BSP parse warnings.
 
-Stage 2 backend import is in place in `features/prefabs/import_static.py` and
-`project.ImportPrefabBspOp`:
+`features/prefabs/resource_backed.py` ranks model candidates only when the
+catalog observed that ABC on `Prop`; inherited actor and unreviewed subclass
+model properties are not accepted. The current implementation promotes `Prop` and
+keeps the exact selected model, skin list, catalog/stock object template, and
+source fingerprint in `ImportResourcePrefabOp`. Because it subclasses the
+normal add operation, move, yaw, properties, delete, undo/redo, project reopen,
+and save use the same existing object workflow. Project format v20 persists
+this provenance and the preview-only flag on legacy BSP operations.
 
-- It imports static BSP records only. It does not yet import prefab
-  WorldObjects, scripts, doors, elevators, triggers, or traps.
-- By default it imports `PhysicsBSP` when a converted prefab only contains the
-  system records `PhysicsBSP`/`VisBSP`. `VisBSP` can carry leaf/PVS payloads
-  that are not safe to splice into another level; `PhysicsBSP` has the plain
-  polygon data we need, and the writer patches it to normal static-submodel
-  flags before insertion.
-- Imported records are renamed with a collision-free target model name, then
-  translated/rotated using the same raw BSP transform machinery as physical
-  door clones. Surface UV projection vectors and point normals are transformed
-  too.
-- `LevelEdit.preview_bsp()` includes pending prefab imports, and saving writes
-  them through the generalized `door_bsp_writer.serialize_world_with_bsp_clones`
-  path. Save preview and `manifest.json` record `prefab_imports` and imported
-  BSP model counts.
-- Stage 3 placement UI is in place through `Tools -> Import Static Prefab
-  BSP...` and the toolbar `Import Prefab...` button. The command validates the
-  converted prefab, asks for a target BSP model name, enters one-shot place
-  mode, and creates an `ImportPrefabBspOp` at the clicked BSP surface. The
-  viewport refreshes through `LevelEdit.preview_bsp()` so the imported static
-  geometry appears before save.
-- Static prefab imports now create a real same-named `WorldObject` controller
-  while pending and on save. This is required for the imported BSP to render in
-  the game.
-- Pending prefab objects can be selected, dragged/elevated, rotated with
-  `[`/`]`, edited through Properties `Pos`/`Rotation`, deleted, and undone.
-  These edits mutate `ImportPrefabBspOp.target_pos` / `target_yaw` and rebuild
-  the BSP preview. The operation remains the source of truth, so the visible
-  object and imported BSP stay together instead of drifting.
-- Stage 4 validation is in place through `features/prefabs/validation.py`.
-  Save Preview and `manifest.json` now report non-blocking warnings when a
-  static import ignores prefab WorldObjects, imports `PhysicsBSP` polygon data
-  as a normal visible submodel, uses source models with `Default` texture
-  names, creates duplicate/colliding BSP names, has empty/no-polygon source
-  models, or imports `VisBSP`.
-- Collision investigation found that shipped blocking helper brushes usually
-  use an `InvisibleBrush` controller paired with a same-named normal
-  `info_flags=2` BSP submodel. In `BOOTCAMP.DAT`, six `InvisibleBrush` rows
-  follow the pattern `Visible=0`, `Solid=1`, `RayHit=1`, `BoxPhysics=0`; most
-  are simple 6-polygon boxes. Imported visible `WorldObject`/BSP pairs render
-  in-game but do not collide by themselves.
-- Stage 1 prefab collision experiment is now opt-in in the import UI. When the
-  user enables it, `ImportPrefabBspOp.collision_mode="box_approx"` adds a
-  second hidden controller/BSP pair named `<PrefabName>_Collision`. The
-  controller is cloned from a real target-level `InvisibleBrush` template, not
-  synthesized from `WorldObject`, so class-specific fields such as
-  `DamagerStuff`, `SurfaceType`, and damage flags are preserved. Its `Pos` is
-  set to the generated collision BSP bounds center.
-- `STURMFORDCITY.DAT` has an existing fence/blocker pattern worth mirroring:
-  long, thin 6-polygon `InvisibleBrush` boxes using `Firethrough.dtx`, often
-  only 8 units thick and 56 units tall. The prefab collision helper now thins
-  the shortest horizontal axis to 8 units instead of using the full visual
-  bounding-box depth.
-- The BSP writer now patches scaled clone bounds, points, polygon centers,
-  planes, point normals, and OPQ texture projection vectors. This is needed
-  because collision/render helpers use internal plane/polygon data, not just
-  min/max bounds. Older `collision_mode="invisible_bsp"` remains supported as
-  a diagnostic fallback that duplicates the prefab geometry instead of using
-  the scaled box.
-- The viewport treats `Firethrough.dtx` as a helper material. It still draws
-  the helper BSP geometry for inspection/selection, but it does not bind the
-  repeated red texture; those triangles fall back to the solid editor BSP
-  colour. This is editor-only and does not alter saved DAT texture data.
-- Stage 2 collision controls are in place in the prefab import flow. The old
-  yes/no prompt is now a small options dialog with modes `box_approx`, `none`,
-  and diagnostic `invisible_bsp`; `box_approx` exposes configurable blocker
-  thickness and defaults to the proven 8-unit Sturmford-style thin box. The
-  selected thickness is stored on `ImportPrefabBspOp.collision_thickness` and
-  persisted in `.mm9mod` format version 6.
-- Preview performance pass 1 is in place for cloned doors and imported
-  prefabs. `door_clone.build_preview_bsp()` and
-  `prefab_import.build_preview_bsp()` now wrap the target BSP shallowly, so
-  unchanged base level `WorldModelMesh` objects keep identity across preview
-  rebuilds. `View3D.reload_level_state()` now asks `MeshCache.retain_models()`
-  to prune only stale preview meshes instead of invalidating every uploaded
-  BSP mesh. This keeps static terrain/building meshes cached while a door or
-  prefab preview submodel moves.
-- Stage 3 multi-segment collision is in place for imported prefab
-  `box_approx` helpers. The import options dialog exposes "Max segment length"
-  (default 512 units). If the generated thin collision box is longer than that
-  along its long horizontal axis, it is split into multiple same-template
-  `InvisibleBrush` BSP segments named `<PrefabName>_Collision1`,
-  `<PrefabName>_Collision2`, etc. Each segment gets its own hidden
-  `InvisibleBrush` WorldObject controller, and the segment length is persisted
-  as `ImportPrefabBspOp.collision_segment_length` in `.mm9mod` format version
-  7.
-- Helper BSP preview is in place under `View -> Helper BSP`. `Normal` hides
-  helper materials while rendering real art and water substitutes; `Helpers
-  translucent` draws selected helper roles as colour-coded translucent
-  overlays. Role toggles cover AI rails, collision/firethrough, water volumes,
-  triggers, sound, and sky/visibility helpers.
-- Stage 5 save-time validation now warns when a static prefab import has
-  visible geometry but no collision helper, and checks generated
-  `collision_box` helpers for suspicious dimensions: extremely thin brushes,
-  very tall brushes, or extreme aspect ratios.
+The old generated thin-box collision choice remains readable for old projects
+and available to low-level preview tests, but is disabled in the workspace and
+blocked at save. A runtime-safe collision helper must come from authored,
+validated compiled `PhysicsBSP` data (or be omitted). Helper BSP viewport
+controls remain under `View -> Helper BSP` and do not alter saved data.
+
+The full design and remaining compiled-assembly/catalog-index work is tracked
+in [Runtime-Backed Prefab Import Implementation Plan](resource_backed_prefab_import_plan.md).
+
+The staged design for object-only and behavioral prefab support is documented
+in [Complete Prefab Import Implementation Plan](prefab_import_plan.md).
+Compiled-BSP mode remains available beside the capability-gated behavioral and
+model-backed paths; unsupported behavior never falls back to installable
+preview BSP.
+
+Behavioral-plan Phase 1 is implemented as a fail-closed planning layer. The
+workspace analyzes ED/DAT sources off the Tk thread, caches results by source
+path/size/mtime, and shows independent static/behavioral states plus brush
+ownership, links, resource dependencies, and stable diagnostics. Canonical
+`PrefabGraph` and behavioral plan records retain typed source properties,
+deterministic namespaces, internal link rewrites, external bindings, dependency
+decisions, and explicit spatial semantics. Project format v15 introduced
+`ImportBehavioralPrefabOp`, including its source fingerprint and decisions;
+unsupported capabilities still refuse to create a partial assembly.
+
+The Phase 3-7 ownership/link/controller policies below still describe what the
+editor can analyze and preview. After the runtime-BSP safety update, an ED
+behavioral graph that owns brushes is not installable directly: the same source
+must be DEdit-compiled to v66 DAT so those owned records can be copied and
+semantically validated. Object-only ED graphs are unaffected.
+
+Object-only Phase 2 promotes `Prop`, `DestructableProp`, `DirLight`, `Light`,
+and `WallTorch` sources with no brush geometry. The importer creates every
+object from its object.lto catalog template, overlays type-compatible ED
+values, retains MM9-only defaults, transforms the assembly as one unit, and
+persists the templates and per-object edits in project format v16. Known
+obsolete DEdit fields are diagnosed explicitly. Model, skin, texture, sound,
+and script dependencies are checked before placement. Eight authored
+object-only prefabs are supported. `shopkeeper.ed` now has a reviewed
+`PropAnim.scr` pass-through policy, but remains action-required on a stock MM9
+install because its model and skin resources are absent; those dependencies
+are reported before placement.
+
+Passive-mixed Phase 3 adds recursive ED v1249 hierarchy parsing, so brush
+ownership comes from the authored object parent and brush index rather than
+names or flat record order. It promotes passive `WorldObject`, light, ambient
+sound, fire, water, ladder, sky, prop, and unlinked teleporter families. Owned
+BSP is compiled as a same-named controller model; unowned brushes are combined
+only within the same geometry/helper role and receive a catalog-backed
+`WorldObject` controller. The same placement pivot and yaw transform objects
+and every BSP group. Preview and DAT save consume the same atomic plan, and
+water/ladder/marker geometry follows the existing Helper BSP visibility rules.
+Linked teleporter assemblies remain gated for the linked-graph phase.
+
+Simple-moving Phase 4 promotes a single owned `Door`, `RotatingDoor`,
+`RotatingBrush`, or `Lift` controller when the source has no live links,
+portals, scripts, paired leaf, or second moving controller. Its controller and
+same-named BSP are placed, previewed, edited, undone, and saved atomically.
+Placement yaw rotates `MoveDir` and absolute point properties while leaving
+behavior-local `RotationAngles` unchanged; the engine's zero `SoundPos`
+sentinel is preserved. Legacy ED pivots that remained in the original level's
+coordinate space are detected from their distance to the owned BSP and safely
+rebased to the controller position with a warning. Portal-backed doors,
+elevators/gears, linked traps, and all other compound graphs are handled by
+Phase 5.
+
+Linked-graph Phase 5 promotes `Trigger` and `Switch` and permits links among
+all Phase 2-4 classes. Internal `AttachTo`, double-door, trigger-target,
+teleporter, and similar references are rewritten into the imported root
+namespace. External object bindings are collected in the import workspace and
+validated against the target level during placement and save planning. The
+same prefab can therefore be imported twice without cross-linking its copies.
+Project format v17 records behavioral-assembly removal as an undoable
+tombstone, so the complete graph remains one atomic delete/undo operation.
+
+DEdit portal brushes are VisBSP/PVS compiler inputs, not additive world
+models. They are deliberately excluded from the BSP import. Each `PortalName`
+must instead bind to a user portal already compiled into the target VisBSP, or
+the user must explicitly choose `<omit>` to clear that property. The importer
+does not pretend that a standalone portal brush can reproduce the original
+compiler's visibility graph.
+
+Hazard/script Phase 6 promotes `DestructableBrush`, `PropDamager`, and
+`Shooter` in addition to the earlier `DestructableProp`. Owned destructible BSP
+is kept as one same-named controller model, and damage/death trigger links use
+the Phase-5 namespace and target validation. The legacy shooter-only
+`ProjectileType=2` field is accepted only at its shipped default and retains
+the MM9 `object.lto` template's explicit `ProjectileName=FireBolt`; other enum
+values fail closed instead of being guessed.
+
+Script support is deliberately allowlisted. `PropAnim.scr` was verified to use
+only `ScriptParams` and is preserved. `tocatta.scr`, `rondo.scr`, and
+`diesirae.scr` use literal `GetObjectHandle` names; the importer parses those
+lookups, rewrites internal Pipe Organ note targets, requests explicit bindings
+for the external `Bell1`-`Bell5` objects, and gives every import unique script
+copies. Project format v18 stores the reviewed source snapshot and generated
+scripts. Saving adds them to a complete staged `SCRIPTS.REZ`; the original game
+archive is not modified. Any unreviewed script, changed lookup shape, missing
+script source, unresolved binding, or missing resource remains blocked.
+
+Corpus-closure Phase 7 promotes behavioral import out of its experimental gate
+and bumps project persistence to format v19. The explicit
+`tools/audit_prefab_corpus.py` release audit parses and plans all 171 authored
+prefabs twice for determinism, materializes every behavioral plan, checks links
+and dependencies, and compiles a representative BSP set against a real target
+level. The current closure result is 75 `Static ready`, 51 `Behavioral ready`,
+45 `Action required`, and zero failures. Door-specific parity checks require
+every moving controller to retain a same-named owned BSP and require all paired
+and trigger targets to resolve. New door creation now uses the unified prefab
+workspace; the former clone command is gone, while legacy `CloneDoorOp` project
+records continue to load and save.
 
 
 ## Save Game Files

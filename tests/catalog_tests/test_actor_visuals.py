@@ -8,7 +8,12 @@ import mm9_patch as patcher
 
 import catalog
 from catalog.actor_visuals import object_actor_keys, parse_actor_visual_tables, resolve_actor_visual
-from view3d.gl_object_models import _civilian_appearance_key, _civilian_preview_model
+from view3d.gl_object_models import (
+    _civilian_appearance_key,
+    _civilian_preview_model,
+    _object_model_filename,
+    _object_skin_names,
+)
 
 
 TABLE_HEADER = (
@@ -46,6 +51,79 @@ class ActorVisualTests(unittest.TestCase):
         self.assertIsNotNone(visual)
         self.assertEqual(visual.model, "models\\PeasantM2.abc")
         self.assertEqual(visual.skins, ("skins\\PeasantM2a.dtx",))
+
+    def test_compressed_human1_civilian_class_resolves_actor_visual(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "29\tCommoner\tPeasantF1.abc\tPeasantF1b.dtx\t\t\tPeasant Human1 FemaleA A\n"
+                + "30\tCommoner\tPeasantF4.abc\tPeasantF4a.dtx\t\t\tPeasant Human1 FemaleA B\n",
+            ),
+        ])
+
+        visual_a = resolve_actor_visual(
+            visuals, "CommonerHumanFemaleA", "Prop28")
+        visual_b = resolve_actor_visual(
+            visuals, "CommonerHumanFemaleB", "CommonerHumanFemaleB0")
+
+        self.assertIsNotNone(visual_a)
+        self.assertEqual(visual_a.number, "29")
+        self.assertEqual(visual_a.model, "models\\PeasantF1.abc")
+        self.assertEqual(visual_a.skins, ("skins\\PeasantF1b.dtx",))
+        self.assertIsNotNone(visual_b)
+        self.assertEqual(visual_b.number, "30")
+
+    def test_guberland_prop28_uses_actor_visual_not_tree_fallback(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "29\tCommoner\tPeasantF1.abc\tPeasantF1b.dtx\t\t\tPeasant Human1 FemaleA A\n",
+            ),
+        ])
+        obj = patcher.WorldObject("CommonerHumanFemaleA", [
+            patcher.Property("Name", 0, 0, "Prop28"),
+            patcher.Property(
+                "Filename", 0, 0,
+                "models/props/PlantsandTrees/Tree04.abc",
+            ),
+        ])
+
+        self.assertEqual(
+            _object_model_filename(obj, visuals),
+            "models\\PeasantF1.abc",
+        )
+        self.assertEqual(
+            _object_skin_names(obj, visuals),
+            ["skins\\PeasantF1b.dtx"],
+        )
+
+    def test_civilian_role_and_variant_choose_exact_actor_row(self):
+        visuals = parse_actor_visual_tables([
+            (
+                "MONSTERS.TXT",
+                TABLE_HEADER
+                + "3\tTown\tPeasantDF4.abc\tPeasantDF4b.dtx\t\t\tPeasant Dwarf FemaleB A\n"
+                + "4\tTown\tPeasantDF3.abc\tPeasantDF3a.dtx\t\t\tPeasant Dwarf FemaleB B\n"
+                + "63\tShopkeeper\tPeasantHOF1.ABC\tPeasantHOF1b.dtx\t\t\tPeasant Half-Orc Female C\n"
+                + "74\tTownsfolk Child\tPeasantGirl1e.ABC\tPeasantgirl1.dtx\t\t\tPeasant Elf Child B\n",
+            ),
+        ])
+
+        town = resolve_actor_visual(
+            visuals, "TownDwarfFemaleB", "TownDwarfFemaleB0")
+        half_orc = resolve_actor_visual(
+            visuals, "ShopKeeperHalfOrcFemaleA", "ShopKeeperHalfOrcFemaleA0")
+        child = resolve_actor_visual(
+            visuals, "TownsfolkChildElfChildA", "TownsfolkChildElfChildA0")
+
+        self.assertIsNotNone(town)
+        self.assertEqual(town.number, "4")
+        self.assertIsNotNone(half_orc)
+        self.assertEqual(half_orc.number, "63")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.number, "74")
 
     def test_monsters_table_overrides_actor_placeholders(self):
         visuals = parse_actor_visual_tables([
@@ -297,12 +375,15 @@ class ActorVisualTests(unittest.TestCase):
 
     def test_class_name_takes_priority_over_misleading_object_name_in_lookup(self):
         """object_actor_keys must try the class before the object name."""
-        # Class first → dwarf-male key; elf-female key is only the fallback.
+        # Canonical class key first; object-name keys remain fallbacks.
         keys = object_actor_keys("ShopkeeperDwarfMaleA", "ShopkeeperElfFemaleA1")
-        self.assertEqual(keys[0], "shopkeeperdwarfmalea",
-                         "class key must be the first lookup candidate")
-        self.assertEqual(keys[1], "shopkeeperelffemalea",
-                         "object-name key must be the second (fallback) candidate")
+        self.assertEqual(keys[0], "shopkeeperdwarfmaleca",
+                         "canonical class key must be the first lookup candidate")
+        self.assertLess(
+            keys.index("shopkeeperdwarfmalea"),
+            keys.index("shopkeeperelffemaleca"),
+            "all class keys must precede object-name fallback keys",
+        )
 
     def test_appearance_key_prefers_class_over_misleading_object_name(self):
         """_civilian_appearance_key must return the class, not the wrong name."""

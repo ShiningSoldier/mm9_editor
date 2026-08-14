@@ -2,7 +2,7 @@
 prefab_inspector.py
 ===================
 
-Read-only inspection for converted DEdit prefab DAT files.
+Read-only inspection for DEdit source prefabs and converted prefab DAT files.
 
 Converted prefabs are valid LithTech v66 mini-worlds.  Some contain only BSP
 records, while door-like prefabs can also contain controller WorldObjects.  The
@@ -12,12 +12,14 @@ inspector keeps this analysis separate from any future import/mutation path.
 from __future__ import annotations
 
 import os
+import struct
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import _path_setup  # noqa: F401
 from core import bsp
+from features.dat_editing import legacy_ed
 import mm9_patch as patcher
 
 
@@ -32,6 +34,7 @@ class PrefabObjectInfo:
     class_name: str
     name: str = ""
     prop_count: int = 0
+    position: Optional[Vec3] = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,8 @@ class PrefabInspection:
     parse_warnings: List[str] = field(default_factory=list)
     bounds_min: Optional[Vec3] = None
     bounds_max: Optional[Vec3] = None
+    source_format: str = "compiled_dat"
+    has_authored_collision: bool = False
 
     @property
     def object_classes(self) -> Dict[str, int]:
@@ -84,11 +89,35 @@ class PrefabInspection:
     def has_only_system_geometry(self) -> bool:
         return bool(self.models) and all(model.is_system for model in self.models)
 
+    @property
+    def behavior_objects(self) -> List[PrefabObjectInfo]:
+        """Source objects whose runtime behavior a static import cannot retain."""
+        source_only_classes = {"brush", "worldproperties"}
+        return [
+            obj for obj in self.objects
+            if str(obj.class_name or "").strip().lower() not in source_only_classes
+        ]
+
+    @property
+    def behavior_object_classes(self) -> Dict[str, int]:
+        return dict(Counter(obj.class_name for obj in self.behavior_objects))
+
 
 def inspect_prefab(path: str) -> PrefabInspection:
-    """Parse *path* as a converted prefab DAT and return a compact summary."""
+    """Parse *path* as a compiled DAT or legacy DEdit ED prefab."""
     with open(path, "rb") as f:
         data = f.read()
+
+    if len(data) < 4:
+        raise ValueError(f"prefab file is too short: {path}")
+    version = struct.unpack_from("<I", data, 0)[0]
+    if version == legacy_ed.LEGACY_ED_VERSION:
+        return _inspect_legacy_ed(path, data)
+    if version != 66:
+        raise ValueError(
+            f"unsupported prefab version {version}; expected a compiled DAT "
+            f"(version 66) or DEdit source prefab (version {legacy_ed.LEGACY_ED_VERSION})"
+        )
 
     header = patcher.Header.parse(data)
     world = patcher.World.load(path)
@@ -100,6 +129,7 @@ def inspect_prefab(path: str) -> PrefabInspection:
             class_name=obj.type_str,
             name=str(obj.get("Name") or ""),
             prop_count=len(obj.props),
+            position=_optional_vec3(obj.get("Pos")),
         )
         for index, obj in enumerate(world.objects)
     ]
@@ -135,6 +165,76 @@ def inspect_prefab(path: str) -> PrefabInspection:
         parse_warnings=list(bsp_world.parse_warnings),
         bounds_min=bounds_min,
         bounds_max=bounds_max,
+        source_format="compiled_dat",
+        has_authored_collision=any(model.role == "physics" for model in models),
+    )
+
+
+def _inspect_legacy_ed(path: str, data: bytes) -> PrefabInspection:
+    analysis = legacy_ed.analyze_legacy_ed_bytes(data, source_path=os.path.abspath(path))
+    scene = analysis.geometry_scene
+    scan = analysis.object_scan
+    brush_names = list(analysis.node_layout.brush_names)
+    brush_records = [record for record in scan.records if record.class_name.lower() == "brush"]
+
+    objects = [
+        PrefabObjectInfo(
+            index=index,
+            class_name=record.class_name,
+            name=str(record.property_value("Name") or ""),
+            prop_count=len(record.properties),
+            position=_optional_vec3(record.property_value("Pos")),
+        )
+        for index, record in enumerate(scan.records)
+    ]
+    models: List[PrefabModelInfo] = []
+    for index, model in enumerate(scene.mesh_models()):
+        min_box, max_box = _point_bounds(model.points)
+        source_record = brush_records[index] if index < len(brush_records) else None
+        invisible = bool(source_record and source_record.property_value("Invisible", False))
+        name = (
+            brush_names[index]
+            if index < len(brush_names) and str(brush_names[index] or "").strip()
+            else model.name
+        )
+        models.append(PrefabModelInfo(
+            index=index,
+            name=str(name),
+            role="hidden_geometry" if invisible else "geometry",
+            polygon_count=len(model.faces),
+            point_count=len(model.points),
+            texture_count=len({face.material_name for face in model.faces}),
+            min_box=min_box,
+            max_box=max_box,
+        ))
+    bounds_min, bounds_max = _combined_bounds(
+        (model.min_box, model.max_box)
+        for model in models
+        if model.role == "geometry"
+    )
+    warnings: List[str] = []
+    if not models and objects:
+        warnings.append(
+            "This source prefab contains object/resource references but no static brush geometry."
+        )
+    return PrefabInspection(
+        path=os.path.abspath(path),
+        file_size=len(data),
+        version=analysis.object_scan.version,
+        object_data_pos=0,
+        render_data_pos=0,
+        object_count=len(objects),
+        model_count=len(models),
+        objects=objects,
+        models=models,
+        parse_warnings=warnings,
+        bounds_min=bounds_min,
+        bounds_max=bounds_max,
+        source_format="legacy_ed",
+        has_authored_collision=any(
+            bool(record.property_value("Solid", False))
+            for record in brush_records
+        ),
     )
 
 
@@ -155,10 +255,20 @@ def classify_model(model: bsp.WorldModelMesh, objects: Iterable[PrefabObjectInfo
     return "geometry"
 
 
+def _optional_vec3(value: object) -> Optional[Vec3]:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    try:
+        return (float(value[0]), float(value[1]), float(value[2]))
+    except (TypeError, ValueError):
+        return None
+
+
 def format_report(info: PrefabInspection, max_models: int = 12, max_objects: int = 12) -> str:
     """Format a human-readable inspector report for UI dialogs and logs."""
     lines: List[str] = []
     lines.append(f"Prefab: {info.path}")
+    lines.append(f"Source format: {info.source_format}")
     lines.append(f"Version: {info.version}")
     lines.append(f"Size: {info.file_size} bytes")
     lines.append(f"Objects: {info.object_count}")
@@ -218,6 +328,16 @@ def _combined_bounds(bounds: Iterable[Tuple[Vec3, Vec3]]) -> Tuple[Optional[Vec3
     return (mins[0], mins[1], mins[2]), (maxs[0], maxs[1], maxs[2])
 
 
+def _point_bounds(points: Iterable[Vec3]) -> Tuple[Vec3, Vec3]:
+    values = list(points)
+    if not values:
+        return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+    return (
+        tuple(min(float(point[axis]) for point in values) for axis in range(3)),
+        tuple(max(float(point[axis]) for point in values) for axis in range(3)),
+    )  # type: ignore[return-value]
+
+
 def _fmt_vec(vec: Vec3) -> str:
     return f"({vec[0]:.1f}, {vec[1]:.1f}, {vec[2]:.1f})"
 
@@ -229,8 +349,8 @@ def _fmt_counts(counts: Dict[str, int]) -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Inspect converted MM9 prefab DAT files")
-    parser.add_argument("path", nargs="+", help="one or more converted prefab .DAT files")
+    parser = argparse.ArgumentParser(description="Inspect MM9 DEdit ED or compiled DAT prefabs")
+    parser.add_argument("path", nargs="+", help="one or more prefab .ED/.DAT files")
     args = parser.parse_args(argv)
 
     for index, path in enumerate(args.path):

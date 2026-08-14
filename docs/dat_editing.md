@@ -23,10 +23,14 @@ opens in DEDit, or compiles is not enough.
 
 The Tools menu is intentionally small:
 
-- `Clone Physical Door...`
-- `Import Static Prefab BSP...`
+- `Import Prefab...`
 - `Generate DEDit ED from DAT...`
 - `Export DAT Geometry as glTF for Inspection...`
+
+New physical doors are imported from authored prefabs through `Import Prefab`.
+The former same-level `Clone Physical Door` command was retired after the
+behavioral importer reached controller/BSP parity. Existing `.mm9mod` projects
+that contain `CloneDoorOp` records remain loadable, editable, and saveable.
 
 Special validation profiles still exist as internal/test hooks, but they should
 not be added back to the menu unless they become stable user workflows.

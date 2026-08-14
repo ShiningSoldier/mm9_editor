@@ -33,12 +33,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
 import struct
 import sys
 import tempfile
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 EDITOR_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,18 +55,19 @@ from core import autodetect
 from core import project as P
 from core import project_io
 from core.game_resources import GameResources
-from features.doors import clone as door_clone
-from features.doors import links as door_links
 from features.dat_editing import compiler_strategy as dat_compiler_strategy
 from features.dat_editing import gltf_export as dat_gltf_export
 from features.dat_editing import legacy_ed as dat_legacy_ed
 from features.dat_editing import terrain_reconstruction
 from features.dat_editing import terrain_semantics
 from features.prefabs import import_static as prefab_import
+from features.prefabs import behavioral as prefab_behavioral
 from features.prefabs import inspector as prefab_inspector
+from features.prefabs import resource_backed as prefab_resources
 from catalog import (
     DEFAULT_LOMM_CATALOG_PATH,
     build_catalog_from_rez,
+    class_template_from_catalog,
     ensure_lomm_catalog,
     load_catalog,
     save_catalog,
@@ -73,6 +76,7 @@ from features.presets.manager import PresetStore
 
 # These imports pull in tkinter; they're deferred to _import_gui() below.
 CatalogPanel = PropertiesPanel = SaveDialog = LommConversionDialog = None  # type: ignore
+PrefabImportWorkspace = None  # type: ignore
 View3D = None          # type: ignore
 OPENGL_AVAILABLE = False
 _view3d_missing: list = []   # packages still needed; populated by _import_gui()
@@ -87,109 +91,117 @@ DAT_TO_ED_TERRAIN_SUPPORT_SELECTION_MODE_BY_LEVEL = {
 }
 
 
-def _ask_prefab_collision_options(parent, title: str = "Prefab Collision") -> Optional[Dict[str, Any]]:
-    """Return collision import options, or None if the user cancels."""
-    win = tk.Toplevel(parent)
-    win.title(title)
-    win.configure(bg="#11151c")
-    win.resizable(False, False)
-    win.transient(parent)
-    win.grab_set()
+def _maximize_window(root) -> None:
+    """Start with a maximized normal window, with portable fallbacks."""
+    try:
+        root.state("zoomed")
+        return
+    except Exception:
+        pass
+    try:
+        root.attributes("-zoomed", True)
+        return
+    except Exception:
+        pass
+    try:
+        root.geometry(
+            f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0"
+        )
+    except Exception:
+        pass
 
-    result: Dict[str, Any] = {}
-    mode_var = tk.StringVar(value="box_approx")
-    thickness_var = tk.StringVar(value="8")
-    segment_var = tk.StringVar(value="512")
 
-    outer = tk.Frame(win, bg="#11151c")
-    outer.pack(fill="both", expand=True, padx=14, pady=12)
+class _LoadingOverlay:
+    """Single reusable modal loading indicator over the editor window."""
 
-    tk.Label(
-        outer,
-        text="Collision helper",
-        bg="#11151c",
-        fg="#dde3ea",
-        font=("Segoe UI", 10, "bold"),
-    ).pack(anchor="w")
+    _FRAME_MS = 80
 
-    options = []
-    if "mesh" in str(title or "").lower():
-        options.append(("Per-face InvisibleBrush slabs", "face_slabs"))
-    options.extend([
-        ("Thin InvisibleBrush box (recommended)", "box_approx"),
-        ("No collision helper", "none"),
-        ("Duplicate prefab geometry (diagnostic)", "invisible_bsp"),
-    ])
-    for label, value in options:
-        tk.Radiobutton(
-            outer,
-            text=label,
-            value=value,
-            variable=mode_var,
-            bg="#11151c",
-            fg="#dde3ea",
-            selectcolor="#23272d",
-            activebackground="#11151c",
-            activeforeground="#ffffff",
-            anchor="w",
-        ).pack(anchor="w", pady=(8 if value == "face_slabs" else 2, 0))
+    def __init__(self, parent) -> None:
+        self.parent = parent
+        self._after_id = None
+        self._angle = 0
+        self.frame = tk.Frame(parent, bg="#0e1116", cursor="watch")
+        panel = tk.Frame(
+            self.frame,
+            bg="#181d24",
+            highlightbackground="#354252",
+            highlightthickness=1,
+            padx=34,
+            pady=24,
+        )
+        panel.place(relx=0.5, rely=0.5, anchor="center")
+        self.canvas = tk.Canvas(
+            panel,
+            width=38,
+            height=38,
+            bg="#181d24",
+            highlightthickness=0,
+        )
+        self.canvas.pack(side="left", padx=(0, 14))
+        self.arc = self.canvas.create_arc(
+            5,
+            5,
+            33,
+            33,
+            start=0,
+            extent=255,
+            style="arc",
+            outline="#55a7e5",
+            width=4,
+        )
+        tk.Label(
+            panel,
+            text="Loading...",
+            bg="#181d24",
+            fg="#f1f4f8",
+            font=("Segoe UI", 13),
+        ).pack(side="left")
 
-    row = tk.Frame(outer, bg="#11151c")
-    row.pack(fill="x", pady=(12, 0))
-    tk.Label(row, text="Box thickness", bg="#11151c", fg="#aeb7c2").pack(side="left")
-    entry = tk.Entry(row, textvariable=thickness_var, width=8, bg="#1b2028", fg="#dde3ea", insertbackground="#dde3ea")
-    entry.pack(side="left", padx=(10, 4))
-    tk.Label(row, text="units", bg="#11151c", fg="#aeb7c2").pack(side="left")
+        # Consume input while a level is changing underneath the overlay.
+        for sequence in ("<Button>", "<ButtonRelease>", "<Motion>", "<Key>"):
+            self.frame.bind(sequence, lambda _event: "break")
 
-    segment_row = tk.Frame(outer, bg="#11151c")
-    segment_row.pack(fill="x", pady=(8, 0))
-    tk.Label(segment_row, text="Max segment length", bg="#11151c", fg="#aeb7c2").pack(side="left")
-    segment_entry = tk.Entry(segment_row, textvariable=segment_var, width=8, bg="#1b2028", fg="#dde3ea", insertbackground="#dde3ea")
-    segment_entry.pack(side="left", padx=(10, 4))
-    tk.Label(segment_row, text="units", bg="#11151c", fg="#aeb7c2").pack(side="left")
-
-    def _sync_state(*_args) -> None:
-        state = "normal" if mode_var.get() in {"box_approx", "face_slabs"} else "disabled"
-        entry.configure(state=state)
-        segment_entry.configure(state=state)
-
-    mode_var.trace_add("write", _sync_state)
-    _sync_state()
-
-    buttons = tk.Frame(outer, bg="#11151c")
-    buttons.pack(fill="x", pady=(14, 0))
-
-    def _ok() -> None:
+    def show(self) -> None:
+        self.frame.place(x=0, y=0, relwidth=1, relheight=1)
+        self.frame.lift()
         try:
-            thickness = float(thickness_var.get())
-        except ValueError:
-            messagebox.showerror("Prefab collision", "Box thickness must be a number.", parent=win)
-            return
+            self.frame.focus_set()
+        except Exception:
+            pass
+        self._animate()
+        # Paint before synchronous GL/model work starts on Tk's UI thread.
         try:
-            segment_length = float(segment_var.get())
-        except ValueError:
-            messagebox.showerror("Prefab collision", "Max segment length must be a number.", parent=win)
-            return
-        if thickness < 1.0 or thickness > 512.0:
-            messagebox.showerror("Prefab collision", "Box thickness must be between 1 and 512.", parent=win)
-            return
-        if segment_length < 64.0 or segment_length > 8192.0:
-            messagebox.showerror("Prefab collision", "Max segment length must be between 64 and 8192.", parent=win)
-            return
-        result["collision_mode"] = mode_var.get()
-        result["collision_thickness"] = thickness
-        result["collision_segment_length"] = segment_length
-        win.destroy()
+            self.parent.update_idletasks()
+        except Exception:
+            pass
 
-    def _cancel() -> None:
-        win.destroy()
+    def _animate(self) -> None:
+        self.pulse()
+        try:
+            self._after_id = self.parent.after(self._FRAME_MS, self._animate)
+        except Exception:
+            self._after_id = None
 
-    tk.Button(buttons, text="Cancel", command=_cancel).pack(side="right", padx=(8, 0))
-    tk.Button(buttons, text="OK", command=_ok).pack(side="right")
+    def pulse(self) -> None:
+        """Advance and paint once between synchronous loading stages."""
+        self._angle = (self._angle - 30) % 360
+        try:
+            self.canvas.itemconfigure(self.arc, start=self._angle)
+            self.parent.update_idletasks()
+        except Exception:
+            pass
 
-    win.protocol("WM_DELETE_WINDOW", _cancel)
-    parent.wait_window(win)
-    return result or None
+    def hide(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.parent.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+        try:
+            self.frame.place_forget()
+        except Exception:
+            pass
 
 
 def _import_gui():
@@ -197,7 +209,7 @@ def _import_gui():
     validation passes, so console errors don't get masked by missing-Tk."""
     global tk, CatalogPanel, PropertiesPanel, SaveDialog, LommConversionDialog
     global filedialog, messagebox, simpledialog, ttk
-    global EditPresetDialog, ManagePresetsDialog
+    global EditPresetDialog, ManagePresetsDialog, PrefabImportWorkspace
     global View3D, OPENGL_AVAILABLE, _view3d_missing
     import tkinter as _tk
     from tkinter import filedialog as _fd, messagebox as _mb, simpledialog as _sd, ttk as _ttk
@@ -206,10 +218,12 @@ def _import_gui():
     from ui.diff_panel import SaveDialog as _SD
     from ui.preset_dialog import EditPresetDialog as _EPD, ManagePresetsDialog as _MPD
     from ui.lomm_conversion_dialog import LommConversionDialog as _LCD
+    from ui.prefab_import_workspace import PrefabImportWorkspace as _PIW
     tk = _tk
     filedialog = _fd; messagebox = _mb; simpledialog = _sd; ttk = _ttk
     CatalogPanel = _CP; PropertiesPanel = _PP; SaveDialog = _SD
     LommConversionDialog = _LCD
+    PrefabImportWorkspace = _PIW
     EditPresetDialog = _EPD; ManagePresetsDialog = _MPD
     try:
         from view3d import View3D as _V3D, OPENGL_AVAILABLE as _OGL
@@ -245,6 +259,9 @@ class EditorApp:
 
         self.project = P.Project(
             rude_rez_path = paths.archive_path("rude") if paths.has_archive("rude") else None,
+            scripts_rez_path = (
+                paths.archive_path("scripts") if paths.has_archive("scripts") else None
+            ),
             work_dir    = getattr(paths, "work_dir",    None),
             backup_root = getattr(paths, "backup_root", None),
         )
@@ -265,10 +282,12 @@ class EditorApp:
         root.title("MM9 Mod Editor")
         root.configure(bg="#0e1116")
         root.geometry("1500x900")
+        _maximize_window(root)
         self._selected_world_index: Optional[int] = None
 
         self._build_menu()
         self._build_layout()
+        self._loading_overlay = _LoadingOverlay(root)
         self._build_bindings()
 
     # ---------- layout ----------
@@ -363,9 +382,7 @@ class EditorApp:
 
         m_tools = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=m_tools)
-        m_tools.add_command(label="Clone Physical Door...",
-                            command=self.cmd_clone_physical_door)
-        m_tools.add_command(label="Import Static Prefab BSP...",
+        m_tools.add_command(label="Import Prefab...",
                             command=self.cmd_import_static_prefab_bsp)
         m_tools.add_separator()
         m_tools.add_command(label="Generate DEDit ED from DAT...",
@@ -527,6 +544,30 @@ class EditorApp:
             settings = {}
             self.editor_settings = settings
         settings["last_lomm_root"] = os.path.abspath(value)
+        self._save_editor_settings()
+
+    def _prefab_browser_root(self) -> str:
+        settings = getattr(self, "editor_settings", {}) or {}
+        remembered = str(settings.get("last_prefab_root") or "")
+        if remembered and os.path.isdir(remembered):
+            return remembered
+        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
+        candidates = (
+            os.path.abspath(os.path.join(editor_dir, os.pardir, "PreFabs")),
+            os.path.join(editor_dir, "mm9_data", "PreFabs"),
+            editor_dir,
+        )
+        return next((path for path in candidates if os.path.isdir(path)), editor_dir)
+
+    def _remember_prefab_root(self, prefab_root: str) -> None:
+        value = str(prefab_root or "").strip()
+        if not value or not os.path.isdir(value):
+            return
+        settings = getattr(self, "editor_settings", None)
+        if not isinstance(settings, dict):
+            settings = {}
+            self.editor_settings = settings
+        settings["last_prefab_root"] = os.path.abspath(value)
         self._save_editor_settings()
 
     def _on_3d_object_selected(self, world_index: int) -> None:
@@ -920,16 +961,55 @@ class EditorApp:
                 return
 
     def _set_active(self, L: P.LevelEdit) -> None:
-        self.active = L
-        self._selected_world_index = None
-        if self.view3d:
-            self._update_view_assets_for_level(L)
-            self.view3d.set_active_level(L)
-        self.level_panel.set_active_level(L)
-        self.props_panel.show(None)
-        self._update_history_menu()
-        if self.view3d:
-            self.root.after_idle(self.view3d.focus_for_input)
+        profile_load = os.environ.get("MM9_EDITOR_PROFILE_LOAD") == "1"
+        load_started = time.perf_counter()
+        load_stages = []
+
+        def _mark(name: str, started: float) -> None:
+            if profile_load:
+                load_stages.append((name, time.perf_counter() - started))
+
+        loading = getattr(self, "_loading_overlay", None)
+        if loading is not None:
+            loading.show()
+        try:
+            self.active = L
+            self._selected_world_index = None
+            if self.view3d:
+                stage_started = time.perf_counter()
+                self._update_view_assets_for_level(L)
+                _mark("assets", stage_started)
+                if loading is not None:
+                    loading.pulse()
+                stage_started = time.perf_counter()
+                self.view3d.set_active_level(L)
+                _mark("view3d", stage_started)
+                if loading is not None:
+                    loading.pulse()
+            stage_started = time.perf_counter()
+            self.level_panel.set_active_level(L)
+            _mark("object_panel", stage_started)
+            if loading is not None:
+                loading.pulse()
+            self.props_panel.show(None)
+            self._update_history_menu()
+            if self.view3d:
+                self.root.after_idle(self.view3d.focus_for_input)
+        finally:
+            if loading is not None:
+                loading.hide()
+            if profile_load:
+                total = time.perf_counter() - load_started
+                parts = [f"total={total:.3f}s"]
+                parts.extend(
+                    f"{name}={duration:.3f}s"
+                    for name, duration in load_stages
+                )
+                label = L.display_name or L.rez_vpath or L.path
+                print(
+                    f"[editor load] {label}  " + "  ".join(parts),
+                    file=sys.stderr,
+                )
 
     def _on_object_selected(self, world_index: int,
                             obj: Optional[patcher.WorldObject]) -> None:
@@ -1028,86 +1108,6 @@ class EditorApp:
         self._pending_kind = "preset"
         self._pending_preset = preset
         self._pending_rude_config = None
-        if self.view3d is not None:
-            self.view3d.set_place_mode(True)
-
-    def cmd_clone_physical_door(self) -> None:
-        if not getattr(self, "active", None):
-            messagebox.showwarning("No level", "Open a level from WORLDS.REZ first.")
-            return
-        L = self.active
-        bsp_world = L.get_bsp()
-        if bsp_world is None:
-            messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
-            return
-        links = door_links.build_physical_door_links(L.world.objects, bsp_world)
-        if not links:
-            messagebox.showinfo(
-                "No physical doors",
-                "No Door or RotatingDoor objects with matching BSP submodels were found in this level.",
-            )
-            return
-
-        selected = ""
-        selected_idx = getattr(self, "_selected_world_index", None)
-        if selected_idx is not None:
-            mat = L.materialize()
-            if 0 <= selected_idx < len(mat.objects):
-                obj = mat.objects[selected_idx]
-                if door_links.find_physical_door_link(L.world.objects, bsp_world, obj.get("Name") or ""):
-                    selected = obj.get("Name") or ""
-        if not selected:
-            selected = links[0].name
-
-        links_by_name = {link.name.lower(): link for link in links}
-        def _suggest_door_name(name: str) -> str:
-            link = links_by_name.get(str(name or "").lower())
-            return door_clone.suggest_clone_name(
-                L.materialize().objects,
-                bsp_world,
-                name,
-                pair_name=link.pair_name if link else "",
-            )
-
-        def _describe_door_source(name: str) -> str:
-            link = links_by_name.get(str(name or "").lower())
-            if link is None:
-                return ""
-            parts = [link.class_name]
-            if link.pair_name:
-                if link.is_paired:
-                    parts.append(f"paired with {link.pair_name}")
-                else:
-                    parts.append(f"references missing pair {link.pair_name}")
-            portal = ""
-            try:
-                portal = str(link.obj.get("PortalName") or "")
-            except Exception:
-                portal = ""
-            if portal:
-                parts.append(f"PortalName={portal}")
-            parts.append(f"{len(link.model.polygons)} polys")
-            return " · ".join(parts)
-
-        default_name = _suggest_door_name(selected)
-        from ui.door_clone_dialog import DoorCloneDialog
-        result = DoorCloneDialog.ask(
-            self.root,
-            [link.name for link in links],
-            default_source=selected,
-            default_new_name=default_name,
-            default_include_pair=True,
-            suggest_name=_suggest_door_name,
-            describe_source=_describe_door_source,
-        )
-        if result is None:
-            return
-
-        self._pending_template = None
-        self._pending_kind = "clone_door"
-        self._pending_door_source = result.source_name
-        self._pending_door_name = result.new_name
-        self._pending_door_include_pair = result.include_pair
         if self.view3d is not None:
             self.view3d.set_place_mode(True)
 
@@ -1970,100 +1970,269 @@ class EditorApp:
         if bsp_world is None:
             messagebox.showerror("No BSP", "This level's BSP geometry could not be parsed.")
             return
+        current_objects = L.editor_materialize().objects
+        current_object_names = [obj.get("Name") or "" for obj in current_objects]
+        worldobject_template = class_template_from_catalog(self.catalog, "WorldObject")
+        invisiblebrush_template = class_template_from_catalog(self.catalog, "InvisibleBrush")
 
-        editor_dir = getattr(self.cfg, "editor_dir", None) or EDITOR_ROOT
-        start_dir = os.path.join(editor_dir, "mm9_data", "PreFabs")
-        path = filedialog.askopenfilename(
-            title="Import static prefab BSP",
-            initialdir=start_dir if os.path.isdir(start_dir) else editor_dir,
-            filetypes=[("DAT files", "*.dat"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            info = prefab_inspector.inspect_prefab(path)
-            default_name = prefab_import.suggest_import_name(L.preview_bsp() or bsp_world, path)
-        except Exception as e:
-            messagebox.showerror("Prefab import failed", str(e))
-            return
+        def _resource_exists(kind: str, resource_path: str):
+            return None if kind == "sprite" else self.resources.exists(resource_path)
 
-        name = simpledialog.askstring(
-            "Import Static Prefab BSP",
-            "New BSP model name:",
-            initialvalue=default_name,
-            parent=self.root,
-        )
-        if name is None:
-            return
-        name = str(name).strip()
-        if not name:
-            messagebox.showerror("Prefab import failed", "The BSP model name cannot be empty.")
-            return
+        def _read_script(resource_path: str) -> str:
+            reader = getattr(self.resources, "read_text", None)
+            if reader is None:
+                raise FileNotFoundError(resource_path)
+            return reader(resource_path)
 
-        try:
-            # Validate before entering click placement so unsupported prefabs
-            # fail at the dialog, not after the user picks a surface.
-            prefab_import.build_static_import_plan(
+        def _analyze_behavioral(path: str):
+            return prefab_behavioral.analyze_prefab(
+                path,
+                catalog=self.catalog,
+                supported_classes=prefab_behavioral.PHASE6_BEHAVIORAL_CLASSES,
+                resource_exists=_resource_exists,
+                allow_scripts=True,
+                allowed_script_names=prefab_behavioral.PHASE6_REVIEWED_SCRIPTS,
+                script_loader=_read_script,
+                allow_generated_bsp=False,
+            )
+
+        def _resource_candidates(path: str, _info):
+            def _exists(resource_path: str) -> bool:
+                try:
+                    return bool(self.resources.exists(resource_path))
+                except Exception:
+                    return False
+
+            return prefab_resources.find_resource_backed_candidates(
+                path,
+                self.catalog,
+                resource_exists=_exists,
+            )
+
+        def _resource_template(request) -> patcher.WorldObject:
+            if request.resource_class != "Prop":
+                raise ValueError(
+                    f"Resource-backed prefab class {request.resource_class!r} is not supported."
+                )
+            if not self.resources.exists(request.resource_model):
+                raise ValueError(
+                    f"Game model {request.resource_model!r} is not available in the active resources."
+                )
+            missing_skins = [
+                path for path in request.resource_skins
+                if not self.resources.exists(path)
+            ]
+            if missing_skins:
+                raise ValueError(
+                    "Game-model candidate has missing skin resource(s): "
+                    + ", ".join(missing_skins)
+                )
+            template = self._find_template_for_filename(
+                request.resource_model,
+                class_name=request.resource_class,
+            )
+            if template is None:
+                template = class_template_from_catalog(
+                    self.catalog,
+                    request.resource_class,
+                )
+            if template is None:
+                raise ValueError(
+                    f"The catalog has no complete {request.resource_class} template. "
+                    "Rebuild the MM9 catalog."
+                )
+            return copy.deepcopy(template)
+
+        def _behavioral_script_sources(analysis) -> Dict[str, str]:
+            return prefab_behavioral.collect_reviewed_script_sources(
+                analysis,
+                _read_script,
+            )
+
+        def _behavioral_templates(analysis) -> Dict[str, patcher.WorldObject]:
+            templates: Dict[str, patcher.WorldObject] = {}
+            for source in analysis.graph.runtime_objects:
+                if source.class_name in templates:
+                    continue
+                template = class_template_from_catalog(self.catalog, source.class_name)
+                if template is None:
+                    raise ValueError(
+                        f"The catalog has no complete {source.class_name} template. "
+                        "Rebuild the MM9 catalog."
+                    )
+                templates[source.class_name] = template
+            if analysis.graph.brushes and "WorldObject" not in templates:
+                template = class_template_from_catalog(self.catalog, "WorldObject")
+                if template is None:
+                    raise ValueError(
+                        "The catalog has no complete WorldObject template. Rebuild the MM9 catalog."
+                    )
+                templates["WorldObject"] = template
+            return templates
+
+        def _suggest_name(path: str) -> str:
+            return prefab_import.suggest_import_name(
                 L.preview_bsp() or bsp_world,
                 path,
-                new_name=name,
-                target_pos=(0.0, 0.0, 0.0),
+                current_object_names,
             )
-        except Exception as e:
-            messagebox.showerror("Prefab import failed", str(e))
+
+        def _validate_request(request) -> None:
+            if request.import_mode == "resource":
+                template = _resource_template(request)
+                probe = P.ImportResourcePrefabOp(
+                    template=template,
+                    overrides={
+                        "Name": request.new_name,
+                        "Pos": [0.0, 0.0, 0.0],
+                        "Rotation": [0.0, 0.0, 0.0, 0.0],
+                        "Filename": request.resource_model,
+                        **(
+                            {"Skin": ";".join(request.resource_skins)}
+                            if request.resource_skins else {}
+                        ),
+                    },
+                    prefab_path=request.prefab_path,
+                    candidate_id=request.resource_candidate_id,
+                    model_path=request.resource_model,
+                    skin_paths=tuple(request.resource_skins),
+                )
+                test_world = copy.deepcopy(L.editor_materialize())
+                if any(
+                    str(obj.get("Name") or "").casefold() == request.new_name.casefold()
+                    for obj in test_world.objects
+                ):
+                    raise ValueError(f"Object named {request.new_name!r} already exists.")
+                probe.apply_to(test_world)
+                return
+            if request.import_mode == "behavioral":
+                analysis = _analyze_behavioral(request.prefab_path)
+                plan = prefab_behavioral.build_behavioral_import_plan(
+                    analysis,
+                    root_name=request.new_name,
+                    target_pos=(0.0, 0.0, 0.0),
+                    existing_names=current_object_names,
+                    external_bindings=request.external_bindings,
+                )
+                plan.require_ready()
+                binding_issues = prefab_behavioral.validate_plan_target_bindings(
+                    plan,
+                    target_object_names=current_object_names,
+                    target_bsp=bsp_world,
+                    target_dat_bytes=(
+                        L.source_bytes() if hasattr(L, "source_bytes") else b""
+                    ),
+                )
+                if binding_issues:
+                    raise ValueError("; ".join(binding_issues))
+                prefab_behavioral.materialize_behavioral_plan(
+                    analysis,
+                    plan,
+                    class_templates=_behavioral_templates(analysis),
+                    placement_anchor=request.placement_anchor,
+                    object_overrides=prefab_behavioral.build_script_import_assets(
+                        analysis,
+                        plan,
+                        operation_id="validation",
+                        script_loader=prefab_behavioral.script_loader_from_sources(
+                            _behavioral_script_sources(analysis)
+                        ),
+                    )[0],
+                )
+                prefab_behavioral.build_behavioral_bsp_import_plan(
+                    L.preview_bsp() or bsp_world,
+                    analysis,
+                    plan,
+                    placement_anchor=request.placement_anchor,
+                    allow_generated_bsp=False,
+                    validate_runtime_bsp=True,
+                )
+                return
+            if worldobject_template is None:
+                raise ValueError(
+                    "The catalog has no complete WorldObject template. Rebuild the MM9 catalog."
+                )
+            if (
+                request.collision_mode in {"invisible_bsp", "box_approx"}
+                and invisiblebrush_template is None
+            ):
+                raise ValueError(
+                    "The catalog has no complete InvisibleBrush template. Rebuild the MM9 catalog "
+                    "or choose 'No collision helper'."
+                )
+            prefab_import.build_static_import_plan(
+                L.preview_bsp() or bsp_world,
+                request.prefab_path,
+                new_name=request.new_name,
+                target_pos=(0.0, 0.0, 0.0),
+                collision_mode=request.collision_mode,
+                collision_thickness=request.collision_thickness,
+                collision_segment_length=request.collision_segment_length,
+                target_dat_bytes=L.source_bytes(),
+                placement_anchor=request.placement_anchor,
+                target_object_names=current_object_names,
+                allow_generated_bsp=request.import_mode == "preview",
+                validate_runtime_bsp=request.import_mode == "static",
+            )
+
+        request = PrefabImportWorkspace.ask(
+            self.root,
+            initial_dir=self._prefab_browser_root(),
+            inspect_prefab=prefab_inspector.inspect_prefab,
+            analyze_prefab=_analyze_behavioral,
+            find_resource_candidates=_resource_candidates,
+            suggest_name=_suggest_name,
+            validate_request=_validate_request,
+        )
+        if request is None:
             return
 
-        collision_options = _ask_prefab_collision_options(self.root)
-        if collision_options is None:
-            return
-        collision_mode = str(collision_options.get("collision_mode", "none"))
-        collision_thickness = float(collision_options.get("collision_thickness", 8.0))
-        collision_segment_length = float(collision_options.get("collision_segment_length", 512.0))
-        if collision_mode in {"box_approx", "invisible_bsp"}:
-            try:
-                prefab_import.build_static_import_plan(
-                    L.preview_bsp() or bsp_world,
-                    path,
-                    new_name=name,
-                    target_pos=(0.0, 0.0, 0.0),
-                    collision_mode=collision_mode,
-                    collision_thickness=collision_thickness,
-                    collision_segment_length=collision_segment_length,
-                    target_dat_bytes=L.source_bytes(),
-                )
-            except Exception as e:
-                messagebox.showerror("Prefab collision failed", str(e))
-                return
+        self._remember_prefab_root(request.browser_root)
 
         self._pending_template = None
+        if request.import_mode == "resource":
+            self._pending_kind = "import_resource_prefab"
+            self._pending_prefab_path = request.prefab_path
+            self._pending_prefab_name = request.new_name
+            self._pending_resource_candidate_id = request.resource_candidate_id
+            self._pending_resource_model = request.resource_model
+            self._pending_resource_skins = tuple(request.resource_skins)
+            self._pending_resource_template = _resource_template(request)
+            try:
+                with open(request.prefab_path, "rb") as handle:
+                    self._pending_resource_fingerprint = hashlib.sha256(handle.read()).hexdigest()
+            except OSError:
+                self._pending_resource_fingerprint = ""
+            if self.view3d is not None:
+                self.view3d.set_place_mode(True)
+            return
+        if request.import_mode == "behavioral":
+            analysis = _analyze_behavioral(request.prefab_path)
+            self._pending_kind = "import_behavioral_prefab"
+            self._pending_prefab_path = request.prefab_path
+            self._pending_prefab_name = request.new_name
+            self._pending_prefab_placement_anchor = request.placement_anchor
+            self._pending_behavioral_fingerprint = analysis.graph.source_fingerprint
+            self._pending_behavioral_templates = _behavioral_templates(analysis)
+            self._pending_behavioral_bindings = dict(request.external_bindings)
+            self._pending_behavioral_script_sources = _behavioral_script_sources(analysis)
+            if self.view3d is not None:
+                self.view3d.set_place_mode(True)
+            return
+
         self._pending_kind = "import_prefab_bsp"
-        self._pending_prefab_path = path
-        self._pending_prefab_name = name
+        self._pending_prefab_path = request.prefab_path
+        self._pending_prefab_name = request.new_name
         self._pending_prefab_roles = None
-        self._pending_prefab_collision_mode = collision_mode
-        self._pending_prefab_collision_thickness = collision_thickness
-        self._pending_prefab_collision_segment_length = collision_segment_length
+        self._pending_prefab_collision_mode = request.collision_mode
+        self._pending_prefab_collision_thickness = request.collision_thickness
+        self._pending_prefab_collision_segment_length = request.collision_segment_length
+        self._pending_prefab_placement_anchor = request.placement_anchor
+        self._pending_prefab_worldobject_template = worldobject_template
+        self._pending_prefab_invisiblebrush_template = invisiblebrush_template
+        self._pending_prefab_preview_only = request.import_mode == "preview"
         if self.view3d is not None:
             self.view3d.set_place_mode(True)
-        model_roles = ", ".join(f"{k}={v}" for k, v in sorted(info.model_roles.items()))
-        collision_text = (
-            (
-                f"Hidden box collision helper will also be imported "
-                f"(thickness {collision_thickness:g}, max segment {collision_segment_length:g})."
-            )
-            if collision_mode == "box_approx"
-            else (
-                "Diagnostic duplicate-geometry collision helper will also be imported."
-                if collision_mode == "invisible_bsp"
-                else "No collision helper will be imported."
-            )
-        )
-        messagebox.showinfo(
-            "Place prefab",
-            f"Click a surface in the 3-D view to place {name!r}.\n\n"
-            f"Prefab models: {info.model_count}; roles: {model_roles or 'unknown'}.\n"
-            f"{collision_text}",
-        )
 
     def _show_text_dialog(self, title: str, text: str) -> None:
         win = tk.Toplevel(self.root)
@@ -2156,46 +2325,18 @@ class EditorApp:
         placing objects on tables, platforms, balconies,
         or any other geometry where vertical precision matters.
         """
-        if getattr(self, "_pending_kind", None) == "clone_door":
-            self._place_pending_door_clone_at_pos((float(wx), float(wy), float(wz)))
-            return
         if getattr(self, "_pending_kind", None) == "import_prefab_bsp":
             self._place_pending_prefab_bsp_at_pos((float(wx), float(wy), float(wz)))
+            return
+        if getattr(self, "_pending_kind", None) == "import_resource_prefab":
+            self._place_pending_resource_prefab_at_pos((float(wx), float(wy), float(wz)))
+            return
+        if getattr(self, "_pending_kind", None) == "import_behavioral_prefab":
+            self._place_pending_behavioral_prefab_at_pos((float(wx), float(wy), float(wz)))
             return
         if not getattr(self, "_pending_template", None):
             return
         self._place_pending_at_pos([float(wx), float(wy), float(wz)])
-
-    def _place_pending_door_clone_at_pos(self, new_pos: tuple) -> None:
-        L = self.active
-        source_name = getattr(self, "_pending_door_source", "")
-        new_name = getattr(self, "_pending_door_name", "")
-        include_pair = bool(getattr(self, "_pending_door_include_pair", True))
-        op = P.CloneDoorOp(
-            source_name=source_name,
-            new_name=new_name,
-            target_pos=tuple(float(v) for v in new_pos),
-            include_pair=include_pair,
-        )
-        try:
-            # Validate now so placement errors stay near the click that caused them.
-            op.build_plan(L, L.materialize().objects)
-        except Exception as e:
-            messagebox.showerror("Clone door failed", str(e))
-            return
-        L.append_op(op)
-        mat = L.materialize()
-        selected_index = next(
-            (i for i, obj in enumerate(mat.objects) if (obj.get("Name") or "") == new_name),
-            len(mat.objects) - 1,
-        )
-        self._pending_kind = None
-        self._pending_door_source = ""
-        self._pending_door_name = ""
-        self._pending_door_include_pair = True
-        if self.view3d is not None:
-            self.view3d.set_place_mode(False)
-        self._refresh_after_edit(selected_index)
 
     def _place_pending_prefab_bsp_at_pos(self, new_pos: tuple) -> None:
         L = self.active
@@ -2205,6 +2346,10 @@ class EditorApp:
         collision_mode = getattr(self, "_pending_prefab_collision_mode", "none")
         collision_thickness = float(getattr(self, "_pending_prefab_collision_thickness", 8.0))
         collision_segment_length = float(getattr(self, "_pending_prefab_collision_segment_length", 512.0))
+        placement_anchor = getattr(self, "_pending_prefab_placement_anchor", "bottom_center")
+        worldobject_template = getattr(self, "_pending_prefab_worldobject_template", None)
+        invisiblebrush_template = getattr(self, "_pending_prefab_invisiblebrush_template", None)
+        preview_only = bool(getattr(self, "_pending_prefab_preview_only", False))
         op = P.ImportPrefabBspOp(
             prefab_path=prefab_path,
             new_name=new_name,
@@ -2213,6 +2358,10 @@ class EditorApp:
             collision_mode=collision_mode,
             collision_thickness=collision_thickness,
             collision_segment_length=collision_segment_length,
+            placement_anchor=placement_anchor,
+            worldobject_template=copy.deepcopy(worldobject_template),
+            invisiblebrush_template=copy.deepcopy(invisiblebrush_template),
+            preview_only=preview_only,
         )
         try:
             # Validate against a preview that includes existing pending prefab
@@ -2228,13 +2377,24 @@ class EditorApp:
                 collision_thickness=collision_thickness,
                 collision_segment_length=collision_segment_length,
                 target_dat_bytes=L.source_bytes(),
+                placement_anchor=placement_anchor,
+                target_object_names=[
+                    obj.get("Name") or "" for obj in L.editor_materialize().objects
+                ],
+                allow_generated_bsp=preview_only,
+                validate_runtime_bsp=not preview_only,
             )
         except Exception as e:
             messagebox.showerror("Prefab import failed", str(e))
             return
 
         L.append_op(op)
-        mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
+        try:
+            mat = L.editor_materialize() if hasattr(L, "editor_materialize") else L.materialize()
+        except Exception as e:
+            L.undo_last_op()
+            messagebox.showerror("Prefab import failed", str(e))
+            return
         helper_index = next(
             (i for i, obj in enumerate(mat.objects) if (obj.get("Name") or "") == new_name),
             len(mat.objects) - 1,
@@ -2246,10 +2406,180 @@ class EditorApp:
         self._pending_prefab_collision_mode = "none"
         self._pending_prefab_collision_thickness = 8.0
         self._pending_prefab_collision_segment_length = 512.0
+        self._pending_prefab_placement_anchor = "bottom_center"
+        self._pending_prefab_worldobject_template = None
+        self._pending_prefab_invisiblebrush_template = None
+        self._pending_prefab_preview_only = False
         self._selected_world_index = helper_index
         if self.view3d is not None:
             self.view3d.set_place_mode(False)
         self._refresh_after_edit(helper_index)
+
+    def _place_pending_resource_prefab_at_pos(self, new_pos: tuple) -> None:
+        L = self.active
+        template = getattr(self, "_pending_resource_template", None)
+        name = str(getattr(self, "_pending_prefab_name", "") or "")
+        model = str(getattr(self, "_pending_resource_model", "") or "")
+        skins = tuple(getattr(self, "_pending_resource_skins", ()) or ())
+        if template is None or not name or not model:
+            messagebox.showerror(
+                "Prefab import failed",
+                "The selected catalog game-model candidate is incomplete.",
+            )
+            return
+        overrides: Dict[str, Any] = {
+            "Name": name,
+            "Pos": [float(value) for value in new_pos],
+            "Rotation": [0.0, 0.0, 0.0, 0.0],
+            "Filename": model,
+        }
+        if skins:
+            overrides["Skin"] = ";".join(str(value) for value in skins)
+        op = P.ImportResourcePrefabOp(
+            template=copy.deepcopy(template),
+            overrides=overrides,
+            prefab_path=str(getattr(self, "_pending_prefab_path", "") or ""),
+            candidate_id=str(
+                getattr(self, "_pending_resource_candidate_id", "") or ""
+            ),
+            model_path=model,
+            skin_paths=skins,
+            source_fingerprint=str(
+                getattr(self, "_pending_resource_fingerprint", "") or ""
+            ),
+        )
+        try:
+            materialized = L.editor_materialize()
+            if any(
+                str(obj.get("Name") or "").casefold() == name.casefold()
+                for obj in materialized.objects
+            ):
+                raise ValueError(f"Object named {name!r} already exists.")
+            L.append_op(op)
+            materialized = L.editor_materialize()
+        except Exception as exc:
+            if L.ops and L.ops[-1] is op:
+                L.undo_last_op()
+            messagebox.showerror("Prefab import failed", str(exc))
+            return
+        selected_index = next(
+            (
+                index for index, obj in enumerate(materialized.objects)
+                if str(obj.get("Name") or "").casefold() == name.casefold()
+            ),
+            len(materialized.objects) - 1,
+        )
+        self._pending_kind = None
+        self._pending_prefab_path = ""
+        self._pending_prefab_name = ""
+        self._pending_resource_candidate_id = ""
+        self._pending_resource_model = ""
+        self._pending_resource_skins = ()
+        self._pending_resource_template = None
+        self._pending_resource_fingerprint = ""
+        self._selected_world_index = selected_index
+        if self.view3d is not None:
+            self.view3d.set_place_mode(False)
+        self._refresh_after_edit(selected_index)
+
+    def _place_pending_behavioral_prefab_at_pos(self, new_pos: tuple) -> None:
+        L = self.active
+        op = P.ImportBehavioralPrefabOp(
+            prefab_path=getattr(self, "_pending_prefab_path", ""),
+            root_name=getattr(self, "_pending_prefab_name", ""),
+            target_pos=tuple(float(value) for value in new_pos),
+            placement_anchor=getattr(
+                self,
+                "_pending_prefab_placement_anchor",
+                "original_origin",
+            ),
+            source_fingerprint=getattr(self, "_pending_behavioral_fingerprint", ""),
+            enabled_capabilities=tuple(sorted(prefab_behavioral.PHASE6_BEHAVIORAL_CLASSES)),
+            class_templates=copy.deepcopy(
+                getattr(self, "_pending_behavioral_templates", {})
+            ),
+            external_bindings=dict(
+                getattr(self, "_pending_behavioral_bindings", {})
+            ),
+            script_sources=dict(
+                getattr(self, "_pending_behavioral_script_sources", {})
+            ),
+            planner_version=prefab_behavioral.PLANNER_VERSION,
+        )
+        try:
+            before = L.editor_materialize().objects
+            analysis = op._analyze()
+            plan = prefab_behavioral.build_behavioral_import_plan(
+                analysis,
+                root_name=op.root_name,
+                target_pos=op.target_pos,
+                target_yaw=op.target_yaw,
+                existing_names=[str(obj.get("Name") or "") for obj in before],
+                external_bindings=op.external_bindings,
+            )
+            op.planned_object_names = {
+                str(item.source_index): item.target_name
+                for item in plan.objects
+            }
+            script_overrides, script_assets = (
+                prefab_behavioral.build_script_import_assets(
+                    analysis,
+                    plan,
+                    operation_id=op.operation_id,
+                    script_loader=prefab_behavioral.script_loader_from_sources(
+                        op.script_sources
+                    ),
+                )
+            )
+            for source_index, values in script_overrides.items():
+                op.object_overrides.setdefault(source_index, {}).update(values)
+            op.script_assets = script_assets
+            binding_issues = prefab_behavioral.validate_plan_target_bindings(
+                plan,
+                target_object_names=[str(obj.get("Name") or "") for obj in before],
+                target_bsp=L.get_bsp(),
+                target_dat_bytes=L.source_bytes(),
+            )
+            if binding_issues:
+                raise ValueError("; ".join(binding_issues))
+            prefab_behavioral.materialize_behavioral_plan(
+                analysis,
+                plan,
+                class_templates=op.class_templates,
+                placement_anchor=op.placement_anchor,
+            )
+            prefab_behavioral.build_behavioral_bsp_import_plan(
+                L.preview_bsp() or L.get_bsp(),
+                analysis,
+                plan,
+                placement_anchor=op.placement_anchor,
+                allow_generated_bsp=False,
+                validate_runtime_bsp=True,
+            )
+        except Exception as exc:
+            messagebox.showerror("Prefab import failed", str(exc))
+            return
+
+        L.append_op(op)
+        try:
+            materialized = L.editor_materialize()
+        except Exception as exc:
+            L.undo_last_op()
+            messagebox.showerror("Prefab import failed", str(exc))
+            return
+        selected_index = len(materialized.objects) - len(plan.objects)
+        self._pending_kind = None
+        self._pending_prefab_path = ""
+        self._pending_prefab_name = ""
+        self._pending_prefab_placement_anchor = "bottom_center"
+        self._pending_behavioral_fingerprint = ""
+        self._pending_behavioral_templates = {}
+        self._pending_behavioral_bindings = {}
+        self._pending_behavioral_script_sources = {}
+        self._selected_world_index = selected_index
+        if self.view3d is not None:
+            self.view3d.set_place_mode(False)
+        self._refresh_after_edit(selected_index)
 
     def _place_pending_at_pos(self, new_pos: List[float]) -> None:
         """Create the pending AddOp at an already-resolved XYZ position."""
@@ -2373,6 +2703,34 @@ class EditorApp:
                     L.clear_redo()
                     self._refresh_after_edit(selected_idx)
                     return
+                if isinstance(pending_op, P.ImportBehavioralPrefabOp):
+                    positional = False
+                    property_overrides: Dict[str, Any] = {}
+                    for name, val in overrides.items():
+                        if name == "Pos":
+                            pending_op.retarget_from_object(
+                                L.objects_before_op(pending_op),
+                                object_offset,
+                                tuple(float(v) for v in val),
+                            )
+                            positional = True
+                        elif name == "Rotation":
+                            vals = list(val) if isinstance(val, (list, tuple)) else []
+                            vals = (vals + [0.0, 0.0, 0.0, 0.0])[:4]
+                            pending_op.rerotate_from_object(
+                                L.objects_before_op(pending_op),
+                                object_offset,
+                                tuple(float(v) for v in vals),
+                            )
+                            positional = True
+                        else:
+                            property_overrides[name] = val
+                    if property_overrides:
+                        pending_op.set_object_overrides(object_offset, property_overrides)
+                    if positional or property_overrides:
+                        L.clear_redo()
+                        self._refresh_after_edit(selected_idx)
+                    return
 
         # Legacy fallback for callers that provide an object without the
         # selected materialized index.
@@ -2421,7 +2779,12 @@ class EditorApp:
                 pending = L.pending_add_offset_for_materialized(selected_idx)
                 if pending is not None:
                     pending_op, _object_offset = pending
-                    if isinstance(pending_op, P.CloneDoorOp):
+                    if isinstance(pending_op, P.ImportBehavioralPrefabOp):
+                        L.append_op(P.RemoveBehavioralPrefabOp(
+                            operation_id=pending_op.operation_id,
+                            root_name=pending_op.root_name,
+                        ))
+                    elif isinstance(pending_op, P.CloneDoorOp):
                         try:
                             L.ops.remove(pending_op)
                         except ValueError:
@@ -2512,6 +2875,14 @@ class EditorApp:
                         )
                         L.clear_redo()
                         refresh_clone_preview = True
+                    elif isinstance(pending_op, P.ImportBehavioralPrefabOp):
+                        pending_op.retarget_from_object(
+                            L.objects_before_op(pending_op),
+                            object_offset,
+                            new_pos,
+                        )
+                        L.clear_redo()
+                        refresh_clone_preview = True
                     else:
                         add_offset = L.add_offset_for_materialized(world_index)
                         adds = [op for op in L.ops if isinstance(op, P.AddOp)]
@@ -2556,6 +2927,14 @@ class EditorApp:
                     if isinstance(pending_op, P.CloneDoorOp):
                         pending_op.rerotate_from_object(
                             L,
+                            L.objects_before_op(pending_op),
+                            object_offset,
+                            rot,
+                        )
+                        L.clear_redo()
+                        refresh_clone_preview = True
+                    elif isinstance(pending_op, P.ImportBehavioralPrefabOp):
+                        pending_op.rerotate_from_object(
                             L.objects_before_op(pending_op),
                             object_offset,
                             rot,
@@ -2614,6 +2993,17 @@ class EditorApp:
                         if old is not None:
                             pending_op.retarget_from_object(
                                 L,
+                                L.objects_before_op(pending_op),
+                                object_offset,
+                                (float(old[0]), float(new_y), float(old[2])),
+                            )
+                            L.clear_redo()
+                            refresh_clone_preview = True
+                    elif isinstance(pending_op, P.ImportBehavioralPrefabOp):
+                        mat = L.materialize()
+                        old = mat.objects[world_index].get("Pos")
+                        if old is not None:
+                            pending_op.retarget_from_object(
                                 L.objects_before_op(pending_op),
                                 object_offset,
                                 (float(old[0]), float(new_y), float(old[2])),
@@ -2837,9 +3227,17 @@ class EditorApp:
             return None
         return patcher.WorldObject(class_name, props)
 
-    def _find_template_for_filename(self, filename: str) -> Optional[patcher.WorldObject]:
+    def _find_template_for_filename(
+        self,
+        filename: str,
+        class_name: Optional[str] = None,
+    ) -> Optional[patcher.WorldObject]:
         target = filename.lower()
-        _prop_types = ("Prop", "WorldObject", "DestructableProp")
+        _prop_types = (
+            (class_name,)
+            if class_name
+            else ("Prop", "WorldObject", "DestructableProp")
+        )
 
         # Pass 1: already-loaded levels
         for L in self.project.levels:

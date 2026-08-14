@@ -23,6 +23,10 @@ Vec3 = Tuple[float, float, float]
 
 LEGACY_ED_VERSION = 1249
 
+NODE_GROUP = 0
+NODE_BRUSH = 1
+NODE_OBJECT = 2
+
 _PROP_TYPE_NAMES: Dict[int, str] = {
     0: "string",
     1: "vector",
@@ -116,10 +120,37 @@ class LegacyEdNodeLayoutReport:
 
 
 @dataclass(frozen=True)
+class LegacyEdNode:
+    """One recursively decoded DEdit node container.
+
+    ``brush_index`` is the authoritative link to the polyhedron stream.  A
+    brush node's nearest object ancestor is therefore the authored BSP owner;
+    flat object-record order and brush display names are not used as guesses.
+    """
+
+    node_type: int
+    brush_index: Optional[int]
+    class_name: str
+    properties: Tuple[LegacyEdObjectProperty, ...]
+    node_name: str
+    children: Tuple["LegacyEdNode", ...]
+    offset: int
+    end: int
+
+    def property_value(self, name: str, default: Any = None) -> Any:
+        wanted = str(name).casefold()
+        for prop in self.properties:
+            if prop.name.casefold() == wanted:
+                return prop.value
+        return default
+
+
+@dataclass(frozen=True)
 class LegacyEdAnalysisBundle:
     geometry_scene: geometry_scene.GeometryScene
     object_scan: LegacyEdObjectScanReport
     node_layout: LegacyEdNodeLayoutReport
+    node_tree: Optional[LegacyEdNode] = None
 
 
 @dataclass(frozen=True)
@@ -184,11 +215,57 @@ def analyze_legacy_ed_bytes(data: bytes, *, source_path: str = "") -> LegacyEdAn
         source_path=source_path,
         _analysis_cache=cache,
     )
+    try:
+        node_tree = parse_legacy_ed_node_tree(
+            data,
+            source_path=source_path,
+            _analysis_cache=cache,
+        )
+    except LegacyEdParseError:
+        # Generated diagnostics and damaged sources still retain the existing
+        # geometry/object scan report. Behavioral import will fail closed when
+        # the authoritative hierarchy is unavailable.
+        node_tree = None
     return LegacyEdAnalysisBundle(
         geometry_scene=scene,
         object_scan=object_scan,
         node_layout=node_layout,
+        node_tree=node_tree,
     )
+
+
+def parse_legacy_ed_node_tree(
+    data: bytes,
+    *,
+    source_path: str = "",
+    _analysis_cache: Optional[Dict[str, Any]] = None,
+) -> LegacyEdNode:
+    """Decode the complete recursive node/container hierarchy of an ED v1249.
+
+    The layout follows DEdit's ``TEDNodeContainer`` structure: child headers
+    and child containers precede the current node item.  The four trailing
+    file bytes are outside the root container and are deliberately ignored.
+    """
+    del source_path  # Reserved for richer parse diagnostics.
+    if len(data) < 4 or _u32(data, 0) != LEGACY_ED_VERSION:
+        version = _u32(data, 0) if len(data) >= 4 else -1
+        raise LegacyEdParseError(
+            f"unsupported legacy ED version {version}; expected {LEGACY_ED_VERSION}"
+        )
+    _wrapper, scan_data = _legacy_ed_analysis_scan_data(data, _analysis_cache)
+    header_end = _uncompressed_ed_header_end(scan_data)
+    payload_start = header_end if header_end is not None else 4
+    layout = _parse_polyhedron_layout(scan_data, payload_start)
+    if layout is None:
+        raise LegacyEdParseError("polyhedron stream did not match ED v1249 layout")
+    root, _end = _parse_node_container(
+        scan_data,
+        int(layout["end"]),
+        node_type=NODE_GROUP,
+        brush_index=None,
+        depth=0,
+    )
+    return root
 
 
 def _legacy_ed_analysis_scan_data(
@@ -700,6 +777,97 @@ def _parse_object_property(
         value=value,
     )
     return prop, value_end
+
+
+def _parse_node_container(
+    data: bytes,
+    start: int,
+    *,
+    node_type: int,
+    brush_index: Optional[int],
+    depth: int,
+) -> Tuple[LegacyEdNode, int]:
+    if depth > 256:
+        raise LegacyEdParseError("legacy ED node hierarchy exceeds 256 levels")
+    if start + 2 > len(data):
+        raise LegacyEdParseError("legacy ED node child count is outside the buffer")
+    pos = start
+    child_count = _u16(data, pos)
+    pos += 2
+    if child_count > 6553:
+        raise LegacyEdParseError(f"unreasonable legacy ED child count {child_count}")
+
+    children: List[LegacyEdNode] = []
+    for _ in range(child_count):
+        if pos + 4 > len(data):
+            raise LegacyEdParseError("legacy ED child type is outside the buffer")
+        child_type = _u32(data, pos)
+        pos += 4
+        if child_type not in {NODE_GROUP, NODE_BRUSH, NODE_OBJECT}:
+            raise LegacyEdParseError(f"unknown legacy ED node type {child_type}")
+        child_brush_index: Optional[int] = None
+        if child_type == NODE_BRUSH:
+            if pos + 4 > len(data):
+                raise LegacyEdParseError("legacy ED brush index is outside the buffer")
+            child_brush_index = _u32(data, pos)
+            pos += 4
+        child, pos = _parse_node_container(
+            data,
+            pos,
+            node_type=child_type,
+            brush_index=child_brush_index,
+            depth=depth + 1,
+        )
+        children.append(child)
+
+    item_start = pos
+    if pos + 2 > len(data):
+        raise LegacyEdParseError("legacy ED node item is outside the buffer")
+    item_size = _u16(data, pos)
+    item_end = pos + 2 + item_size
+    pos += 2
+    if item_end > len(data):
+        raise LegacyEdParseError("legacy ED node item payload is outside the buffer")
+    try:
+        class_name, pos = _read_prefixed_string(data, pos, max_length=255)
+        if pos + 4 > item_end:
+            raise LegacyEdParseError("legacy ED node property count is outside the item")
+        property_count = _u32(data, pos)
+        pos += 4
+        if property_count > _MAX_OBJECT_PROPERTIES:
+            raise LegacyEdParseError(
+                f"unreasonable legacy ED node property count {property_count}"
+            )
+        properties: List[LegacyEdObjectProperty] = []
+        for _ in range(property_count):
+            parsed = _parse_object_property(data, pos, item_end)
+            if parsed is None:
+                raise LegacyEdParseError("invalid legacy ED node property")
+            prop, pos = parsed
+            properties.append(prop)
+        if pos != item_end:
+            raise LegacyEdParseError(
+                f"legacy ED node item size mismatch ({pos - item_start} != {item_size + 2})"
+            )
+        if pos + 8 > len(data):
+            raise LegacyEdParseError("legacy ED node metadata is outside the buffer")
+        pos += 8  # two preserved-but-uninterpreted DEdit metadata fields
+        node_name, pos = _read_prefixed_string(data, pos, max_length=4096)
+    except (ValueError, struct.error) as exc:
+        if isinstance(exc, LegacyEdParseError):
+            raise
+        raise LegacyEdParseError(f"invalid legacy ED node item: {exc}") from exc
+
+    return LegacyEdNode(
+        node_type=int(node_type),
+        brush_index=brush_index,
+        class_name=class_name,
+        properties=tuple(properties),
+        node_name=node_name,
+        children=tuple(children),
+        offset=start,
+        end=pos,
+    ), pos
 
 
 def _decode_object_property_value(data: bytes, start: int, byte_length: int, type_code: int) -> Any:

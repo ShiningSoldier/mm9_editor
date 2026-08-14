@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 
 from tests._path import ROOT  # noqa: F401
@@ -29,6 +30,36 @@ def make_level(*names):
 
 
 class LevelHistoryTests(unittest.TestCase):
+    def test_editor_materialization_is_reused_until_state_changes(self):
+        level = make_level("A")
+
+        first = level.editor_materialize()
+        self.assertIs(level.editor_materialize(), first)
+
+        level.append_op(P.EditOp(target_index=0, overrides={"Name": "B"}))
+        second = level.editor_materialize()
+        self.assertIsNot(second, first)
+        self.assertEqual(second.objects[0].get("Name"), "B")
+
+        # Viewport gestures mutate pending operation objects in place.  The
+        # fingerprint must invalidate the snapshot without requiring callers
+        # to remember a separate cache-reset API.
+        level.ops[-1].overrides["Name"] = "C"
+        third = level.editor_materialize()
+        self.assertIsNot(third, second)
+        self.assertEqual(third.objects[0].get("Name"), "C")
+
+    def test_empty_preview_planners_do_no_copy_or_bsp_work(self):
+        level = make_level("A")
+        level.append_op(P.EditOp(target_index=0, overrides={"Name": "B"}))
+
+        with mock.patch.object(P.copy, "deepcopy", wraps=P.copy.deepcopy) as deepcopy:
+            self.assertEqual(level.door_clone_plans(), [])
+            deepcopy.assert_not_called()
+        with mock.patch.object(level, "get_bsp") as get_bsp:
+            self.assertEqual(level.prefab_import_plans(), [])
+            get_bsp.assert_not_called()
+
     def test_undo_redo_moves_ops_between_stacks(self):
         level = make_level("A")
         edit = P.EditOp(target_index=0, overrides={"Name": "B"})

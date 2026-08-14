@@ -93,7 +93,7 @@ OPENGL_AVAILABLE: bool = len(_MISSING) == 0
 _INSTALL_HINT = (
     "3-D view requires additional packages.\n\n"
     "Install with:\n"
-    "    pip install PyOpenGL PyOpenGL_accelerate pyopengltk\n\n"
+    "    pip install PyOpenGL PyOpenGL_accelerate pyopengltk numpy\n\n"
     "Then restart the editor."
 )
 
@@ -158,6 +158,44 @@ _SPRITE_HIT_RADIUS_PX = 20
 # Keyboard object nudges in world units. Hold Shift for a larger step.
 _NUDGE_XZ_STEP = 25.0
 _NUDGE_Y_STEP = 25.0
+
+
+def _new_load_profile(level):
+    if os.environ.get("MM9_EDITOR_PROFILE_LOAD") != "1":
+        return None
+    label = str(
+        getattr(level, "display_name", "")
+        or getattr(level, "rez_vpath", "")
+        or getattr(level, "path", "")
+        or "(no level)"
+    )
+    return {
+        "label": label,
+        "started": time.perf_counter(),
+        "stages": [],
+    }
+
+
+def _mark_load_stage(profile, name: str, started: float) -> None:
+    if profile is not None:
+        profile["stages"].append((name, time.perf_counter() - started))
+
+
+def _emit_load_profile(profile) -> None:
+    if profile is None:
+        return
+    total = time.perf_counter() - float(profile["started"])
+    parts = [f"total={total:.3f}s"]
+    parts.extend(
+        f"{name}={duration:.3f}s"
+        for name, duration in profile["stages"]
+    )
+    print(
+        f"[view3d load] {profile['label']}  " + "  ".join(parts),
+        file=sys.stderr,
+    )
+
+
 _NUDGE_FAST_MULT = 5.0
 _ROTATE_YAW_STEP_DEG = 15.0
 _ROTATE_FAST_MULT = 3.0
@@ -922,7 +960,7 @@ if OPENGL_AVAILABLE:
                 soft_sky_model=self._soft_sky_model,
             )
 
-        def load_level(self, level, bsp_world, objects) -> None:
+        def load_level(self, level, bsp_world, objects, load_profile=None) -> None:
             """
             Upload geometry and sprites for a new level.
             Called by View3D.set_active_level().
@@ -931,11 +969,18 @@ if OPENGL_AVAILABLE:
             If GL has not been initialized yet (widget not yet shown) the call
             is queued in _pending_level_args and replayed inside initgl().
             """
+            if load_profile is None:
+                load_profile = _new_load_profile(level)
             if not self._ready:
-                self._pending_level_args = (level, bsp_world, objects)
+                self._pending_level_args = (
+                    level,
+                    bsp_world,
+                    objects,
+                    load_profile,
+                )
                 return
+            stage_started = time.perf_counter()
             self._discard_pending_transform_commit()
-            self._mesh_cache.invalidate()
             self._bsp_draw_batch = None
             self._sky_draw_batch = None
             self._delete_sprites()
@@ -951,6 +996,15 @@ if OPENGL_AVAILABLE:
             self._3d_drag_moved = False
             self._sprite_position_pending.clear()   # stale patches must not apply to new VBO
 
+            if bsp_world is not None:
+                self._mesh_cache.activate_level(
+                    level if level is not None else bsp_world,
+                    getattr(bsp_world, "world_models", []) or [],
+                    tex_cache=self._tex_cache,
+                )
+            _mark_load_stage(load_profile, "canvas_reset", stage_started)
+
+            stage_started = time.perf_counter()
             if objects:
                 if self._obj_model_cache is not None:
                     self._object_model_items = build_render_items(
@@ -961,8 +1015,14 @@ if OPENGL_AVAILABLE:
                         bsp_world=bsp_world,
                         actor_visuals=self._actor_visuals,
                     )
-                self._rebuild_sprites()
+            _mark_load_stage(load_profile, "object_models", stage_started)
 
+            stage_started = time.perf_counter()
+            if objects:
+                self._rebuild_sprites()
+            _mark_load_stage(load_profile, "sprites", stage_started)
+
+            stage_started = time.perf_counter()
             if bsp_world is not None:
                 self._bsp_draw_batch = build_bsp_draw_batch(
                     bsp_world,
@@ -972,11 +1032,18 @@ if OPENGL_AVAILABLE:
                     helper_role_groups=self._helper_role_groups,
                     hidden_helper_model_names=self._hidden_helper_model_names(),
                 )
-            self._rebuild_sky()
+            _mark_load_stage(load_profile, "bsp_meshes", stage_started)
 
+            stage_started = time.perf_counter()
+            self._rebuild_sky()
+            _mark_load_stage(load_profile, "sky", stage_started)
+
+            stage_started = time.perf_counter()
             self._fit_camera_to_level()
+            _mark_load_stage(load_profile, "camera_fit", stage_started)
 
             self._request_render()
+            _emit_load_profile(load_profile)
 
         def reload_sprites(self, objects) -> None:
             """Re-upload object sprites after ops change the level state."""
@@ -1011,12 +1078,11 @@ if OPENGL_AVAILABLE:
             self._bsp_world = bsp_world
 
             if bsp_world is not None:
-                self._mesh_cache.retain_models(
+                self._mesh_cache.activate_level(
+                    self._level if self._level is not None else bsp_world,
                     getattr(bsp_world, "world_models", []) or [],
                     tex_cache=self._tex_cache,
                 )
-            else:
-                self._mesh_cache.invalidate()
             self._bsp_draw_batch = None
             if bsp_world is not None:
                 self._bsp_draw_batch = build_bsp_draw_batch(
@@ -2057,26 +2123,36 @@ class View3D(tk.Frame if _HAS_TK else object):
         """
         if not OPENGL_AVAILABLE:
             return
+        load_profile = _new_load_profile(level_edit)
         self._level = level_edit
         if level_edit is None:
-            self._canvas.load_level(None, None, [])
+            self._canvas.load_level(None, None, [], load_profile)
             self._status.config(text="No level loaded")
             return
 
         # preview_bsp() adds pending cloned physical doors to the cached BSP.
         bsp_world = None
+        stage_started = time.perf_counter()
         try:
             bsp_world = level_edit.preview_bsp()
         except Exception as exc:
             print(f"[view3d] BSP parse failed for {level_edit.display_name!r}: "
                   f"{exc}", file=sys.stderr)
+        _mark_load_stage(load_profile, "preview_bsp", stage_started)
 
+        stage_started = time.perf_counter()
         mat = (
             level_edit.editor_materialize()
             if hasattr(level_edit, "editor_materialize")
             else level_edit.materialize()
         )
-        self._canvas.load_level(level_edit, bsp_world, mat.objects)
+        _mark_load_stage(load_profile, "materialize", stage_started)
+        self._canvas.load_level(
+            level_edit,
+            bsp_world,
+            mat.objects,
+            load_profile,
+        )
         self._status.config(
             text=f"{level_edit.display_name}  ·  loading 3-D view…")
 

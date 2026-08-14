@@ -28,6 +28,7 @@ _ROOT_TO_ARCHIVE: Dict[str, str] = {
     "SKINS": "skins",
     "MODELS": "models",
     "DATA": "data",
+    "SOUNDS": "sounds",
 }
 
 _DEFAULT_EXT: Dict[str, str] = {
@@ -37,6 +38,7 @@ _DEFAULT_EXT: Dict[str, str] = {
     "TEXTURES": ".DTX",
     "SKINS": ".DTX",
     "MODELS": ".ABC",
+    "SOUNDS": ".WAV",
 }
 
 @dataclass(frozen=True)

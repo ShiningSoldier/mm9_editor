@@ -48,6 +48,16 @@ class HelperBillboardTests(unittest.TestCase):
             {"aibarrier51"},
         )
 
+    def test_invisible_water_controller_does_not_hide_its_visible_bsp_surface(self):
+        water = obj("BlueWater", "ImportedWater")
+        water.props["Visible"] = 0
+        metadata = {"BlueWater": {"world_helper": {"is_helper": True}}}
+
+        self.assertEqual(
+            hidden_world_helper_model_names([water], categorize, metadata),
+            set(),
+        )
+
     def test_world_helper_billboards_are_hidden_by_default(self):
         objects = [
             obj("BlueWater"),
