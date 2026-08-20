@@ -17,7 +17,7 @@ plane equations, BSP tree, physics blocks). What we keep:
         polygons: List[Polygon]
           vertices: List[(x,y,z)]
           surface_index: int
-          plane_index: int
+          plane_index: int  # resolved from the referenced surface
 
 Format reference: lithtech/libs/rezmgr/rezmgr.cpp (header), godot-dat-reader/
 Models/DAT.gd (BSP traversal), godot-dat-reader/Research/bspv66.bt (010
@@ -103,6 +103,7 @@ class Surface:
     uv_p          : S-axis vector (world → U)
     uv_q          : T-axis vector (world → V)
     texture_index : index into WorldModelMesh.texture_names
+    plane_index   : index into the WorldBSP plane table
     flags         : surface flags (see LT2 surface flag constants)
     texture_flags : additional per-texture flags
     """
@@ -112,6 +113,7 @@ class Surface:
     texture_index: int
     flags:         int
     texture_flags: int
+    plane_index:   int = 0
 
     def compute_uv(
         self,
@@ -169,6 +171,7 @@ class WorldModelMesh:
     min_box:       Tuple[float, float, float]
     max_box:       Tuple[float, float, float]
     translation:   Tuple[float, float, float]
+    plane_count:   int = 0
     raw_start:     Optional[int] = None
     raw_end:       Optional[int] = None
     next_world_item: Optional[int] = None
@@ -648,7 +651,7 @@ def _read_surface(s: _Stream) -> Surface:
     uv_p          = s.vec3()          # S-axis  (U direction)
     uv_q          = s.vec3()          # T-axis  (V direction)
     texture_index = s.u16()
-    s.u32()                           # unknown (lithtech_2 path)
+    plane_index   = s.u32()
     flags         = s.u32()
     s.u32()                           # unknown2 (4 bytes)
     use_effects   = s.u8()
@@ -659,7 +662,7 @@ def _read_surface(s: _Stream) -> Surface:
     return Surface(
         uv_o=uv_o, uv_p=uv_p, uv_q=uv_q,
         texture_index=texture_index,
-        flags=flags,
+        flags=flags, plane_index=plane_index,
         texture_flags=texture_flags,
     )
 
@@ -679,7 +682,7 @@ def _read_leaf(s: _Stream) -> None:
     s.u32()                   # unk_1
 
 
-def _read_polygon(s: _Stream, vert_count: int) -> Polygon:
+def _read_polygon(s: _Stream, vert_count: int, surfaces: List[Surface]) -> Polygon:
     """Read a polygon record; keep only the surface/plane indices and the
     vertex indices (which we resolve against the global Points array)."""
     s.skip(12)                # center vec3
@@ -687,8 +690,15 @@ def _read_polygon(s: _Stream, vert_count: int) -> Polygon:
     unknown_flag = s.u16()
     if unknown_flag > 0:
         s.skip(unknown_flag * 4)   # short[unknown_flag * 2]
-    surface_index = s.u16()
-    plane_index   = s.u16()
+    # MM9 v66 stores one uint32 surface index here.  The plane index belongs
+    # to that surface record; treating the high word as a per-polygon plane
+    # index makes generated polygons fail the retail loader's bounds check.
+    surface_index = s.u32()
+    plane_index = (
+        int(surfaces[surface_index].plane_index)
+        if 0 <= surface_index < len(surfaces)
+        else 0
+    )
     vis: List[int] = []
     for _ in range(vert_count):
         idx = s.u16()
@@ -764,7 +774,7 @@ def _read_world_bsp(s: _Stream) -> WorldModelMesh:
     # Polygons
     polygons: List[Polygon] = []
     for i in range(poly_count):
-        polygons.append(_read_polygon(s, verts_per_poly[i]))
+        polygons.append(_read_polygon(s, verts_per_poly[i], surfaces))
 
     # Nodes (PolyIndex u32 + LeafIndex u16 + 2× u32 = 14 bytes)
     s.skip(node_count * 14)
@@ -796,6 +806,7 @@ def _read_world_bsp(s: _Stream) -> WorldModelMesh:
     return WorldModelMesh(
         name=world_name,
         min_box=min_box, max_box=max_box, translation=translation,
+        plane_count=plane_count,
         points=points, polygons=polygons,
         texture_names=texture_names, surfaces=surfaces,
     )

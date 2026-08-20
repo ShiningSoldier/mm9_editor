@@ -2,9 +2,8 @@
 diff_panel.py
 =============
 
-Modal "Save preview" dialog — the explicit RUDE-workflow stop. Shows what
-each .DAT write will do (per-level op summary) and what the staged RUDE
-folder would look like, then lets the user commit (or cancel).
+Modal "Save preview" dialog. Shows each DAT write plus independent RUDE and
+dialogue-script assets before committing the output batch.
 """
 
 from __future__ import annotations
@@ -85,28 +84,44 @@ class SaveDialog(tk.Toplevel):
                 f"=== {os.path.basename(p.source_archive)}  →  {p.output_archive} ===\n")
             for entry in p.entries:
                 dat_text.insert("end", f"  patch {entry}\n")
+            if p is plan.scripts_archive_patch():
+                for asset in plan.dialogue_script_assets:
+                    dat_text.insert("end", f"    {asset.summary()}\n")
+                    if asset.integration.base_virtual_path:
+                        dat_text.insert(
+                            "end",
+                            f"      preserves base {asset.integration.base_virtual_path}\n",
+                        )
             dat_text.insert("end", "\n")
         dat_text.config(state="disabled")
 
         # RUDE panel — explicit workflow: must opt in, choose target dir
-        rude_frame = tk.LabelFrame(body, text="RUDE registrations", bg="#1a1d22",
+        rude_frame = tk.LabelFrame(body, text="RUDE assets", bg="#1a1d22",
                                    fg="#cccccc", font=("Segoe UI", 9, "bold"))
         rude_frame.pack(fill="x", side="top", pady=(0, 8))
         rude_text = tk.Text(rude_frame, bg="#0e1116", fg="#e6e6e6",
                             font=("Consolas", 9), relief="flat",
                             height=6, wrap="none")
         rude_text.pack(fill="x", padx=4, pady=4)
-        if not plan.rude_entries:
-            rude_text.insert("end", "(no fresh NPCs to register)\n")
+        if not plan.has_rude_changes():
+            rude_text.insert("end", "(no RUDE asset changes)\n")
+        for asset in plan.rude_assets:
+            rude_text.insert("end", f"  {asset.summary()}\n")
+            if asset.metadata_changed:
+                rude_text.insert(
+                    "end",
+                    f"      metadata: {asset.metadata.name!r}, "
+                    f"initial state {asset.metadata.initial_state}\n",
+                )
         for r in plan.rude_entries:
             rude_text.insert("end",
-                f"  NPCNbr {r.npc_nbr:>4}  '{r.name}'   blurb: {r.blurb!r}\n")
+                f"  legacy placement NPCNbr {r.npc_nbr:>4}  "
+                f"'{r.name}'   blurb: {r.blurb!r}\n")
             for p, resp in r.lines:
                 rude_text.insert("end", f"      {p!r} → {resp!r}\n")
         rude_text.config(state="disabled")
 
-        # RUDE controls. Fresh-NPC dialogue is written into the patched
-        # output data/RUDE.REZ archive when present.
+        # RUDE assets are written into the patched output data/RUDE.REZ.
         ctl = tk.Frame(rude_frame, bg="#1a1d22")
         ctl.pack(fill="x", padx=4, pady=(0, 4))
         self.rude_archive_patch = plan.rude_archive_patch()

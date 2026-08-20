@@ -77,7 +77,7 @@ def patch_model_record(
         struct.pack_into("<3f", raw, plane_offset, *normal)
         struct.pack_into("<f", raw, plane_offset + 12, float(distance))
 
-    for (center_offset, _surface_index_offset, _plane_index_offset), polygon in zip(
+    for (center_offset, _surface_index_offset), polygon in zip(
         polygon_offsets,
         edited_model.polygons,
     ):
@@ -2859,7 +2859,7 @@ def patch_terrain_model_points_and_section_bounds(
         planes,
     )
 
-    for (center_offset, _surface_index_offset, _plane_index_offset), polygon in zip(
+    for (center_offset, _surface_index_offset), polygon in zip(
         polygon_offsets,
         edited_model.polygons,
     ):

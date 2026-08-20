@@ -166,6 +166,15 @@ def _validate_bounds(model: bsp.WorldModelMesh, result: DatGeometryValidationRes
 def _validate_polygon_indices(model: bsp.WorldModelMesh, result: DatGeometryValidationResult) -> None:
     point_count = len(model.points)
     surface_count = len(model.surfaces)
+    plane_count = int(getattr(model, "plane_count", 0) or 0)
+    if plane_count > 0:
+        for index, surface in enumerate(model.surfaces):
+            plane_index = int(getattr(surface, "plane_index", -1))
+            if plane_index < 0 or plane_index >= plane_count:
+                result.errors.append(
+                    f"BSP model {model.name!r} surface {index} references plane {plane_index}"
+                )
+                return
     for index, polygon in enumerate(model.polygons):
         if len(polygon.vertex_indices) < 3:
             result.errors.append(f"BSP model {model.name!r} polygon {index} has fewer than 3 vertices")

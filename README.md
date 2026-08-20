@@ -47,6 +47,15 @@ Output files are written under `mm9_editor/output/`, and source archives are
 backed up under `mm9_editor/backups/`. If those folders are not writable, the
 editor falls back to `%LOCALAPPDATA%\mm9_editor\`.
 
+## Enabling the console and error logs in the game
+
+Add the following lines to the autoexec.cfg:
+
+- "ConsoleKey" "192"
+- "ErrorLog" "1"
+- "errorlogfile" "mm9_load.log"
+- "DebugLevel" "3"
+
 ## Workflow
 
 ### Opening A Level
@@ -55,6 +64,18 @@ Click **Open from WORLDS.REZ...** or press `Ctrl+O`, then choose a level from
 the archive picker. You can load multiple levels in one session and switch
 between them with the **Level** dropdown. The editor starts maximized and shows
 one centered **Loading...** indicator while a selected level is prepared.
+
+### Running The Current Level
+
+Click **Run Current Level** or press `Ctrl+Alt+R` to start Might and Magic IX
+directly in the active level with the game's default four-character preview
+party. The command includes unsaved in-memory DAT edits, generated behavioral
+and dialogue-integration scripts, and newly staged RUDE dialogue resources.
+
+Each launch is materialized under `output/run-preview/` and uses that folder as
+the game's working directory. The installed REZ archives are only read; preview
+DATs, configuration updates, mini-saves, autosaves, and logs remain isolated
+from the game installation. Close the running preview before launching another.
 
 ### Placing Objects
 
@@ -69,6 +90,14 @@ Properties panel.
 
 If the chosen class is an NPC, the editor asks whether to inherit the cloned
 NPC's dialogue or create a fresh NPCNbr and staged RUDE dialogue entries.
+
+Use **Tools → Dialogue & Quest Editor** to edit an `NPC<N>` state graph,
+simulate it with mock party keys, index quest-key use, and author journal or
+award rows without opening a level. Use **Tools → Dialogue Script Integration**
+separately for key-gated `OnRudeExit` rewards, the quest-completion sound, and
+named-object world changes. Generated scripts are staged below
+`SCRIPTS\MM9EDITOR\`; they can be attached to a selected matching NPC or kept
+as an independent project asset until placement is ready.
 
 ### Selecting And Editing
 

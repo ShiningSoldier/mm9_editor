@@ -203,7 +203,7 @@ class BspRecordDiffReport:
 @dataclass(frozen=True)
 class _BspRecordLayout:
     plane_offsets: List[int]
-    polygon_offsets: List[Tuple[int, int, int]]
+    polygon_offsets: List[Tuple[int, int]]
     polygon_lightmap_sizes: List[Tuple[int, int, int]]
     point_offsets: List[Tuple[int, int]]
     section_ranges: Dict[str, ByteRange]
@@ -820,17 +820,18 @@ def _diff_model(
 
 
 def _known_field_spans(offsets: Tuple[object, ...]) -> List[ByteRange]:
-    _name_length_pos, min_box_offset, max_box_offset, translation_offset, plane_offsets, _surface_offsets, polygon_offsets, point_offsets = offsets
+    _name_length_pos, min_box_offset, max_box_offset, translation_offset, plane_offsets, surface_offsets, polygon_offsets, point_offsets = offsets
     spans: List[ByteRange] = [
         (int(min_box_offset), int(min_box_offset) + 12),
         (int(max_box_offset), int(max_box_offset) + 12),
         (int(translation_offset), int(translation_offset) + 12),
     ]
     spans.extend((int(offset), int(offset) + 16) for offset in plane_offsets)
-    for center_offset, surface_index_offset, plane_index_offset in polygon_offsets:
+    for _uv_o_offset, _uv_p_offset, _uv_q_offset, plane_index_offset in surface_offsets:
+        spans.append((int(plane_index_offset), int(plane_index_offset) + 4))
+    for center_offset, surface_index_offset in polygon_offsets:
         spans.append((int(center_offset), int(center_offset) + 12))
-        spans.append((int(surface_index_offset), int(surface_index_offset) + 2))
-        spans.append((int(plane_index_offset), int(plane_index_offset) + 2))
+        spans.append((int(surface_index_offset), int(surface_index_offset) + 4))
     for point_offset, normal_offset in point_offsets:
         spans.append((int(point_offset), int(point_offset) + 12))
         spans.append((int(normal_offset), int(normal_offset) + 12))
@@ -1223,13 +1224,13 @@ def _decode_world_bsp_layout(raw: bytes, source_model: bsp.WorldModelMesh) -> _B
     sections["planes"] = (planes_start, cursor.pos)
 
     surfaces_start = cursor.pos
-    surface_offsets: List[Tuple[int, int, int]] = []
+    surface_offsets: List[Tuple[int, int, int, int]] = []
     for _ in range(surface_count):
         surface_offsets.append(_read_surface_offsets(cursor))
     sections["surfaces"] = (surfaces_start, cursor.pos)
 
     polygons_start = cursor.pos
-    polygon_offsets: List[Tuple[int, int, int]] = []
+    polygon_offsets: List[Tuple[int, int]] = []
     polygon_lightmap_sizes: List[Tuple[int, int, int]] = []
     for vert_count in verts_per_poly:
         center_offset = cursor.pos
@@ -1245,10 +1246,8 @@ def _decode_world_bsp_layout(raw: bytes, source_model: bsp.WorldModelMesh) -> _B
         if unknown_flag > 0:
             cursor.skip(unknown_flag * 4)
         surface_index_offset = cursor.pos
-        cursor.skip(2)
-        plane_index_offset = cursor.pos
-        cursor.skip(2)
-        polygon_offsets.append((center_offset, surface_index_offset, plane_index_offset))
+        cursor.skip(4)  # uint32 surface index; plane reference is stored by the surface.
+        polygon_offsets.append((center_offset, surface_index_offset))
         cursor.skip(vert_count * 5)
     sections["polygons"] = (polygons_start, cursor.pos)
 
@@ -1378,7 +1377,7 @@ def _decode_world_bsp_layout(raw: bytes, source_model: bsp.WorldModelMesh) -> _B
     )
 
 
-def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int]:
+def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int, int]:
     uv_o_offset = cursor.pos
     cursor.skip(12)
     uv_p_offset = cursor.pos
@@ -1386,6 +1385,7 @@ def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int]:
     uv_q_offset = cursor.pos
     cursor.skip(12)
     cursor.skip(2)
+    plane_index_offset = cursor.pos
     cursor.skip(4)
     cursor.skip(4)
     cursor.skip(4)
@@ -1394,7 +1394,7 @@ def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int]:
         cursor.lt_string_u16()
         cursor.lt_string_u16()
     cursor.skip(2)
-    return uv_o_offset, uv_p_offset, uv_q_offset
+    return uv_o_offset, uv_p_offset, uv_q_offset, plane_index_offset
 
 
 def _decode_terrain_tail(

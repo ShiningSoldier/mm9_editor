@@ -11,6 +11,7 @@ from tests._path import ROOT  # noqa: F401
 
 import _path_setup  # noqa: F401
 from core import game_resources
+from core import rezmgr
 import mm9_patch as patcher
 from core import project as P
 from tests.core_tests.test_game_resources import write_minimal_rez
@@ -224,6 +225,58 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             n = mm9_editor_app.EditorApp._suggest_next_npc_nbr(app)
 
             self.assertEqual(n, 3)
+
+    def test_fresh_npc_placement_creates_separate_rude_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rude_rez = os.path.join(tmp, "game", "data", "RUDE.REZ")
+            write_minimal_rez(rude_rez, {
+                "RUDE/NPCNAME": b'1,"Existing"\r\n',
+                "RUDE/TOPBLURB": b'1,1,"Hello"\r\n',
+                "RUDE/NPC1": (
+                    b'1,1,1,"Bye","Bye",-1,'
+                    + b','.join([b"0"] * 24)
+                    + b'\r\n'
+                ),
+            }, resource_type=rezmgr._restype_for_filename("NPC.RUDE"))
+            header = patcher.Header(66, 0, 0, (0,) * 8)
+            level = P.LevelEdit(
+                path="dummy.dat",
+                world=patcher.World(
+                    header=header,
+                    pre_objects=b"",
+                    objects=[],
+                    render_data=b"",
+                ),
+            )
+            template = patcher.WorldObject("Civilian", [
+                patcher.Property("Name", 0, 0, "Template"),
+                patcher.Property("Pos", 1, 0, (0.0, 0.0, 0.0)),
+                patcher.Property("NPCNbr", 6, 0, 0),
+            ])
+            app = object.__new__(mm9_editor_app.EditorApp)
+            app.active = level
+            app.project = P.Project(rude_rez_path=rude_rez)
+            app.view3d = None
+            app._pending_template = template
+            app._pending_kind = "class"
+            app._pending_rude_config = {
+                "mode": "fresh",
+                "npc_nbr": 437,
+                "name": "Independent NPC",
+                "blurb": "Hello independently",
+                "lines": [("Question", "Answer")],
+                "force": False,
+            }
+            app._refresh_after_edit = lambda _index: None
+
+            mm9_editor_app.EditorApp._place_pending_at_pos(
+                app, [1.0, 2.0, 3.0])
+
+            self.assertEqual(len(level.ops), 1)
+            self.assertIsNone(level.ops[0].rude)
+            self.assertIn(437, app.project.rude_assets)
+            self.assertTrue(app.project.rude_assets[437].is_new)
+            self.assertEqual(app.project.next_npc_nbr, 438)
 
     def test_lomm_conversion_command_opens_dialog_with_detected_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

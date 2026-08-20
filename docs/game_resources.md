@@ -19,7 +19,8 @@
   without manually extracted files.
 - Fresh NPC number suggestion scans `RUDE/NPC<N>` through
   `GameResources`, excluding the special `NPC997`-`NPC999` journal/note/award
-  files. In the bundled extracted data this currently suggests `438`.
+  files. The shipped archive has normal dialogues `NPC1`-`NPC436`, so this
+  currently suggests `437`.
 - The cache bridge is in place for viewport assets. `core/autodetect` resolves
   a writable cache folder, and `GameResources.cache_archive_tree()` can
   materialize REZ entries into a versioned cache keyed by archive path, size,
@@ -42,7 +43,30 @@
   now patch `RUDE.REZ` directly when a game `data/RUDE.REZ` archive is
   detected: `NPCNAME`, `TOPBLURB`, and `NPC<N>` are written to
   `output/<batch>/data/RUDE.REZ`, with review copies under
-  `changed_entries/RUDE/*.RUDE`. There is no loose RUDE staging workflow.
+  `changed_entries/RUDE/*.RUDE`. New extensionless archive entries carry the
+  required `RUDE` resource type so the runtime can resolve its `.rude` lookup.
+  There is no loose RUDE staging workflow.
+- `core/rude.py` is the lossless RUDE domain layer. It models metadata,
+  source-ordered state choices, all condition/effect slots, and known or
+  unknown native actions. The fresh-NPC archive path now serializes through
+  this model instead of assembling partial CSV rows directly.
+- `Project.rude_assets` owns normal dialogues and the `NPC997`-`NPC999`
+  journal assets independently of loaded levels. RUDE-only save plans and
+  manifests are supported, and archive patches include only the metadata or
+  dialogue resources whose bytes changed.
+- `Tools -> Dialogue & Quest Editor...` opens those assets without a level.
+  Its graph/state surface keeps choice order and every RUDE slot editable, and
+  its simulator evaluates required/forbidden keys and grant/remove effects
+  against a user-provided mock party key set. Native actions are identified
+  and reported as terminal mock outcomes rather than emulating engine UI or
+  script services.
+- The editor's Quest Tools tab builds a cross-archive key index from all RUDE
+  rows plus `HasKey`/`GiveKey`/`TakeKey` script calls, with current project
+  assets overlaid on the source archives. It can author stock-shaped Quest
+  Notes (`NPC997`) and Awards (`NPC999`) rows and validates graph reachability,
+  key predicates/effects, text limits, and action-specific native parameters.
+  Dynamic script operands remain explicitly unresolved instead of being
+  assigned speculative key ids.
 - Explicit install is in place. `File -> Install Output to Game...`
   asks the user to choose an `output/<batch>` folder, reads its manifest-aware
   patched archive list and any manifest-declared loose files, confirms the

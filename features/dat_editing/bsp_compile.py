@@ -55,6 +55,8 @@ class WorldModelCompileDiagnostics:
     point_count: int
     surface_count: int
     texture_count: int
+    surfaces: List[bsp.Surface]
+    surface_plane_indices: List[int]
     polygons: List[CompiledPolygonDiagnostics]
 
 
@@ -82,12 +84,12 @@ def analyze_model(model: bsp.WorldModelMesh) -> WorldModelCompileDiagnostics:
     points = list(model.points)
     polygons: List[CompiledPolygonDiagnostics] = []
     min_box, max_box = _bounds(points)
-    surface_count = len(model.surfaces or [])
+    source_surface_count = len(model.surfaces or [])
     texture_count = len(model.texture_names or ["Default"])
     for polygon_index, polygon in enumerate(model.polygons):
         normal, distance = _plane_for_polygon(points, polygon)
-        surface_index = max(0, min(int(polygon.surface_index), surface_count - 1))
-        surface = model.surfaces[surface_index]
+        source_surface_index = max(0, min(int(polygon.surface_index), source_surface_count - 1))
+        surface = model.surfaces[source_surface_index]
         texture_index = max(0, min(int(surface.texture_index), texture_count - 1))
         polygons.append(CompiledPolygonDiagnostics(
             polygon_index=polygon_index,
@@ -95,18 +97,29 @@ def analyze_model(model: bsp.WorldModelMesh) -> WorldModelCompileDiagnostics:
             center=_polygon_center(points, polygon),
             plane_normal=normal,
             plane_distance=distance,
-            surface_index=surface_index,
+            # V66 stores its plane reference on the surface.  Give every
+            # polygon a dedicated serialized surface so source meshes that
+            # share one material surface across non-coplanar faces remain
+            # representable without changing their appearance.
+            surface_index=polygon_index,
             texture_index=texture_index,
             uv_method=str(getattr(surface, "mm9_uv_method", "") or "unknown"),
         ))
+    serialized_surfaces = [
+        model.surfaces[int(polygon.surface_index)]
+        for polygon in model.polygons
+    ]
+    surface_plane_indices = list(range(len(polygons)))
     return WorldModelCompileDiagnostics(
         name=str(model.name),
         min_box=min_box,
         max_box=max_box,
         polygon_count=len(model.polygons),
         point_count=len(points),
-        surface_count=surface_count,
+        surface_count=len(serialized_surfaces),
         texture_count=texture_count,
+        surfaces=serialized_surfaces,
+        surface_plane_indices=surface_plane_indices,
         polygons=polygons,
     )
 
@@ -124,7 +137,7 @@ def _pack_world_bsp(
 ) -> bytes:
     polygons = list(model.polygons)
     points = list(model.points)
-    surfaces = list(model.surfaces)
+    surfaces = list(diagnostics.surfaces)
     texture_names = [str(name or "Default") for name in (model.texture_names or ["Default"])]
     if not surfaces:
         surfaces = [
@@ -183,24 +196,29 @@ def _pack_world_bsp(
         out += _vec3(normal)
         out += struct.pack("<f", float(distance))
 
-    for surface in surfaces:
+    for surface_index, surface in enumerate(surfaces):
         texture_index = max(0, min(int(surface.texture_index), len(texture_names) - 1))
         out += _vec3(surface.uv_o)
         out += _vec3(surface.uv_p)
         out += _vec3(surface.uv_q)
         out += struct.pack("<H", texture_index)
-        out += struct.pack("<I", 0)
+        # In MM9 v66 the plane reference belongs to the surface, not the
+        # polygon.  Each value indexes the plane table emitted above.
+        out += struct.pack("<I", diagnostics.surface_plane_indices[surface_index])
         out += struct.pack("<I", int(surface.flags) & 0xFFFFFFFF)
         out += struct.pack("<I", 0)
         out += struct.pack("<B", 0)  # no effect strings
         out += struct.pack("<H", int(surface.texture_flags) & 0xFFFF)
 
-    for plane_index, (polygon, polygon_diag) in enumerate(zip(polygons, diagnostics.polygons)):
+    for polygon, polygon_diag in zip(polygons, diagnostics.polygons):
         center = polygon_diag.center
         surface_index = polygon_diag.surface_index
         out += _vec3(center)
         out += struct.pack("<HHH", 0, 0, 0)  # lightmap width, height, unknown flag
-        out += struct.pack("<HH", surface_index, plane_index)
+        # The retail v66 loader reads a single uint32 here.  A previous
+        # uint16-surface/uint16-plane encoding produced values such as
+        # 0x00010001 and caused LT_INVALIDWORLDFILE.
+        out += struct.pack("<I", surface_index)
         for vertex_index in polygon.vertex_indices:
             out += struct.pack("<H", int(vertex_index) & 0xFFFF)
             out += b"\xFF\xFF\xFF"

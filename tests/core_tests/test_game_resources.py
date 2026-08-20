@@ -18,7 +18,7 @@ def write_file(path: str, data: bytes) -> None:
         f.write(data)
 
 
-def write_minimal_rez(path: str, entries):
+def write_minimal_rez(path: str, entries, *, resource_type: int = 0):
     """Write a tiny REZ with entries like {"RUDE/NPC1": b"..."}."""
     now = int(time.time())
     payload_chunks = []
@@ -40,7 +40,7 @@ def write_minimal_rez(path: str, entries):
         for name, data in files:
             block += struct.pack("<I", mm9_rezmgr.ENTRY_TYPE_RESOURCE)
             block += struct.pack("<III", entry_positions[f"{root}/{name}"], len(data), now)
-            block += struct.pack("<III", 0, 0, 0)
+            block += struct.pack("<III", 0, resource_type, 0)
             block += name.encode("latin-1") + b"\x00"
             block += b"\x00"
         dir_blocks[root] = bytes(block)

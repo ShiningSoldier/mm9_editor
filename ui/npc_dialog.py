@@ -28,7 +28,7 @@ Return value
     "force": False}``
     Assign a new NPCNbr.  The caller is responsible for:
       * encoding npc_nbr as float-bits in the NPCNbr property override
-      * attaching this dict (minus "mode") as AddOp.rude
+      * creating an independent project-level RUDE asset
       * advancing project.next_npc_nbr
     The "lines" list is (player_prompt, npc_response) tuples.
 """
@@ -278,8 +278,9 @@ class FreshNpcDialog(tk.Toplevel):
             Keep the cloned object's NPCNbr.
         ``{"mode": "fresh", "npc_nbr": int, "name": str, "blurb": str,
            "lines": List[Tuple[str, str]], "force": bool}``
-            Register a fresh NPC.  Caller should strip "mode" before
-            storing in ``AddOp.rude``.
+            Register a fresh NPC. Caller should strip ``mode`` and create a
+            project-level ``RudeAssetEdit`` rather than attaching dialogue to
+            the placement operation.
         """
         dlg = cls(parent, suggested_nbr, default_name)
         parent.wait_window(dlg)

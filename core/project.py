@@ -12,7 +12,7 @@ look like with all pending ops applied.
 This is what the GUI works with. Operations are reified so we can:
 - Undo/redo
 - Show an explicit diff before saving
-- Stage RUDE registrations alongside DAT edits
+- Track and stage RUDE assets independently from DAT object placement
 
 Saving is explicit: project.save_plan() returns a SavePlan that the user
 reviews (in the editor's diff dialog), and Project.execute(plan) writes
@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
 from core import bsp
+from core import rude as rude_model
+from core import rude_script
 from features.doors import bsp_writer as door_bsp_writer
 from features.doors import clone as door_clone
 from features.doors import validation as door_clone_validation
@@ -1415,6 +1417,105 @@ class LevelEdit:
 # Project
 # --------------------------------------------------------------------------
 
+def _rude_metadata_signature(
+    metadata: Optional[rude_model.RudeDialogueMetadata],
+) -> Optional[Tuple[int, str, int, str]]:
+    if metadata is None:
+        return None
+    return (
+        int(metadata.npc_nbr),
+        str(metadata.name),
+        int(metadata.initial_state),
+        str(metadata.opening_blurb),
+    )
+
+
+@dataclass
+class RudeAssetEdit:
+    """A project-level RUDE asset, independent of any placed world object."""
+
+    npc_nbr: int
+    dialogue: rude_model.RudeDialogue
+    source_virtual_path: str
+    original_metadata: Optional[rude_model.RudeDialogueMetadata] = None
+    original_dialogue_bytes: Optional[bytes] = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        self.npc_nbr = int(self.npc_nbr)
+        self.source_virtual_path = (
+            str(self.source_virtual_path or f"RUDE/NPC{self.npc_nbr}")
+            .replace("\\", "/")
+        )
+        self.validate_identity()
+
+    @property
+    def metadata(self) -> rude_model.RudeDialogueMetadata:
+        return self.dialogue.metadata
+
+    @property
+    def is_new(self) -> bool:
+        return self.original_dialogue_bytes is None
+
+    @property
+    def dialogue_changed(self) -> bool:
+        return self.is_new or self.dialogue.to_bytes() != self.original_dialogue_bytes
+
+    @property
+    def name_changed(self) -> bool:
+        if self.original_metadata is None:
+            return True
+        return self.metadata.name != self.original_metadata.name
+
+    @property
+    def blurb_changed(self) -> bool:
+        if self.original_metadata is None:
+            return True
+        return (
+            self.metadata.initial_state != self.original_metadata.initial_state
+            or self.metadata.opening_blurb != self.original_metadata.opening_blurb
+        )
+
+    @property
+    def metadata_changed(self) -> bool:
+        return self.name_changed or self.blurb_changed
+
+    @property
+    def is_dirty(self) -> bool:
+        self.validate_identity()
+        return self.dialogue_changed or self.metadata_changed
+
+    def validate_identity(self) -> None:
+        if self.metadata.npc_nbr != self.npc_nbr:
+            raise ValueError(
+                f"RUDE asset NPC{self.npc_nbr} cannot change identity to "
+                f"NPC{self.metadata.npc_nbr}"
+            )
+        expected = f"RUDE/NPC{self.npc_nbr}".casefold()
+        actual = self.source_virtual_path
+        if actual.lower().endswith(".rude"):
+            actual = actual[:-5]
+        if actual.casefold() != expected:
+            raise ValueError(
+                f"RUDE asset NPC{self.npc_nbr} has unexpected resource path "
+                f"{self.source_virtual_path!r}"
+            )
+        for choice in self.dialogue.choices_in_file_order:
+            if choice.npc_nbr != self.npc_nbr:
+                raise ValueError(
+                    f"RUDE asset NPC{self.npc_nbr} contains a row for "
+                    f"NPC{choice.npc_nbr}"
+                )
+
+    def summary(self) -> str:
+        state_count = len(self.dialogue.states)
+        choice_count = len(self.dialogue.choices_in_file_order)
+        kind = "new" if self.is_new else "edit"
+        return (
+            f"{kind} RUDE/NPC{self.npc_nbr}: {state_count} state(s), "
+            f"{choice_count} choice(s)"
+        )
+
+
 @dataclass
 class Project:
     levels: List[LevelEdit] = field(default_factory=list)
@@ -1426,6 +1527,9 @@ class Project:
 
     # Track sources we've already backed up this session, so we don't do it twice.
     backed_up_archives: List[str] = field(default_factory=list)
+    rude_assets: Dict[int, RudeAssetEdit] = field(default_factory=dict)
+    dialogue_script_assets: Dict[int, rude_script.DialogueScriptAssetEdit] = field(
+        default_factory=dict)
 
     def add_level_from_rez(self, rez_path: str, virtual_path: str) -> LevelEdit:
         """Open a level that lives inside a .REZ archive."""
@@ -1454,6 +1558,184 @@ class Project:
                 return L
         return None
 
+    def open_rude_asset(self, npc_nbr: int) -> RudeAssetEdit:
+        """Load an existing normal or special NPC resource for independent editing."""
+        npc_nbr = int(npc_nbr)
+        existing = self.rude_assets.get(npc_nbr)
+        if existing is not None:
+            return existing
+        if not self.rude_rez_path or not os.path.isfile(self.rude_rez_path):
+            raise FileNotFoundError("RUDE.REZ source archive was not found")
+
+        from core import rezmgr
+
+        with rezmgr.RezReader(self.rude_rez_path) as reader:
+            npcname_vpath = self._find_rez_entry(
+                reader, ("RUDE/NPCNAME", "RUDE/NPCNAME.RUDE"))
+            topblurb_vpath = self._find_rez_entry(
+                reader, ("RUDE/TOPBLURB", "RUDE/TOPBLURB.RUDE"))
+            dialogue_vpath = self._find_rez_entry(reader, (
+                f"RUDE/NPC{npc_nbr}",
+                f"RUDE/NPC{npc_nbr}.RUDE",
+            ))
+            if npcname_vpath is None or topblurb_vpath is None:
+                raise FileNotFoundError("RUDE.REZ is missing NPCNAME or TOPBLURB")
+            if dialogue_vpath is None:
+                raise FileNotFoundError(
+                    f"RUDE.REZ does not contain RUDE/NPC{npc_nbr}")
+            catalog = rude_model.RudeMetadataCatalog.from_bytes(
+                reader.extract_to_bytes(npcname_vpath),
+                reader.extract_to_bytes(topblurb_vpath),
+            )
+            metadata = catalog.metadata_for(npc_nbr)
+            dialogue_bytes = reader.extract_to_bytes(dialogue_vpath)
+
+        dialogue = rude_model.RudeDialogue.from_bytes(
+            metadata,
+            dialogue_bytes,
+            resource=dialogue_vpath,
+        )
+        asset = RudeAssetEdit(
+            npc_nbr=npc_nbr,
+            dialogue=dialogue,
+            source_virtual_path=dialogue_vpath,
+            original_metadata=copy.deepcopy(metadata),
+            original_dialogue_bytes=dialogue_bytes,
+        )
+        self.rude_assets[npc_nbr] = asset
+        return asset
+
+    def create_rude_asset(
+        self,
+        dialogue: rude_model.RudeDialogue,
+    ) -> RudeAssetEdit:
+        """Stage a new RUDE dialogue without placing an NPC world object."""
+        npc_nbr = int(dialogue.metadata.npc_nbr)
+        if npc_nbr in self.rude_assets:
+            raise ValueError(f"RUDE asset NPC{npc_nbr} is already open")
+        if not self.rude_rez_path or not os.path.isfile(self.rude_rez_path):
+            raise FileNotFoundError("RUDE.REZ source archive was not found")
+
+        from core import rezmgr
+
+        with rezmgr.RezReader(self.rude_rez_path) as reader:
+            npcname_vpath = self._find_rez_entry(
+                reader, ("RUDE/NPCNAME", "RUDE/NPCNAME.RUDE"))
+            topblurb_vpath = self._find_rez_entry(
+                reader, ("RUDE/TOPBLURB", "RUDE/TOPBLURB.RUDE"))
+            if npcname_vpath is None or topblurb_vpath is None:
+                raise FileNotFoundError("RUDE.REZ is missing NPCNAME or TOPBLURB")
+            catalog = rude_model.RudeMetadataCatalog.from_bytes(
+                reader.extract_to_bytes(npcname_vpath),
+                reader.extract_to_bytes(topblurb_vpath),
+            )
+            dialogue_entry = reader.find(f"RUDE/NPC{npc_nbr}")
+            conflicts = []
+            if dialogue_entry is not None:
+                conflicts.append(f"NPC{npc_nbr} already exists")
+            if catalog.has_name(npc_nbr):
+                conflicts.append(f"NPCNAME already has {npc_nbr}")
+            if catalog.has_blurb(npc_nbr):
+                conflicts.append(f"TOPBLURB already has {npc_nbr}")
+            if conflicts:
+                raise ValueError(
+                    f"RUDE asset conflict for NPC{npc_nbr}: " + "; ".join(conflicts))
+
+        asset = RudeAssetEdit(
+            npc_nbr=npc_nbr,
+            dialogue=dialogue,
+            source_virtual_path=f"RUDE/NPC{npc_nbr}",
+        )
+        self.rude_assets[npc_nbr] = asset
+        return asset
+
+    def create_simple_rude_asset(
+        self,
+        registration: "RudeRegistration",
+    ) -> RudeAssetEdit:
+        metadata = rude_model.RudeDialogueMetadata(
+            npc_nbr=registration.npc_nbr,
+            name=registration.name,
+            initial_state=registration.npc_nbr,
+            opening_blurb=registration.blurb,
+        )
+        return self.create_rude_asset(
+            rude_model.make_simple_dialogue(metadata, registration.lines))
+
+    def close_rude_asset(self, npc_nbr: int, *, discard: bool = False) -> None:
+        asset = self.rude_assets.get(int(npc_nbr))
+        if asset is None:
+            return
+        if asset.is_dirty and not discard:
+            raise ValueError(
+                f"RUDE asset NPC{npc_nbr} has pending edits; pass discard=True to close it")
+        del self.rude_assets[int(npc_nbr)]
+
+    def load_script_source(self, virtual_path: str) -> Tuple[str, str]:
+        """Load one shipped script by ScriptName/archive path without editing it."""
+        if not self.scripts_rez_path or not os.path.isfile(self.scripts_rez_path):
+            raise FileNotFoundError("SCRIPTS.REZ source archive was not found")
+        requested = rude_script.canonical_script_path(virtual_path)
+        from core import rezmgr
+
+        with rezmgr.RezReader(self.scripts_rez_path) as reader:
+            by_key = {
+                _script_rez_key(path): path
+                for path in reader.list_paths()
+            }
+            actual = by_key.get(_script_rez_key(requested))
+            if actual is None:
+                raise FileNotFoundError(
+                    f"SCRIPTS.REZ does not contain {requested}"
+                )
+            data = reader.extract_to_bytes(actual)
+        return requested, data.decode("latin-1")
+
+    def upsert_dialogue_script_asset(
+        self,
+        integration: rude_script.DialogueScriptIntegration,
+    ) -> rude_script.DialogueScriptAssetEdit:
+        """Stage a reviewed generated script independently from world placement."""
+        candidate = copy.deepcopy(integration)
+        candidate.validate()
+        candidate.to_bytes()
+        npc_nbr = candidate.npc_nbr
+        target_key = _script_rez_key(candidate.virtual_path)
+        for other_npc, other in self.dialogue_script_assets.items():
+            if other_npc != npc_nbr and _script_rez_key(
+                    other.integration.virtual_path) == target_key:
+                raise ValueError(
+                    f"NPC{other_npc} already stages {candidate.virtual_path}"
+                )
+        existing = self.dialogue_script_assets.get(npc_nbr)
+        if existing is not None:
+            if _script_rez_key(existing.integration.virtual_path) != target_key:
+                raise ValueError(
+                    "A staged dialogue script's resource path cannot be renamed; "
+                    "remove it and create a new asset instead"
+                )
+            existing.integration = candidate
+            return existing
+        asset = rude_script.DialogueScriptAssetEdit(candidate)
+        self.dialogue_script_assets[npc_nbr] = asset
+        return asset
+
+    def close_dialogue_script_asset(
+        self,
+        npc_nbr: int,
+        *,
+        discard: bool = False,
+    ) -> None:
+        asset = self.dialogue_script_assets.get(int(npc_nbr))
+        if asset is None:
+            return
+        if asset.is_dirty and not discard:
+            raise ValueError(
+                f"NPC{npc_nbr} dialogue script has pending edits; "
+                "pass discard=True to remove it"
+            )
+        del self.dialogue_script_assets[int(npc_nbr)]
+
     def _maybe_backup_archive(self, rez_path: str) -> Optional[str]:
         """Copy the source REZ to <backup_root>/<archive>.REZ.bak the first
         time we see it this session. Returns the backup path (or None if no
@@ -1476,9 +1758,127 @@ class Project:
             return None
 
     def has_pending(self) -> bool:
-        return any(L.effective_ops() for L in self.levels)
+        return (
+            any(L.effective_ops() for L in self.levels)
+            or any(asset.is_dirty for asset in self.rude_assets.values())
+            or any(
+                asset.is_dirty for asset in self.dialogue_script_assets.values())
+        )
 
     # ---------- save planning (explicit; user reviews before commit) ----------
+
+    def _build_dat_write(self, L: LevelEdit, output_path: str) -> "DatWrite":
+        """Build and validate the runtime write description for one level."""
+        effective_ops = L.effective_ops()
+        unsafe_prefabs = L.runtime_unsafe_prefab_reasons()
+        if unsafe_prefabs:
+            raise ValueError(
+                "Cannot build an MM9 DAT from preview-grade prefab geometry:\n\n"
+                + "\n".join(f"- {message}" for message in unsafe_prefabs)
+            )
+        materialized = L.materialize()
+        door_clones = L.door_clone_plans()
+        prefab_imports = L.prefab_import_plans(require_runtime_bsp=True)
+        behavioral_prefab_imports = L.behavioral_prefab_import_plans()
+        resource_prefab_imports = [
+            op for op in effective_ops
+            if isinstance(op, ImportResourcePrefabOp)
+        ]
+        validation_warnings: List[str] = []
+        if door_clones and getattr(L, "_raw_bytes", None):
+            bsp_world = L.get_bsp()
+            if bsp_world is not None:
+                validation_warnings = door_clone_validation.validate_clone_plans(
+                    L._raw_bytes,
+                    materialized,
+                    bsp_world,
+                    door_clones,
+                )
+        if prefab_imports:
+            bsp_world = L.get_bsp()
+            if bsp_world is not None:
+                validation_warnings.extend(
+                    prefab_import_validation.validate_import_plans(
+                        bsp_world,
+                        prefab_imports,
+                    )
+                )
+        blocking_issues = L.conversion_blocking_issues()
+        blocking_issues.extend(
+            L.behavioral_prefab_blocking_issues(
+                behavioral_prefab_imports,
+                materialized,
+            )
+        )
+        validation_warnings.extend(
+            issue["message"] for issue in blocking_issues
+        )
+        return DatWrite(
+            source_path=L.path,
+            output_path=output_path,
+            ops_summary=[op.summary() for op in effective_ops],
+            materialized=materialized,
+            level_edit=L,
+            backup_path=L.backup_path,
+            door_clones=door_clones,
+            prefab_imports=prefab_imports,
+            behavioral_prefab_imports=behavioral_prefab_imports,
+            resource_prefab_imports=resource_prefab_imports,
+            validation_warnings=validation_warnings,
+            blocking_issues=blocking_issues,
+        )
+
+    def build_runtime_dat(self, L: LevelEdit) -> Tuple[bytes, "DatWrite"]:
+        """Serialize one level exactly as the save pipeline would.
+
+        Clean levels reuse their original DAT bytes. Edited levels go through
+        the same BSP writers and runtime validation guards used by Save.
+        """
+        d = self._build_dat_write(L, output_path="")
+        if not L.effective_ops():
+            return L.source_bytes(), d
+        return self._dat_write_to_bytes(d), d
+
+    def build_runtime_overlay_entries(self, L: LevelEdit) -> Dict[str, bytes]:
+        """Build non-DAT loose resources required by one level preview."""
+        entries = self.build_behavioral_script_overlay_entries([L])
+        dialogue_scripts = self.build_dialogue_script_overlay_entries()
+        folded_scripts = {
+            _script_rez_key(path): path
+            for path in entries
+        }
+        for path, data in dialogue_scripts.items():
+            previous = folded_scripts.get(_script_rez_key(path))
+            if previous is not None and entries[previous] != data:
+                raise ValueError(f"conflicting runtime overlay resource {path}")
+            entries[path] = data
+            folded_scripts[_script_rez_key(path)] = path
+        registrations = [
+            RudeRegistration(**op.rude)
+            for op in L.effective_ops()
+            if isinstance(op, AddOp) and op.rude
+        ]
+        asset_edits = [
+            copy.deepcopy(asset)
+            for _npc_nbr, asset in sorted(self.rude_assets.items())
+            if asset.is_dirty
+        ]
+        rude_entries = self.build_rude_overlay_entries(
+            registrations,
+            asset_edits=asset_edits,
+        )
+        folded = {
+            str(path).replace("/", "\\").casefold(): path
+            for path in entries
+        }
+        for path, data in rude_entries.items():
+            key = str(path).replace("/", "\\").casefold()
+            previous = folded.get(key)
+            if previous is not None and entries[previous] != data:
+                raise ValueError(f"conflicting runtime overlay resource {path}")
+            entries[path] = data
+            folded[key] = path
+        return entries
 
     def save_plan(self) -> "SavePlan":
         batch_id = _timestamp()
@@ -1487,66 +1887,31 @@ class Project:
             effective_ops = L.effective_ops()
             if not effective_ops:
                 continue
-            unsafe_prefabs = L.runtime_unsafe_prefab_reasons()
-            if unsafe_prefabs:
-                raise ValueError(
-                    "Cannot build an MM9 DAT from preview-grade prefab geometry:\n\n"
-                    + "\n".join(f"- {message}" for message in unsafe_prefabs)
-                )
-            materialized = L.materialize()
-            door_clones = L.door_clone_plans()
-            prefab_imports = L.prefab_import_plans(require_runtime_bsp=True)
-            behavioral_prefab_imports = L.behavioral_prefab_import_plans()
-            resource_prefab_imports = [
-                op for op in effective_ops
-                if isinstance(op, ImportResourcePrefabOp)
-            ]
-            validation_warnings: List[str] = []
-            if door_clones and getattr(L, "_raw_bytes", None):
-                bsp_world = L.get_bsp()
-                if bsp_world is not None:
-                    validation_warnings = door_clone_validation.validate_clone_plans(
-                        L._raw_bytes,
-                        materialized,
-                        bsp_world,
-                        door_clones,
-                    )
-            if prefab_imports:
-                bsp_world = L.get_bsp()
-                if bsp_world is not None:
-                    validation_warnings.extend(
-                        prefab_import_validation.validate_import_plans(
-                            bsp_world,
-                            prefab_imports,
-                        )
-                    )
-            blocking_issues = L.conversion_blocking_issues()
-            blocking_issues.extend(
-                L.behavioral_prefab_blocking_issues(
-                    behavioral_prefab_imports,
-                    materialized,
-                )
-            )
-            validation_warnings.extend(
-                issue["message"] for issue in blocking_issues
-            )
-            plan.dats.append(DatWrite(
-                source_path=L.path,
+            plan.dats.append(self._build_dat_write(
+                L,
                 output_path=L.output_path(self.work_dir, batch_id),
-                ops_summary=[op.summary() for op in effective_ops],
-                materialized=materialized,
-                level_edit=L,
-                backup_path=L.backup_path,
-                door_clones=door_clones,
-                prefab_imports=prefab_imports,
-                behavioral_prefab_imports=behavioral_prefab_imports,
-                resource_prefab_imports=resource_prefab_imports,
-                validation_warnings=validation_warnings,
-                blocking_issues=blocking_issues,
             ))
             for op in effective_ops:
                 if isinstance(op, AddOp) and op.rude:
                     plan.rude_entries.append(RudeRegistration(**op.rude))
+        plan.rude_assets = [
+            copy.deepcopy(asset)
+            for _npc_nbr, asset in sorted(self.rude_assets.items())
+            if asset.is_dirty
+        ]
+        plan.dialogue_script_assets = [
+            copy.deepcopy(asset)
+            for _npc_nbr, asset in sorted(self.dialogue_script_assets.items())
+            if asset.is_dirty
+        ]
+        legacy_ids = {entry.npc_nbr for entry in plan.rude_entries}
+        asset_ids = {asset.npc_nbr for asset in plan.rude_assets}
+        overlap = sorted(legacy_ids & asset_ids)
+        if overlap:
+            joined = ", ".join(f"NPC{npc_nbr}" for npc_nbr in overlap)
+            raise ValueError(
+                f"RUDE assets are staged both independently and through legacy "
+                f"NPC placement registrations: {joined}")
         self._populate_archive_patches(plan)
         self._populate_bsp_record_diff_reports(plan)
         return plan
@@ -1557,30 +1922,13 @@ class Project:
                 continue
             self._dat_write_to_bytes(d)
 
-    def _populate_archive_patches(self, plan: "SavePlan") -> None:
-        archive_entries: Dict[str, Dict[str, Any]] = {}
-        for d in plan.dats:
-            L = d.level_edit
-            if not L or L.source_kind != SOURCE_REZ or not L.rez_path:
-                continue
-            key = os.path.abspath(L.rez_path)
-            patch = archive_entries.setdefault(key, {
-                "source_archive": L.rez_path,
-                "output_archive": d.output_path,
-                "entries": [],
-                "kind": "level",
-            })
-            if L.rez_vpath:
-                patch["entries"].append(L.rez_vpath)
-
-        for patch in archive_entries.values():
-            plan.archive_patches.append(ArchivePatch(**patch))
-
+    def build_behavioral_script_overlay_entries(
+        self,
+        levels: Sequence[LevelEdit],
+    ) -> Dict[str, bytes]:
+        """Return validated loose script resources generated by *levels*."""
         script_assets: Dict[str, Tuple[str, bytes]] = {}
-        for d in plan.dats:
-            L = d.level_edit
-            if L is None:
-                continue
+        for L in levels:
             for op in L.effective_ops():
                 if not isinstance(op, ImportBehavioralPrefabOp):
                     continue
@@ -1606,10 +1954,103 @@ class Project:
                             f"conflicting generated behavioral scripts target {virtual_path}"
                         )
                     script_assets[folded] = (virtual_path, data)
-        if script_assets:
+        return {
+            path: data
+            for _key, (path, data) in sorted(script_assets.items())
+        }
+
+    def build_dialogue_script_overlay_entries(
+        self,
+        assets: Optional[Sequence[rude_script.DialogueScriptAssetEdit]] = None,
+    ) -> Dict[str, bytes]:
+        """Return reviewed project-owned RUDE exit scripts for staging/preview."""
+        selected = (
+            list(assets)
+            if assets is not None
+            else list(self.dialogue_script_assets.values())
+        )
+        archived_paths: Dict[str, str] = {}
+        archived_bytes: Dict[str, bytes] = {}
+        if self.scripts_rez_path and os.path.isfile(self.scripts_rez_path):
+            from core import rezmgr
+            with rezmgr.RezReader(self.scripts_rez_path) as reader:
+                archived_paths = {
+                    _script_rez_key(path): path for path in reader.list_paths()
+                }
+                for asset in selected:
+                    key = _script_rez_key(asset.integration.virtual_path)
+                    actual = archived_paths.get(key)
+                    if actual is not None:
+                        archived_bytes[key] = reader.extract_to_bytes(actual)
+        generated: Dict[str, Tuple[str, bytes]] = {}
+        for asset in selected:
+            if not asset.is_dirty:
+                continue
+            path = rude_script.canonical_script_path(
+                asset.integration.virtual_path,
+                require_editor_root=True,
+            )
+            data = asset.integration.to_bytes()
+            key = _script_rez_key(path)
+            archived = archived_bytes.get(key)
+            if archived is not None:
+                if asset.original_script_bytes is None:
+                    raise ValueError(
+                        f"Generated dialogue script {path} already exists in "
+                        "SCRIPTS.REZ; refusing to overwrite an untracked script"
+                    )
+                if archived != asset.original_script_bytes:
+                    raise ValueError(
+                        f"Generated dialogue script {path} changed in SCRIPTS.REZ "
+                        "after the project opened it"
+                    )
+            previous = generated.get(key)
+            if previous is not None and previous[1] != data:
+                raise ValueError(f"conflicting dialogue scripts target {path}")
+            generated[key] = (path, data)
+        return {
+            path: data
+            for _key, (path, data) in sorted(generated.items())
+        }
+
+    def _populate_archive_patches(self, plan: "SavePlan") -> None:
+        archive_entries: Dict[str, Dict[str, Any]] = {}
+        for d in plan.dats:
+            L = d.level_edit
+            if not L or L.source_kind != SOURCE_REZ or not L.rez_path:
+                continue
+            key = os.path.abspath(L.rez_path)
+            patch = archive_entries.setdefault(key, {
+                "source_archive": L.rez_path,
+                "output_archive": d.output_path,
+                "entries": [],
+                "kind": "level",
+            })
+            if L.rez_vpath:
+                patch["entries"].append(L.rez_vpath)
+
+        for patch in archive_entries.values():
+            plan.archive_patches.append(ArchivePatch(**patch))
+
+        script_levels = [
+            d.level_edit for d in plan.dats if d.level_edit is not None
+        ]
+        behavioral_additions = self.build_behavioral_script_overlay_entries(
+            script_levels)
+        dialogue_additions = self.build_dialogue_script_overlay_entries(
+            plan.dialogue_script_assets)
+        additions = dict(behavioral_additions)
+        addition_keys = {_script_rez_key(path): path for path in additions}
+        for path, data in dialogue_additions.items():
+            previous_path = addition_keys.get(_script_rez_key(path))
+            if previous_path is not None and additions[previous_path] != data:
+                raise ValueError(f"conflicting generated scripts target {path}")
+            additions[path] = data
+            addition_keys[_script_rez_key(path)] = path
+        if additions:
             if not self.scripts_rez_path or not os.path.isfile(self.scripts_rez_path):
                 raise FileNotFoundError(
-                    "SCRIPTS.REZ is required to save this scripted prefab import"
+                    "SCRIPTS.REZ is required to save generated script assets"
                 )
             if not self.work_dir or not plan.batch_id:
                 raise ValueError(
@@ -1621,15 +2062,17 @@ class Project:
                 "data",
                 os.path.basename(self.scripts_rez_path),
             )
-            additions = {
-                path: data
-                for _key, (path, data) in sorted(script_assets.items())
-            }
             plan.archive_patches.append(ArchivePatch(
                 source_archive=self.scripts_rez_path,
                 output_archive=output,
                 entries=list(additions),
-                kind="behavioral_scripts",
+                kind=(
+                    "scripts"
+                    if behavioral_additions and dialogue_additions
+                    else "dialogue_scripts"
+                    if dialogue_additions
+                    else "behavioral_scripts"
+                ),
                 additions=additions,
             ))
 
@@ -1658,13 +2101,28 @@ class Project:
                     kind="conversion_asset",
                 ))
 
-        if plan.rude_entries and self.rude_rez_path and self.work_dir and plan.batch_id:
+        if plan.has_rude_changes():
+            if not self.rude_rez_path or not os.path.isfile(self.rude_rez_path):
+                raise FileNotFoundError("RUDE.REZ source archive was not found")
+            if not self.work_dir or not plan.batch_id:
+                raise ValueError(
+                    "an output work directory is required to stage RUDE assets")
             output = os.path.join(
                 self.work_dir, plan.batch_id, "data",
                 os.path.basename(self.rude_rez_path),
             )
-            entries = ["RUDE/NPCNAME", "RUDE/TOPBLURB"]
-            entries.extend(f"RUDE/NPC{r.npc_nbr}" for r in plan.rude_entries)
+            entries: List[str] = []
+            if plan.rude_entries:
+                entries.extend(("RUDE/NPCNAME", "RUDE/TOPBLURB"))
+                entries.extend(f"RUDE/NPC{r.npc_nbr}" for r in plan.rude_entries)
+            for asset in plan.rude_assets:
+                if asset.name_changed:
+                    entries.append("RUDE/NPCNAME")
+                if asset.blurb_changed:
+                    entries.append("RUDE/TOPBLURB")
+                if asset.dialogue_changed:
+                    entries.append(f"RUDE/NPC{asset.npc_nbr}")
+            entries = list(dict.fromkeys(entries))
             plan.archive_patches.append(ArchivePatch(
                 source_archive=self.rude_rez_path,
                 output_archive=output,
@@ -1696,11 +2154,11 @@ class Project:
             shutil.copy2(patch.source_archive, patch.output_archive)
             log.append(f"carried staged conversion asset archive {patch.output_archive}")
 
-        script_patch = plan.behavioral_scripts_archive_patch()
+        script_patch = plan.scripts_archive_patch()
         if script_patch is not None:
-            log.extend(self.execute_behavioral_scripts_rez(script_patch))
+            log.extend(self.execute_scripts_rez(script_patch))
 
-        if plan.rude_entries and plan.rude_archive_patch() is not None:
+        if plan.has_rude_changes() and plan.rude_archive_patch() is not None:
             log.extend(self.execute_rude_rez(plan))
 
         manifest = self._write_manifest(plan)
@@ -1708,8 +2166,8 @@ class Project:
             log.append(f"wrote {manifest}")
         return log
 
-    def execute_behavioral_scripts_rez(self, patch: "ArchivePatch") -> List[str]:
-        """Write reviewed per-import script copies into a complete SCRIPTS.REZ."""
+    def execute_scripts_rez(self, patch: "ArchivePatch") -> List[str]:
+        """Write reviewed generated script assets into a complete SCRIPTS.REZ."""
         source_rez = patch.source_archive
         output_rez = patch.output_archive
         if not source_rez or not os.path.isfile(source_rez):
@@ -1736,6 +2194,10 @@ class Project:
                 log.append(f"  staged {virtual_path}")
             writer.commit()
         return [f"wrote {output_rez}"] + log
+
+    def execute_behavioral_scripts_rez(self, patch: "ArchivePatch") -> List[str]:
+        """Compatibility alias for the original Phase-6 script staging API."""
+        return self.execute_scripts_rez(patch)
 
     def _execute_rez_writes(self, writes: List["DatWrite"]) -> List[str]:
         """Write one patched REZ per source archive.
@@ -1904,7 +2366,11 @@ class Project:
         }.get(root, "")
 
     def _write_manifest(self, plan: "SavePlan") -> Optional[str]:
-        if not plan.dats or not self.work_dir or not plan.batch_id:
+        if (
+            not (plan.dats or plan.archive_patches)
+            or not self.work_dir
+            or not plan.batch_id
+        ):
             return None
         manifest_path = os.path.join(self.work_dir, plan.batch_id, "manifest.json")
         try:
@@ -1944,6 +2410,30 @@ class Project:
                     }
                     for r in plan.rude_entries
                 ],
+                "rude_assets": [
+                    {
+                        "npc_nbr": asset.npc_nbr,
+                        "name": asset.metadata.name,
+                        "source_virtual_path": asset.source_virtual_path,
+                        "new": asset.is_new,
+                        "metadata_changed": asset.metadata_changed,
+                        "dialogue_changed": asset.dialogue_changed,
+                        "states": len(asset.dialogue.states),
+                        "choices": len(asset.dialogue.choices_in_file_order),
+                    }
+                    for asset in plan.rude_assets
+                ],
+                "dialogue_script_assets": [
+                    {
+                        "npc_nbr": asset.npc_nbr,
+                        "source_virtual_path": asset.integration.virtual_path,
+                        "script_name": asset.integration.script_name,
+                        "base_virtual_path": asset.integration.base_virtual_path,
+                        "hooks": len(asset.integration.hooks),
+                        "new": asset.is_new,
+                    }
+                    for asset in plan.dialogue_script_assets
+                ],
             }
             with open(manifest_path, "w", encoding="utf-8") as f:
                 json.dump(doc, f, indent=2, ensure_ascii=False)
@@ -1962,18 +2452,19 @@ class Project:
             for p in plan.archive_patches
         ]
 
-    def execute_rude_rez(self, plan: "SavePlan") -> List[str]:
-        """Write fresh-NPC RUDE registrations into output/<batch>/data/RUDE.REZ."""
-        patch = plan.rude_archive_patch()
-        if patch is None or not plan.rude_entries:
-            return []
-        source_rez = patch.source_archive
-        output_rez = patch.output_archive
+    def build_rude_overlay_entries(
+        self,
+        registrations: Sequence["RudeRegistration"] = (),
+        asset_edits: Sequence["RudeAssetEdit"] = (),
+        source_rez: Optional[str] = None,
+    ) -> Dict[str, bytes]:
+        """Build changed RUDE resources for legacy registrations and assets."""
+        dirty_assets = [asset for asset in asset_edits if asset.is_dirty]
+        if not registrations and not dirty_assets:
+            return {}
+        source_rez = source_rez or self.rude_rez_path
         if not source_rez or not os.path.isfile(source_rez):
             raise FileNotFoundError("RUDE.REZ source archive was not found")
-
-        self._maybe_backup_archive(source_rez)
-        os.makedirs(os.path.dirname(os.path.abspath(output_rez)) or ".", exist_ok=True)
 
         import sys
         here = os.path.dirname(os.path.abspath(__file__))
@@ -1986,61 +2477,161 @@ class Project:
             topblurb_vpath = self._find_rez_entry(reader, ("RUDE/TOPBLURB", "RUDE/TOPBLURB.RUDE"))
             if npcname_vpath is None or topblurb_vpath is None:
                 raise FileNotFoundError("RUDE.REZ is missing NPCNAME or TOPBLURB")
-            npcname = reader.extract_to_bytes(npcname_vpath).decode("latin-1")
-            topblurb = reader.extract_to_bytes(topblurb_vpath).decode("latin-1")
+            npcname_bytes = reader.extract_to_bytes(npcname_vpath)
+            topblurb_bytes = reader.extract_to_bytes(topblurb_vpath)
             existing_paths = {
                 reader.find(path).virtual_path()
                 for path in reader.list_paths()
                 if reader.find(path) is not None
             }
+            source_dialogues: Dict[int, Tuple[str, bytes]] = {}
+            for asset in dirty_assets:
+                existing = self._find_existing_vpath(
+                    existing_paths, f"RUDE/NPC{asset.npc_nbr}")
+                if existing is not None:
+                    source_dialogues[asset.npc_nbr] = (
+                        existing,
+                        reader.extract_to_bytes(existing),
+                    )
 
-        name_ids = self._csv_first_col_ints(npcname)
-        blurb_ids = self._csv_first_col_ints(topblurb)
-        npcname_out = npcname
-        topblurb_out = topblurb
+        catalog = rude_model.RudeMetadataCatalog.from_bytes(
+            npcname_bytes, topblurb_bytes)
         npc_files: Dict[str, bytes] = {}
-        log: List[str] = []
-
-        for entry in plan.rude_entries:
+        for entry in registrations:
             n = entry.npc_nbr
             npc_vpath = f"RUDE/NPC{n}"
             npc_existing = self._find_existing_vpath(existing_paths, npc_vpath)
             conflicts = []
             if npc_existing is not None:
                 conflicts.append(f"NPC{n} already exists")
-            if n in name_ids:
+            if catalog.has_name(n):
                 conflicts.append(f"NPCNAME already has {n}")
-            if n in blurb_ids:
+            if catalog.has_blurb(n):
                 conflicts.append(f"TOPBLURB already has {n}")
             if conflicts and not entry.force:
                 raise ValueError(
                     f"RUDE registration conflict for NPC{n}: "
                     + "; ".join(conflicts))
 
-            name_line = f'{n},"{self._rude_escape(entry.name)}"'
-            blurb_line = f'{n},{n},"{self._rude_escape(entry.blurb)}"'
-            npcname_out = self._replace_or_append_first_col(npcname_out, n, name_line)
-            topblurb_out = self._replace_or_append_first_col(topblurb_out, n, blurb_line)
-            npc_files[npc_existing or npc_vpath] = self._build_npc_rude(entry).encode("latin-1")
-            log.append(f"  patched RUDE/NPC{n} ({len(entry.lines) + 1} option(s))")
+            metadata = rude_model.RudeDialogueMetadata(
+                npc_nbr=n,
+                name=entry.name,
+                initial_state=n,
+                opening_blurb=entry.blurb,
+            )
+            catalog.upsert(metadata)
+            npc_files[npc_existing or npc_vpath] = rude_model.make_simple_dialogue(
+                metadata,
+                entry.lines,
+            ).to_bytes()
 
-        npcname_bytes = npcname_out.encode("latin-1")
-        topblurb_bytes = topblurb_out.encode("latin-1")
+        registration_ids = {entry.npc_nbr for entry in registrations}
+        for asset in dirty_assets:
+            asset.validate_identity()
+            n = asset.npc_nbr
+            if n in registration_ids:
+                raise ValueError(
+                    f"RUDE/NPC{n} is staged both as an asset and a placement registration")
+            source_dialogue = source_dialogues.get(n)
+            if asset.is_new:
+                conflicts = []
+                if source_dialogue is not None:
+                    conflicts.append(f"NPC{n} already exists")
+                if catalog.has_name(n):
+                    conflicts.append(f"NPCNAME already has {n}")
+                if catalog.has_blurb(n):
+                    conflicts.append(f"TOPBLURB already has {n}")
+                if conflicts:
+                    raise ValueError(
+                        f"RUDE asset conflict for NPC{n}: " + "; ".join(conflicts))
+            else:
+                if source_dialogue is None:
+                    raise FileNotFoundError(
+                        f"RUDE.REZ no longer contains RUDE/NPC{n}")
+                if (
+                    asset.original_dialogue_bytes is not None
+                    and source_dialogue[1] != asset.original_dialogue_bytes
+                ):
+                    raise ValueError(
+                        f"RUDE/NPC{n} changed in the source archive after it was opened")
+                try:
+                    source_metadata = catalog.metadata_for(n)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"RUDE metadata for NPC{n} changed after it was opened") from exc
+                if (
+                    _rude_metadata_signature(source_metadata)
+                    != _rude_metadata_signature(asset.original_metadata)
+                ):
+                    raise ValueError(
+                        f"RUDE metadata for NPC{n} changed in the source archive "
+                        f"after it was opened")
+
+            if asset.metadata_changed:
+                catalog.upsert(asset.metadata)
+            if asset.dialogue_changed:
+                npc_files[
+                    source_dialogue[0] if source_dialogue is not None
+                    else asset.source_virtual_path
+                ] = asset.dialogue.to_bytes()
+
+        npcname_out, topblurb_out = catalog.to_bytes()
+        overlay: Dict[str, bytes] = dict(npc_files)
+        if npcname_out != npcname_bytes:
+            overlay[npcname_vpath] = npcname_out
+        if topblurb_out != topblurb_bytes:
+            overlay[topblurb_vpath] = topblurb_out
+        return overlay
+
+    def execute_rude_rez(self, plan: "SavePlan") -> List[str]:
+        """Write independent RUDE assets and legacy registrations to RUDE.REZ."""
+        patch = plan.rude_archive_patch()
+        if patch is None or not plan.has_rude_changes():
+            return []
+        source_rez = patch.source_archive
+        output_rez = patch.output_archive
+        overlay_entries = self.build_rude_overlay_entries(
+            plan.rude_entries,
+            asset_edits=plan.rude_assets,
+            source_rez=source_rez,
+        )
+
+        self._maybe_backup_archive(source_rez)
+        os.makedirs(os.path.dirname(os.path.abspath(output_rez)) or ".", exist_ok=True)
+
+        import sys
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from core import rezmgr
+
+        with rezmgr.RezReader(source_rez) as reader:
+            existing_paths = set(reader.list_paths())
 
         with rezmgr.RezWriter(source_rez, output_rez) as writer:
-            writer.replace(npcname_vpath, npcname_bytes)
-            writer.replace(topblurb_vpath, topblurb_bytes)
-            self._write_changed_entry_copy(output_rez, npcname_vpath, npcname_bytes)
-            self._write_changed_entry_copy(output_rez, topblurb_vpath, topblurb_bytes)
-            for vpath, data in npc_files.items():
+            for vpath, data in overlay_entries.items():
                 if self._find_existing_vpath(existing_paths, vpath) is not None:
                     writer.replace(vpath, data)
                 else:
-                    writer.add(vpath, data)
+                    # MM9 asks RezMgr for e.g. ``RUDE\\NPC437.rude``.  The
+                    # archive stores the extensionless name separately from
+                    # its four-character resource type, so type 0 makes a new
+                    # entry invisible to the runtime even though RezReader can
+                    # still list it by virtual path.
+                    writer.add(
+                        vpath,
+                        data,
+                        restype=rezmgr._restype_for_filename("NPC.RUDE"),
+                    )
                 self._write_changed_entry_copy(output_rez, vpath, data)
             writer.commit()
 
-        return [f"wrote {output_rez}"] + log
+        registration_log = [
+            f"  patched RUDE/NPC{entry.npc_nbr} ({len(entry.lines) + 1} option(s))"
+            for entry in plan.rude_entries
+        ]
+        asset_log = [f"  {asset.summary()}" for asset in plan.rude_assets]
+        return [f"wrote {output_rez}"] + registration_log + asset_log
 
     def _find_rez_entry(self, reader: Any, candidates: Tuple[str, ...]) -> Optional[str]:
         for candidate in candidates:
@@ -2061,54 +2652,14 @@ class Project:
     def _strip_rude_ext(self, path: str) -> str:
         return path[:-5] if path.lower().endswith(".rude") else path
 
-    def _csv_first_col_ints(self, text: str) -> set:
-        ids = set()
-        for line in str(text or "").splitlines():
-            head = line.split(",", 1)[0].strip()
-            try:
-                ids.add(int(head))
-            except ValueError:
-                pass
-        return ids
-
-    def _replace_or_append_first_col(self, text: str, key: int, new_line: str) -> str:
-        lines = str(text or "").splitlines()
-        replaced = False
-        out = []
-        for line in lines:
-            head = line.split(",", 1)[0].strip()
-            try:
-                if int(head) == key and not replaced:
-                    out.append(new_line)
-                    replaced = True
-                    continue
-            except ValueError:
-                pass
-            out.append(line)
-        if not replaced:
-            out.append(new_line)
-        return "\n".join(out) + "\n"
-
     def _build_npc_rude(self, entry: "RudeRegistration") -> str:
-        effect_columns = ",".join(["0"] * 24)
-        lines: List[str] = []
-        branch = 1
-        for player_text, npc_response in entry.lines:
-            lines.append(
-                f'{entry.npc_nbr},{entry.npc_nbr},{branch},'
-                f'"{self._rude_escape(player_text)}",'
-                f'"{self._rude_escape(npc_response)}",'
-                f'{entry.npc_nbr},{effect_columns}'
-            )
-            branch += 1
-        lines.append(
-            f'{entry.npc_nbr},{entry.npc_nbr},{branch},'
-            f'"Goodbye.","Farewell.",-1,{effect_columns}'
+        metadata = rude_model.RudeDialogueMetadata(
+            npc_nbr=entry.npc_nbr,
+            name=entry.name,
+            initial_state=entry.npc_nbr,
+            opening_blurb=entry.blurb,
         )
-        return "\n".join(lines) + "\n"
-
-    def _rude_escape(self, s: str) -> str:
-        return str(s or "").replace('"', "'")
+        return rude_model.make_simple_dialogue(metadata, entry.lines).to_text()
 
 
 # --------------------------------------------------------------------------
@@ -2597,6 +3148,12 @@ class SavePlan:
     dats: List[DatWrite] = field(default_factory=list)
     rude_entries: List[RudeRegistration] = field(default_factory=list)
     archive_patches: List[ArchivePatch] = field(default_factory=list)
+    rude_assets: List[RudeAssetEdit] = field(default_factory=list)
+    dialogue_script_assets: List[rude_script.DialogueScriptAssetEdit] = field(
+        default_factory=list)
+
+    def has_rude_changes(self) -> bool:
+        return bool(self.rude_entries or self.rude_assets)
 
     def rude_archive_patch(self) -> Optional[ArchivePatch]:
         for patch in self.archive_patches:
@@ -2605,7 +3162,13 @@ class SavePlan:
         return None
 
     def behavioral_scripts_archive_patch(self) -> Optional[ArchivePatch]:
+        """Compatibility alias retained for Phase-6 prefab callers."""
+        return self.scripts_archive_patch()
+
+    def scripts_archive_patch(self) -> Optional[ArchivePatch]:
         for patch in self.archive_patches:
-            if patch.kind == "behavioral_scripts":
+            if patch.kind in {
+                "behavioral_scripts", "dialogue_scripts", "scripts",
+            }:
                 return patch
         return None

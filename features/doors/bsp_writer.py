@@ -90,7 +90,7 @@ def _skip_leaf(cursor: _Cursor) -> None:
     cursor.u32()
 
 
-def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int]:
+def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int, int]:
     uv_o_offset = cursor.pos
     cursor.skip(12)
     uv_p_offset = cursor.pos
@@ -98,6 +98,7 @@ def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int]:
     uv_q_offset = cursor.pos
     cursor.skip(12)
     cursor.skip(2)
+    plane_index_offset = cursor.pos
     cursor.skip(4)
     cursor.skip(4)
     cursor.skip(4)
@@ -106,7 +107,7 @@ def _read_surface_offsets(cursor: _Cursor) -> Tuple[int, int, int]:
         cursor.lt_string_u16()
         cursor.lt_string_u16()
     cursor.skip(2)
-    return uv_o_offset, uv_p_offset, uv_q_offset
+    return uv_o_offset, uv_p_offset, uv_q_offset, plane_index_offset
 
 
 def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tuple[
@@ -115,8 +116,8 @@ def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tu
     int,
     int,
     List[int],
-    List[Tuple[int, int, int]],
-    List[Tuple[int, int, int]],
+    List[Tuple[int, int, int, int]],
+    List[Tuple[int, int]],
     List[Tuple[int, int]],
 ]:
     if source_model.raw_start is None or source_model.world_bsp_start is None:
@@ -163,11 +164,11 @@ def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tu
         plane_offsets.append(cursor.pos)
         cursor.skip(16)
 
-    surface_offsets: List[Tuple[int, int, int]] = []
+    surface_offsets: List[Tuple[int, int, int, int]] = []
     for _ in range(surface_count):
         surface_offsets.append(_read_surface_offsets(cursor))
 
-    polygon_offsets: List[Tuple[int, int, int]] = []
+    polygon_offsets: List[Tuple[int, int]] = []
     for vert_count in verts_per_poly:
         center_offset = cursor.pos
         cursor.skip(12)
@@ -177,10 +178,8 @@ def _world_bsp_patch_offsets(raw: bytes, source_model: bsp.WorldModelMesh) -> Tu
         if unknown_flag > 0:
             cursor.skip(unknown_flag * 4)
         surface_index_offset = cursor.pos
-        cursor.skip(2)
-        plane_index_offset = cursor.pos
-        cursor.skip(2)
-        polygon_offsets.append((center_offset, surface_index_offset, plane_index_offset))
+        cursor.skip(4)  # uint32 surface index; the plane index is on the surface record.
+        polygon_offsets.append((center_offset, surface_index_offset))
         cursor.skip(vert_count * 5)
 
     cursor.skip(node_count * 14)
@@ -268,7 +267,10 @@ def build_cloned_world_model_record(
         submodel.yaw_radians,
         scale=submodel.scale,
     ))
-    for (uv_o_offset, uv_p_offset, uv_q_offset), surface in zip(surface_offsets, submodel.source_model.surfaces):
+    for (uv_o_offset, uv_p_offset, uv_q_offset, _plane_index_offset), surface in zip(
+        surface_offsets,
+        submodel.source_model.surfaces,
+    ):
         struct.pack_into("<3f", raw, adj(uv_o_offset), *door_clone.transform_point(
             surface.uv_o,
             submodel.source_pivot,
@@ -323,7 +325,7 @@ def build_cloned_world_model_record(
         struct.pack_into("<3f", raw, adj(plane_offset), *new_normal)
         struct.pack_into("<f", raw, adj(plane_offset + 12), float(new_distance))
 
-    for center_offset, _surface_index_offset, _plane_index_offset in polygon_offsets:
+    for center_offset, _surface_index_offset in polygon_offsets:
         center = struct.unpack_from("<3f", raw, adj(center_offset))
         struct.pack_into("<3f", raw, adj(center_offset), *door_clone.transform_point(
             center,

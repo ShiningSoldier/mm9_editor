@@ -54,6 +54,8 @@ import mm9_patch as patcher
 from core import autodetect
 from core import project as P
 from core import project_io
+from core import rude_script
+from core import run_world
 from core.game_resources import GameResources
 from features.dat_editing import compiler_strategy as dat_compiler_strategy
 from features.dat_editing import gltf_export as dat_gltf_export
@@ -284,6 +286,9 @@ class EditorApp:
         root.geometry("1500x900")
         _maximize_window(root)
         self._selected_world_index: Optional[int] = None
+        self._run_world_session = None
+        self._rude_editor_windows: Dict[int, Any] = {}
+        self._rude_script_editor_windows: Dict[int, Any] = {}
 
         self._build_menu()
         self._build_layout()
@@ -303,6 +308,8 @@ class EditorApp:
         m_file.add_separator()
         m_file.add_command(label="Save…",                 accelerator="Ctrl+S",
                            command=self.cmd_save)
+        m_file.add_command(label="Run Current Level",     accelerator="Ctrl+Alt+R",
+                           command=self.cmd_run_current_level)
         m_file.add_command(label="Install Output to Game…",
                            command=self.cmd_install_output)
         m_file.add_command(label="Restore Installed Backup…",
@@ -382,6 +389,11 @@ class EditorApp:
 
         m_tools = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=m_tools)
+        m_tools.add_command(label="Dialogue & Quest Editor...",
+                            command=self.cmd_rude_dialogue_editor)
+        m_tools.add_command(label="Dialogue Script Integration...",
+                            command=self.cmd_rude_script_editor)
+        m_tools.add_separator()
         m_tools.add_command(label="Import Prefab...",
                             command=self.cmd_import_static_prefab_bsp)
         m_tools.add_separator()
@@ -412,6 +424,14 @@ class EditorApp:
         tk.Button(bar, text="Save…", bg="#2c5e8a", fg="white",
                   activebackground="#3a78ad",
                   relief="flat", command=self.cmd_save).pack(side="left", padx=4, pady=4)
+        tk.Button(bar, text="Run Current Level", bg="#356a45", fg="white",
+                  activebackground="#47895b",
+                  relief="flat", command=self.cmd_run_current_level).pack(
+                      side="left", padx=4, pady=4)
+        tk.Button(bar, text="Dialogues & Quests...", bg="#5b426f", fg="white",
+                  activebackground="#75568d",
+                  relief="flat", command=self.cmd_rude_dialogue_editor).pack(
+                      side="left", padx=4, pady=4)
 
         tk.Label(bar, text="Level:", bg="#1a1d22", fg="#cccccc",
                  font=("Segoe UI", 9)).pack(side="left", padx=(16, 4))
@@ -489,6 +509,7 @@ class EditorApp:
     def _build_bindings(self) -> None:
         self.root.bind_all("<Control-o>",       lambda e: self.cmd_open_worlds_rez())
         self.root.bind_all("<Control-s>",       lambda e: self.cmd_save())
+        self.root.bind_all("<Control-Alt-r>",   lambda e: self.cmd_run_current_level())
         self.root.bind_all("<Control-S>",       lambda e: self.cmd_save_project())
         self.root.bind_all("<Control-O>",       lambda e: self.cmd_open_project())
         self.root.bind_all("<Control-z>",       lambda e: self.cmd_undo())
@@ -636,6 +657,246 @@ class EditorApp:
         if self.view3d and hasattr(self.view3d, "flush_pending_transforms"):
             self.view3d.flush_pending_transforms()
 
+    def _working_rude_dialogues(self) -> Dict[int, Any]:
+        dialogues = {
+            int(npc_nbr): asset.dialogue
+            for npc_nbr, asset in self.project.rude_assets.items()
+        }
+        for npc_nbr, window in getattr(self, "_rude_editor_windows", {}).items():
+            try:
+                if window.winfo_exists():
+                    dialogues[int(npc_nbr)] = window.dialogue
+            except Exception:
+                continue
+        return dialogues
+
+    def cmd_rude_dialogue_editor(
+        self,
+        npc_nbr: Optional[int] = None,
+    ) -> Optional[Any]:
+        """Open or create an independently editable RUDE dialogue asset."""
+        rude_rez_path = getattr(self.project, "rude_rez_path", None)
+        if not rude_rez_path or not os.path.isfile(rude_rez_path):
+            messagebox.showerror(
+                "RUDE.REZ not found",
+                "No game data/RUDE.REZ archive was detected.",
+            )
+            return None
+
+        if npc_nbr is None:
+            npc_nbr = simpledialog.askinteger(
+                "Dialogue & Quest Editor",
+                "NPC dialogue number (existing resources include NPC997–999):",
+                initialvalue=int(getattr(self.project, "next_npc_nbr", 437)),
+                minvalue=1,
+                parent=getattr(self, "root", None),
+            )
+        if npc_nbr is None:
+            return None
+        npc_nbr = int(npc_nbr)
+
+        windows = getattr(self, "_rude_editor_windows", None)
+        if not isinstance(windows, dict):
+            windows = {}
+            self._rude_editor_windows = windows
+        existing_window = windows.get(npc_nbr)
+        if existing_window is not None:
+            try:
+                if existing_window.winfo_exists():
+                    existing_window.lift()
+                    existing_window.focus_force()
+                    return existing_window
+            except Exception:
+                pass
+            windows.pop(npc_nbr, None)
+
+        try:
+            asset = self.project.open_rude_asset(npc_nbr)
+        except FileNotFoundError as exc:
+            if "does not contain" not in str(exc):
+                messagebox.showerror("Cannot open RUDE asset", str(exc))
+                return None
+            if not messagebox.askyesno(
+                "Create dialogue asset?",
+                f"RUDE.REZ has no NPC{npc_nbr} dialogue. Create it as an "
+                "independent project asset?",
+                parent=getattr(self, "root", None),
+            ):
+                return None
+            name = simpledialog.askstring(
+                "New dialogue asset",
+                "NPC display name:",
+                initialvalue=f"NPC {npc_nbr}",
+                parent=getattr(self, "root", None),
+            )
+            if name is None:
+                return None
+            name = name.strip()
+            if not name:
+                messagebox.showerror(
+                    "Invalid display name", "The NPC display name cannot be empty.")
+                return None
+            try:
+                from core import rude as rude_model
+
+                metadata = rude_model.RudeDialogueMetadata(
+                    npc_nbr=npc_nbr,
+                    name=name,
+                    initial_state=npc_nbr,
+                    opening_blurb="Hello.",
+                )
+                asset = self.project.create_rude_asset(
+                    rude_model.make_simple_dialogue(metadata, ()))
+            except Exception as create_exc:
+                messagebox.showerror("Cannot create RUDE asset", str(create_exc))
+                return None
+            if npc_nbr >= self.project.next_npc_nbr:
+                self.project.next_npc_nbr = npc_nbr + 1
+        except Exception as exc:
+            messagebox.showerror("Cannot open RUDE asset", str(exc))
+            return None
+
+        from ui.rude_editor import RudeEditorWindow
+
+        window = RudeEditorWindow(
+            self.root,
+            self.project,
+            asset,
+            on_changed=lambda _asset: self._update_history_menu(),
+            on_open_related=self.cmd_rude_dialogue_editor,
+            dialogue_overrides_provider=self._working_rude_dialogues,
+        )
+        windows[npc_nbr] = window
+
+        def forget_window(event, *, expected=window, key=npc_nbr) -> None:
+            if getattr(event, "widget", None) is expected:
+                windows.pop(key, None)
+
+        window.bind("<Destroy>", forget_window, add="+")
+        return window
+
+    def cmd_rude_script_editor(
+        self,
+        npc_nbr: Optional[int] = None,
+    ) -> Optional[Any]:
+        """Open independent rewards/sound/world-change script authoring."""
+        scripts_rez_path = getattr(self.project, "scripts_rez_path", None)
+        if not scripts_rez_path or not os.path.isfile(scripts_rez_path):
+            messagebox.showerror(
+                "SCRIPTS.REZ not found",
+                "No game data/SCRIPTS.REZ archive was detected.",
+            )
+            return None
+        if npc_nbr is None:
+            npc_nbr = simpledialog.askinteger(
+                "Dialogue Script Integration",
+                "NPC dialogue number whose exit effects you want to author:",
+                initialvalue=int(getattr(self.project, "next_npc_nbr", 437)),
+                minvalue=1,
+                parent=getattr(self, "root", None),
+            )
+        if npc_nbr is None:
+            return None
+        npc_nbr = int(npc_nbr)
+
+        windows = getattr(self, "_rude_script_editor_windows", None)
+        if not isinstance(windows, dict):
+            windows = {}
+            self._rude_script_editor_windows = windows
+        existing_window = windows.get(npc_nbr)
+        if existing_window is not None:
+            try:
+                if existing_window.winfo_exists():
+                    existing_window.lift()
+                    existing_window.focus_force()
+                    return existing_window
+            except Exception:
+                pass
+            windows.pop(npc_nbr, None)
+
+        try:
+            from ui.rude_script_editor import RudeScriptEditorWindow
+            window = RudeScriptEditorWindow(
+                self.root,
+                self.project,
+                npc_nbr,
+                on_changed=lambda _asset: self._update_history_menu(),
+                on_attach=self._attach_dialogue_script_to_selected,
+            )
+        except Exception as exc:
+            messagebox.showerror("Cannot open script integration", str(exc))
+            return None
+        windows[npc_nbr] = window
+
+        def forget_window(event, *, expected=window, key=npc_nbr) -> None:
+            if getattr(event, "widget", None) is expected:
+                windows.pop(key, None)
+
+        window.bind("<Destroy>", forget_window, add="+")
+        return window
+
+    def _attach_dialogue_script_to_selected(
+        self,
+        asset: rude_script.DialogueScriptAssetEdit,
+    ) -> bool:
+        """Attach a reviewed generated ScriptName to the selected matching NPC."""
+        level = getattr(self, "active", None)
+        selected_index = getattr(self, "_selected_world_index", None)
+        if level is None or selected_index is None:
+            messagebox.showerror(
+                "Select the NPC",
+                "Open a level and select the placed NPC before attaching the script.",
+            )
+            return False
+        materialized = (
+            level.editor_materialize()
+            if hasattr(level, "editor_materialize") else level.materialize()
+        )
+        if selected_index < 0 or selected_index >= len(materialized.objects):
+            messagebox.showerror("Select the NPC", "The selected object is no longer present.")
+            return False
+        obj = materialized.objects[selected_index]
+        try:
+            selected_npc_nbr = int(obj.get("NPCNbr") or 0)
+        except (TypeError, ValueError):
+            selected_npc_nbr = 0
+        if selected_npc_nbr != asset.npc_nbr:
+            messagebox.showerror(
+                "NPC number mismatch",
+                f"The selected object has NPCNbr={selected_npc_nbr}; this script "
+                f"belongs to NPC{asset.npc_nbr}.",
+            )
+            return False
+
+        current_name = str(obj.get("ScriptName") or "").strip()
+        target_name = asset.integration.script_name
+        if current_name:
+            try:
+                current_path = rude_script.canonical_script_path(current_name)
+                current_key = current_path.casefold()
+                target_key = target_name.casefold()
+                base_key = (
+                    rude_script.canonical_script_path(
+                        asset.integration.base_virtual_path).casefold()
+                    if asset.integration.base_virtual_path else ""
+                )
+            except ValueError as exc:
+                messagebox.showerror("Unsafe current ScriptName", str(exc))
+                return False
+            if current_key == target_key:
+                return True
+            if not base_key or current_key != base_key:
+                messagebox.showerror(
+                    "Existing behavior is not integrated",
+                    f"The selected NPC currently uses {current_name}. Load that exact "
+                    "base ScriptName in the script editor before replacing it, so its "
+                    "existing behavior is preserved.",
+                )
+                return False
+
+        self._on_property_edited("ScriptName", target_name)
+        return True
+
     def cmd_open_worlds_rez(self) -> None:
         self._flush_view_transforms()
         rez_path = self.resources.archive_for("WORLDS/")
@@ -686,12 +947,66 @@ class EditorApp:
         self._flush_view_transforms()
         if not self.project.has_pending():
             messagebox.showinfo("Nothing to save",
-                                "There are no pending edits in any loaded level.")
+                                "There are no pending level or RUDE asset edits.")
             return
         plan = self.project.save_plan()
         SaveDialog(self.root, self.project, plan,
                    on_committed=self._on_save_committed,
                    cfg=self.cfg)
+
+    def cmd_run_current_level(self) -> None:
+        """Launch the active in-memory level in an isolated MM9 session."""
+        self._flush_view_transforms()
+        level = getattr(self, "active", None)
+        if level is None:
+            messagebox.showwarning(
+                "No level",
+                "Open a level from WORLDS.REZ first.",
+            )
+            return
+
+        previous = getattr(self, "_run_world_session", None)
+        process = getattr(previous, "process", None)
+        if process is not None:
+            try:
+                running = process.poll() is None
+            except Exception:
+                running = False
+            if running:
+                messagebox.showwarning(
+                    "MM9 preview already running",
+                    "Close the current Might and Magic IX preview before "
+                    "starting another one.",
+                )
+                return
+
+        game_root = str(getattr(self.cfg, "game_root", "") or "")
+        if not game_root or not os.path.isdir(game_root):
+            messagebox.showerror(
+                "MM9 game folder not detected",
+                "No MM9 game folder was detected. Launch from the game folder "
+                "or use --game-root.",
+            )
+            return
+        staging_root = (
+            getattr(self.project, "work_dir", None)
+            or getattr(self.cfg, "work_dir", None)
+        )
+        try:
+            session = run_world.launch_current_level(
+                self.project,
+                level,
+                game_root=game_root,
+                staging_root=staging_root,
+            )
+        except Exception as exc:
+            messagebox.showerror("Run Current Level failed", str(exc))
+            return
+        self._run_world_session = session
+        print(
+            f"[run world] {session.world_name} staged at {session.session_dir}",
+            file=sys.stderr,
+        )
 
     def cmd_install_output(self) -> None:
         """Install a saved output batch into the detected game data folder."""
@@ -907,8 +1222,9 @@ class EditorApp:
     def cmd_save_project(self) -> None:
         """Save the current project (levels + ops) to a .mm9mod JSON file."""
         self._flush_view_transforms()
-        if not self.project.levels:
-            messagebox.showinfo("Nothing to save", "No levels are open.")
+        if not self.project.levels and not self.project.rude_assets:
+            messagebox.showinfo(
+                "Nothing to save", "No levels or RUDE assets are open.")
             return
         path = filedialog.asksaveasfilename(
             title="Save project",
@@ -919,8 +1235,11 @@ class EditorApp:
             return
         try:
             project_io.project_to_json(self.project, path)
-            messagebox.showinfo("Project saved",
-                                f"Saved {len(self.project.levels)} level(s) to:\n{path}")
+            messagebox.showinfo(
+                "Project saved",
+                f"Saved {len(self.project.levels)} level(s) and "
+                f"{len(self.project.rude_assets)} RUDE asset(s) to:\n{path}",
+            )
         except Exception as e:
             messagebox.showerror("Save project failed", str(e))
 
@@ -2613,22 +2932,30 @@ class EditorApp:
                         j += 1
                     overrides["Name"] = f"{name_prefix}{j}"
 
-        # Phase 6: encode NPCNbr override and attach rude registration dict
-        rude_data = None
+        # Encode the NPCNbr override and stage dialogue as a project-level RUDE
+        # asset.  The AddOp deliberately carries no dialogue payload: the
+        # resource can now outlive, move independently of, or be edited without
+        # this particular placed world object.
         rc = getattr(self, "_pending_rude_config", None)
         if rc and rc.get("mode") == "fresh":
             nbr = rc["npc_nbr"]
             # NPCNbr is stored as IEEE-754 float bits packed into a LongInt slot
             overrides["NPCNbr"] = struct.unpack("<I", struct.pack("<f", float(nbr)))[0]
-            # Strip "mode" key — AddOp.rude must match RudeRegistration fields
-            rude_data = {k: v for k, v in rc.items() if k != "mode"}
+            registration = P.RudeRegistration(**{
+                k: v for k, v in rc.items() if k != "mode"
+            })
+            try:
+                self.project.create_simple_rude_asset(registration)
+            except Exception as exc:
+                messagebox.showerror("RUDE asset failed", str(exc))
+                return
             # Advance the project's counter when the suggested number was used
             if nbr >= self.project.next_npc_nbr:
                 self.project.next_npc_nbr = nbr + 1
 
         op = P.AddOp(template=copy.deepcopy(self._pending_template),
                      overrides=overrides,
-                     rude=rude_data)
+                     rude=None)
         L.append_op(op)
         mat = L.materialize()
         new_name = overrides["Name"]

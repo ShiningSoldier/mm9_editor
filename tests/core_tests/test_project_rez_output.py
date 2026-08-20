@@ -10,6 +10,7 @@ from tests._path import ROOT  # noqa: F401
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
 from core import rezmgr as mm9_rezmgr
+from core import rude as rude_model
 from core import project as P
 from core import project_io
 from tests.core_tests.test_game_resources import write_minimal_rez
@@ -191,7 +192,7 @@ class ProjectRezOutputTests(unittest.TestCase):
                 "RUDE/NPCNAME": b'1,"Yrsa"\n',
                 "RUDE/TOPBLURB": b'1,1,"Hello"\n',
                 "RUDE/NPC1": b'1,1,1,"Goodbye.","Farewell.",-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n',
-            })
+            }, resource_type=mm9_rezmgr._restype_for_filename("NPC.RUDE"))
 
             project = P.Project(work_dir=work_dir, rude_rez_path=rude_rez)
             level = project.add_level_from_rez(worlds_rez, "WORLDS/LEVEL1")
@@ -202,7 +203,7 @@ class ProjectRezOutputTests(unittest.TestCase):
             level.append_op(P.AddOp(
                 template=template,
                 rude={
-                    "npc_nbr": 438,
+                    "npc_nbr": 437,
                     "name": "Test Peasant",
                     "blurb": "Hello! I'm an NPC.",
                     "lines": [("Are you heroes?", "Good!")],
@@ -219,14 +220,39 @@ class ProjectRezOutputTests(unittest.TestCase):
             with mm9_rezmgr.RezReader(output_rude) as reader:
                 npcname = reader.extract_to_bytes("RUDE/NPCNAME").decode("latin-1")
                 topblurb = reader.extract_to_bytes("RUDE/TOPBLURB").decode("latin-1")
-                npc438 = reader.extract_to_bytes("RUDE/NPC438").decode("latin-1")
+                npc437 = reader.extract_to_bytes("RUDE/NPC437").decode("latin-1")
+                catalog = rude_model.RudeMetadataCatalog.parse(npcname, topblurb)
+                metadata = catalog.metadata_for(437)
+                dialogue = rude_model.RudeDialogue.parse(metadata, npc437)
+                runtime_entries = {
+                    path: reader.find(path)
+                    for path in (
+                        "RUDE/NPCNAME.RUDE",
+                        "RUDE/TOPBLURB.RUDE",
+                        "RUDE/NPC437.RUDE",
+                    )
+                }
 
-            self.assertIn('438,"Test Peasant"', npcname)
-            self.assertIn('438,438,"Hello! I\'m an NPC."', topblurb)
-            self.assertIn('"Are you heroes?","Good!"', npc438)
+            self.assertIn('437,"Test Peasant"', npcname)
+            self.assertIn('437,437,"Hello! I\'m an NPC."', topblurb)
+            self.assertIn('"Are you heroes?","Good!"', npc437)
+            self.assertEqual(metadata.name, "Test Peasant")
+            self.assertEqual(metadata.initial_state, 437)
+            self.assertEqual(
+                [choice.branch_id for choice in dialogue.state(437).choices],
+                [1, 2],
+            )
+            self.assertEqual(
+                dialogue.state(437).choices[-1].action.kind,
+                rude_model.RudeActionKind.CLOSE,
+            )
+            for runtime_path, entry in runtime_entries.items():
+                self.assertIsNotNone(entry, runtime_path)
+                self.assertEqual(entry.type_str, "RUDE", runtime_path)
+                self.assertEqual(entry.typed_virtual_path(), runtime_path)
 
             changed_copy = os.path.join(
-                work_dir, plan.batch_id, "changed_entries", "RUDE", "NPC438.RUDE")
+                work_dir, plan.batch_id, "changed_entries", "RUDE", "NPC437.RUDE")
             self.assertTrue(os.path.isfile(changed_copy))
 
             manifest_path = os.path.join(work_dir, plan.batch_id, "manifest.json")
@@ -234,7 +260,7 @@ class ProjectRezOutputTests(unittest.TestCase):
                 manifest = json.load(f)
             rude_archives = [a for a in manifest["archives"] if a["kind"] == "rude"]
             self.assertEqual(len(rude_archives), 1)
-            self.assertIn("RUDE/NPC438", rude_archives[0]["entries"])
+            self.assertIn("RUDE/NPC437", rude_archives[0]["entries"])
 
     def test_manifest_records_validation_warnings(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -6,6 +6,7 @@ import unittest
 
 from tests._path import ROOT  # noqa: F401
 
+from core import bsp
 from core import project
 from features.dat_editing import bsp_compile
 from features.dat_editing import geometry_mesh
@@ -93,6 +94,47 @@ def _append_brush(data: bytearray, *, texture: bytes, texture_flags: int, z: flo
 
 
 class SourcePrefabGoldenTests(unittest.TestCase):
+    def test_compiled_v66_polygons_use_u32_surface_indices(self):
+        surfaces = [
+            bsp.Surface(
+                uv_o=(0.0, 0.0, 0.0),
+                uv_p=(1.0, 0.0, 0.0),
+                uv_q=(0.0, 0.0, 1.0),
+                texture_index=index,
+                flags=bsp.SURF_SOLID,
+                texture_flags=0,
+            )
+            for index in range(2)
+        ]
+        model = bsp.WorldModelMesh(
+            name="TwoSurfaceFixture",
+            min_box=(0.0, 0.0, 0.0),
+            max_box=(1.0, 1.0, 1.0),
+            translation=(0.0, 0.0, 0.0),
+            points=[
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 1.0),
+                (1.0, 0.0, 0.0),
+                (0.0, 1.0, 0.0),
+                (1.0, 1.0, 0.0),
+                (0.0, 1.0, 1.0),
+            ],
+            polygons=[
+                bsp.Polygon([0, 1, 2], surface_index=0, plane_index=0),
+                bsp.Polygon([3, 4, 5], surface_index=1, plane_index=0),
+            ],
+            texture_names=["First.dtx", "Second.dtx"],
+            surfaces=surfaces,
+        )
+
+        record = bsp_compile.compile_world_model_record(model)
+        stream = bsp._Stream(record.raw_bytes, 36)
+        parsed = bsp._read_world_bsp(stream)
+
+        self.assertEqual([poly.surface_index for poly in parsed.polygons], [0, 1])
+        self.assertEqual([surface.plane_index for surface in parsed.surfaces], [0, 1])
+        self.assertEqual([poly.plane_index for poly in parsed.polygons], [0, 1])
+
     def test_lta_rectangular_brush_preserves_source_opq_and_manifest_link(self):
         scene = source_world.lta_text_to_geometry_scene(RECTANGULAR_LTA, source_path="golden.lta")
 

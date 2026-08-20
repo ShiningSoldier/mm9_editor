@@ -7,6 +7,7 @@ JSON serialisation / deserialisation for the in-memory Project model.
 A .mm9mod file captures:
   - which REZ archive entries are open
   - the full pending op list for each level (including AddOp templates)
+  - independently opened or edited RUDE dialogue assets
   - the project's NPCNbr counter and staging paths
 
 On load the world data is re-fetched from the original source files (only the
@@ -36,6 +37,8 @@ Format version history
 18 Phase-6 reviewed script sources and generated SCRIPTS.REZ assets
 19 behavioral prefab import promoted to supported; experimental flag retired
 20 hybrid prefab representations and preview-only ED BSP safety metadata
+21 independent lossless RUDE assets
+22 independent reviewed RUDE OnRudeExit script assets
 """
 
 from __future__ import annotations
@@ -49,6 +52,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import _path_setup  # noqa: F401
 import mm9_patch as patcher
 from core import project as P
+from core import rude as rude_model
+from core import rude_script
 
 
 RETIRED_OP_KINDS = {
@@ -402,12 +407,82 @@ def dict_to_leveledit(d: Dict[str, Any]) -> P.LevelEdit:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Independent RUDE asset serialisation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _rude_metadata_to_dict(
+    metadata: Optional[rude_model.RudeDialogueMetadata],
+) -> Optional[Dict[str, Any]]:
+    if metadata is None:
+        return None
+    return {
+        "npc_nbr": metadata.npc_nbr,
+        "name": metadata.name,
+        "initial_state": metadata.initial_state,
+        "opening_blurb": metadata.opening_blurb,
+    }
+
+
+def _dict_to_rude_metadata(
+    value: Optional[Dict[str, Any]],
+) -> Optional[rude_model.RudeDialogueMetadata]:
+    if value is None:
+        return None
+    return rude_model.RudeDialogueMetadata(
+        npc_nbr=int(value["npc_nbr"]),
+        name=str(value.get("name", "")),
+        initial_state=int(value["initial_state"]),
+        opening_blurb=str(value.get("opening_blurb", "")),
+    )
+
+
+def rude_asset_to_dict(asset: P.RudeAssetEdit) -> Dict[str, Any]:
+    return {
+        "npc_nbr": asset.npc_nbr,
+        "source_virtual_path": asset.source_virtual_path,
+        "metadata": _rude_metadata_to_dict(asset.metadata),
+        "dialogue_text": asset.dialogue.to_text(),
+        "original_metadata": _rude_metadata_to_dict(asset.original_metadata),
+        "original_dialogue_text": (
+            asset.original_dialogue_bytes.decode("latin-1")
+            if asset.original_dialogue_bytes is not None else None
+        ),
+    }
+
+
+def dict_to_rude_asset(value: Dict[str, Any]) -> P.RudeAssetEdit:
+    npc_nbr = int(value["npc_nbr"])
+    metadata = _dict_to_rude_metadata(value.get("metadata"))
+    if metadata is None:
+        raise ValueError(f"RUDE asset NPC{npc_nbr} is missing metadata")
+    source_virtual_path = str(
+        value.get("source_virtual_path") or f"RUDE/NPC{npc_nbr}")
+    dialogue = rude_model.RudeDialogue.parse(
+        metadata,
+        str(value.get("dialogue_text", "")),
+        resource=source_virtual_path,
+    )
+    original_text = value.get("original_dialogue_text")
+    return P.RudeAssetEdit(
+        npc_nbr=npc_nbr,
+        dialogue=dialogue,
+        source_virtual_path=source_virtual_path,
+        original_metadata=_dict_to_rude_metadata(value.get("original_metadata")),
+        original_dialogue_bytes=(
+            str(original_text).encode("latin-1")
+            if original_text is not None else None
+        ),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Project save / load
 # ─────────────────────────────────────────────────────────────────────────────
 
-FORMAT_VERSION = 20
+FORMAT_VERSION = 22
 SUPPORTED_FORMAT_VERSIONS = {
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    21, 22,
 }
 
 
@@ -416,6 +491,15 @@ def project_to_json(project: P.Project, path: str) -> None:
     doc = {
         "version":          FORMAT_VERSION,
         "next_npc_nbr":     project.next_npc_nbr,
+        "rude_assets": [
+            rude_asset_to_dict(asset)
+            for _npc_nbr, asset in sorted(project.rude_assets.items())
+        ],
+        "dialogue_script_assets": [
+            rude_script.asset_to_dict(asset)
+            for _npc_nbr, asset in sorted(
+                project.dialogue_script_assets.items())
+        ],
         "levels": [leveledit_to_dict(L) for L in project.levels],
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
@@ -443,6 +527,31 @@ def project_from_json(path: str, existing_project: P.Project) -> List[str]:
     log: List[str] = []
 
     existing_project.next_npc_nbr    = doc.get("next_npc_nbr", 437)
+    existing_project.rude_assets = {}
+    for asset_value in doc.get("rude_assets", []):
+        asset = dict_to_rude_asset(asset_value)
+        if asset.npc_nbr in existing_project.rude_assets:
+            raise ValueError(
+                f"Project contains duplicate RUDE asset NPC{asset.npc_nbr}")
+        existing_project.rude_assets[asset.npc_nbr] = asset
+    if existing_project.rude_assets:
+        log.append(
+            f"loaded {len(existing_project.rude_assets)} independent RUDE asset(s)")
+    existing_project.dialogue_script_assets = {}
+    for asset_value in doc.get("dialogue_script_assets", []):
+        asset = rude_script.asset_from_dict(dict(asset_value))
+        if asset.npc_nbr in existing_project.dialogue_script_assets:
+            raise ValueError(
+                f"Project contains duplicate dialogue script asset NPC{asset.npc_nbr}"
+            )
+        asset.integration.validate()
+        existing_project.dialogue_script_assets[asset.npc_nbr] = asset
+    if existing_project.dialogue_script_assets:
+        log.append(
+            "loaded "
+            f"{len(existing_project.dialogue_script_assets)} independent "
+            "dialogue script asset(s)"
+        )
     for level_dict in doc.get("levels", []):
         L = dict_to_leveledit(level_dict)
         source_kind = L.source_kind

@@ -64,10 +64,11 @@ class BspRecordInspectorTests(unittest.TestCase):
         self.assertEqual(terrain.terrain_tail_render_chunks[0].bsp_node_count, 320)
         self.assertTrue(terrain.terrain_tail_render_chunks[-1].terminal)
         self.assertEqual(terrain.terrain_tail_render_chunks[-1].bsp_node_count, 0)
-        self.assertEqual(terrain.plane_relationship.reference_mode, "placeholder_zero")
-        self.assertFalse(terrain.plane_relationship.polygon_records_use_plane_table)
-        self.assertEqual(terrain.plane_relationship.zero_plane_index_count, terrain.polygon_count)
+        self.assertEqual(terrain.plane_relationship.reference_mode, "indexed")
+        self.assertTrue(terrain.plane_relationship.polygon_records_use_plane_table)
         self.assertEqual(terrain.plane_relationship.out_of_range_polygon_count, 0)
+        self.assertEqual(terrain.plane_relationship.referenced_plane_count, terrain.plane_count)
+        self.assertEqual(terrain.plane_relationship.unused_plane_count, 0)
         self.assertEqual(terrain.lightmapped_polygon_count, 0)
         self.assertEqual(terrain.lightmap_extra_data_polygon_count, 0)
         self.assertIn("terrain_tail_nodes", terrain.section_ranges)
@@ -109,7 +110,7 @@ class BspRecordInspectorTests(unittest.TestCase):
         self.assertIn("terrain render BSP: marker=0, depth=3", text)
         self.assertIn("terrain render chunks: chunks=20, terminal=1", text)
         self.assertIn("fully_decoded=True, unknown_tail_bytes=0", text)
-        self.assertIn("plane relationship: mode=placeholder_zero", text)
+        self.assertIn("plane relationship: mode=indexed", text)
         self.assertIn("BSP node table: roots=1", text)
         self.assertIn("physics block table: dims=(10, 2, 8)", text)
 
@@ -317,10 +318,11 @@ class BspRecordInspectorTests(unittest.TestCase):
                 self.assertFalse(terrain.terrain_tail_render_chunks[0].terminal)
                 self.assertTrue(terrain.terrain_tail_render_chunks[-1].terminal)
                 self.assertEqual(terrain.terrain_tail_render_chunks[-1].bsp_node_count, 0)
-                self.assertEqual(terrain.plane_relationship.reference_mode, "placeholder_zero")
-                self.assertFalse(terrain.plane_relationship.polygon_records_use_plane_table)
-                self.assertEqual(terrain.plane_relationship.zero_plane_index_count, terrain.polygon_count)
+                self.assertEqual(terrain.plane_relationship.reference_mode, "indexed")
+                self.assertTrue(terrain.plane_relationship.polygon_records_use_plane_table)
                 self.assertEqual(terrain.plane_relationship.out_of_range_polygon_count, 0)
+                self.assertEqual(terrain.plane_relationship.referenced_plane_count, terrain.plane_count)
+                self.assertEqual(terrain.plane_relationship.unused_plane_count, 0)
 
 
 if __name__ == "__main__":
