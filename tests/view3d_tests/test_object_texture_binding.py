@@ -18,6 +18,7 @@ from view3d.gl_object_models import (
     _rotation_y,
     _resolve_skin_for_piece,
     _split_skin_names,
+    surface_placement_y,
 )
 from catalog.actor_visuals import parse_actor_visual_tables
 
@@ -354,6 +355,43 @@ class ObjectTextureBindingTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(_floor_y_override(prop, FakeMesh(), world), 2.1)
+
+        placed_y = surface_placement_y(prop, FakeMesh(), 0.0)
+        placed = FakeObject(
+            "Prop",
+            Pos=(0.0, placed_y, 0.0),
+            MoveToFloor=1,
+            Scale=1.0,
+        )
+        self.assertAlmostEqual(_floor_y_override(placed, FakeMesh(), world), placed_y)
+
+    def test_surface_placement_lifts_move_to_floor_origin_by_runtime_dims(self):
+        class FakeMesh:
+            model_user_dims = (12.0, 34.0, 12.0)
+
+        actor = FakeObject(
+            "CommonerHuman2MaleA",
+            MoveToFloor=1,
+            Scale=1.5,
+        )
+
+        self.assertAlmostEqual(
+            surface_placement_y(actor, FakeMesh(), 700.0),
+            751.1,
+        )
+
+    def test_surface_placement_keeps_exact_y_without_move_to_floor(self):
+        class FakeMesh:
+            model_user_dims = (12.0, 34.0, 12.0)
+
+        prop = FakeObject("Prop", MoveToFloor=0, Scale=2.0)
+
+        self.assertEqual(surface_placement_y(prop, FakeMesh(), 700.0), 700.0)
+
+    def test_surface_placement_clearance_avoids_coincident_unknown_model(self):
+        actor = FakeObject("UnknownActor", MoveToFloor=1)
+
+        self.assertAlmostEqual(surface_placement_y(actor, None, 700.0), 700.1)
 
     def test_object_model_yaw_uses_game_model_basis(self):
         self.assertAlmostEqual(_rotation_y((0.0, math.pi, 0.0, 0.0)), math.pi)

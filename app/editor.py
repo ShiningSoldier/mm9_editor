@@ -976,13 +976,15 @@ class EditorApp:
 
     def cmd_save(self) -> None:
         self._flush_view_transforms()
+        self.project.reconcile_external_asset_baselines()
         if not self.project.has_pending():
             messagebox.showinfo("Nothing to save",
                                 "There are no pending level or RUDE asset edits.")
             return
         plan = self.project.save_plan()
         SaveDialog(self.root, self.project, plan,
-                   on_committed=self._on_save_committed,
+                   on_committed=lambda log_lines: self._on_save_committed(
+                       plan, log_lines),
                    cfg=self.cfg)
 
     def cmd_run_current_level(self) -> None:
@@ -1105,7 +1107,16 @@ class EditorApp:
             messagebox.showerror("Install failed", str(e))
             return
 
-        messagebox.showinfo("Install complete", "\n".join(result.log_lines()))
+        reconciled = self.project.reconcile_external_asset_baselines(
+            rude_rez_path=os.path.join(game_data_dir, "RUDE.REZ"),
+            scripts_rez_path=os.path.join(game_data_dir, "SCRIPTS.REZ"),
+        )
+        log_lines = list(result.log_lines())
+        if reconciled:
+            log_lines.append(
+                f"refreshed {len(reconciled)} installed project asset baseline(s)"
+            )
+        messagebox.showinfo("Install complete", "\n".join(log_lines))
 
     def cmd_restore_backup(self) -> None:
         """Restore a backup previously created by Install Output to Game."""
@@ -2698,6 +2709,36 @@ class EditorApp:
             return
         self._place_pending_at_pos([float(wx), float(wy), float(wz)])
 
+    def _surface_placement_position(
+        self,
+        template: patcher.WorldObject,
+        position: Sequence[float],
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> List[float]:
+        """Resolve a BSP hit using the effective model placement properties."""
+        hit = [float(value) for value in position]
+        resolver = getattr(
+            getattr(self, "view3d", None),
+            "surface_placement_position",
+            None,
+        )
+        if not callable(resolver):
+            return hit
+
+        effective = copy.deepcopy(template)
+        for name, value in (overrides or {}).items():
+            try:
+                effective.set(name, value)
+            except KeyError:
+                # Placement only needs model/runtime properties. Ignore
+                # optional preset metadata that is not part of this class.
+                continue
+        try:
+            resolved = [float(value) for value in resolver(effective, hit)]
+        except Exception:
+            return hit
+        return resolved if len(resolved) == 3 else hit
+
     def _place_pending_prefab_bsp_at_pos(self, new_pos: tuple) -> None:
         L = self.active
         prefab_path = getattr(self, "_pending_prefab_path", "")
@@ -2789,12 +2830,16 @@ class EditorApp:
             return
         overrides: Dict[str, Any] = {
             "Name": name,
-            "Pos": [float(value) for value in new_pos],
             "Rotation": [0.0, 0.0, 0.0, 0.0],
             "Filename": model,
         }
         if skins:
             overrides["Skin"] = ";".join(str(value) for value in skins)
+        overrides["Pos"] = self._surface_placement_position(
+            template,
+            new_pos,
+            overrides,
+        )
         op = P.ImportResourcePrefabOp(
             template=copy.deepcopy(template),
             overrides=overrides,
@@ -2946,8 +2991,10 @@ class EditorApp:
         if not getattr(self, "_pending_template", None):
             return
         L = self.active
-        # Build overrides
-        overrides = {"Pos": new_pos}
+        # Build effective non-positional properties first. Surface placement
+        # needs the final Filename, Scale, and MoveToFloor values in order to
+        # choose a runtime-safe object origin.
+        overrides: Dict[str, Any] = {}
         # Auto-name to avoid collisions — scan the materialized world so
         # that pending (not-yet-committed) additions are included in the check.
         base = self._pending_template.type_str
@@ -2972,6 +3019,12 @@ class EditorApp:
                     while f"{name_prefix}{j}" in existing:
                         j += 1
                     overrides["Name"] = f"{name_prefix}{j}"
+
+        overrides["Pos"] = self._surface_placement_position(
+            self._pending_template,
+            new_pos,
+            overrides,
+        )
 
         # Encode the NPCNbr override and stage dialogue as a project-level RUDE
         # asset.  The AddOp deliberately carries no dialogue payload: the
@@ -3394,14 +3447,14 @@ class EditorApp:
             self._show_selected_materialized(world_index)
         self._update_history_menu()
 
-    def _on_save_committed(self, log_lines: List[str]) -> None:
-        # Promote saved materialized worlds to the new in-memory baseline, then
-        # clear pending ops so saved additions stay visible in the session.
-        for L in self.project.levels:
-            if L.ops:
-                L.world = L.materialize()
-            L.ops.clear()
-            L.redo_ops.clear()
+    def _on_save_committed(
+        self,
+        plan: P.SavePlan,
+        log_lines: List[str],
+    ) -> None:
+        # Promote only the DATs that were written, using their exact committed
+        # bytes.  This keeps runtime preview coherent after pending ops clear.
+        self.project.accept_save_plan(plan)
         self._refresh_all_views()
         self.level_panel.set_active_level(self.active)
         self._update_history_menu()

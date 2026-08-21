@@ -55,7 +55,7 @@ import math
 import os
 import sys
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
 try:
     import tkinter as tk
@@ -133,8 +133,10 @@ if OPENGL_AVAILABLE:
                                    ObjectSprites,
                                    hidden_world_helper_model_names,
                                    should_draw_billboard_for_modeled_object)
-    from view3d.gl_object_models import (ObjectModelCache, build_render_items,
-                                         draw_object_model_items)
+    from view3d.gl_object_models import (_object_model_filename,
+                                         ObjectModelCache, build_render_items,
+                                         draw_object_model_items,
+                                         surface_placement_y)
     from view3d.sky import (build_soft_sky_model, resolve_sky_scene,
                             resolve_soft_sky_texture)
     import _path_setup     # type: ignore  # noqa: F401
@@ -2285,6 +2287,29 @@ class View3D(tk.Frame if _HAS_TK else object):
         if not OPENGL_AVAILABLE:
             return
         self._canvas.focus_for_input()
+
+    def surface_placement_position(self, obj, position) -> List[float]:
+        """Resolve a clicked support point to a safe runtime object origin."""
+        x, y, z = (float(value) for value in position)
+        if not OPENGL_AVAILABLE:
+            return [x, y, z]
+
+        mesh = None
+        cache = getattr(self._canvas, "_obj_model_cache", None)
+        if cache is not None:
+            try:
+                filename = _object_model_filename(
+                    obj,
+                    actor_visuals=getattr(self._canvas, "_actor_visuals", None),
+                )
+                if filename:
+                    mesh = cache.get_or_upload(filename)
+            except Exception as exc:
+                print(
+                    f"[view3d] placement model metadata failed: {exc}",
+                    file=sys.stderr,
+                )
+        return [x, surface_placement_y(obj, mesh, y), z]
 
     # ------------------------------------------------------------------
     # Internal callbacks

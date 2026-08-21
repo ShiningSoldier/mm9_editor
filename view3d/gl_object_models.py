@@ -28,6 +28,7 @@ from view3d.coords import game_to_display_matrix
 
 
 _DEFAULT_COLOR: Tuple[float, float, float] = (0.55, 0.62, 0.58)
+_MOVE_TO_FLOOR_CLEARANCE = 0.1
 _logged_skin_misses: set = set()
 
 _ALPHA_CUTOUT_TOKENS = (
@@ -910,6 +911,38 @@ def _mesh_min_y(mesh: GpuMesh) -> Optional[float]:
         return None
 
 
+def surface_placement_y(obj, mesh: Optional[GpuMesh], support_y: float) -> float:
+    """Return a safe object-origin Y for a clicked support surface.
+
+    LithTech's ``MoveObjectToFloor`` casts downward from the object origin and
+    deliberately ignores an intersection coincident with that origin.  Saving
+    a ``MoveToFloor`` object exactly at the clicked floor can therefore make
+    the cast hit a lower storey (or the bottom of the level) and move the model
+    there at runtime.  Start model-backed objects one animation half-height
+    above the support instead, matching the dimensions and clearance used by
+    the runtime floor-placement code.
+
+    Objects without ``MoveToFloor`` keep the exact clicked Y.  If model
+    metadata is unavailable, the small clearance still prevents a coincident
+    ray origin without inventing a class-specific height.
+    """
+    y = float(support_y)
+    if not _truthy_object_flag(obj, "MoveToFloor"):
+        return y
+
+    half_height = 0.0
+    if mesh is not None:
+        user_dims = getattr(mesh, "model_user_dims", None)
+        try:
+            half_height = abs(
+                float(user_dims[1]) * _scale_value(obj.get("Scale") or 1.0)
+            )
+        except (TypeError, IndexError, ValueError):
+            half_height = 0.0
+
+    return y + half_height + _MOVE_TO_FLOOR_CLEARANCE
+
+
 def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
     pos = obj.get("Pos")
     if pos is None:
@@ -999,7 +1032,7 @@ def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
         # from its support than its animation half-height, then retain the
         # engine's small separation epsilon.
         if y - float(floor_y) > half_height:
-            return float(floor_y) + half_height + 0.1
+            return float(floor_y) + half_height + _MOVE_TO_FLOOR_CLEARANCE
         return None
 
     # Conservative fallback for unsupported ABC animation variants.

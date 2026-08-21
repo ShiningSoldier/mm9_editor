@@ -4,10 +4,10 @@ project.py
 
 In-memory representation of a multi-level MM9 mod project.
 
-A Project owns a list of LevelEdits (one per loaded .DAT). Each LevelEdit
-has the original World (read-only reference), a list of pending Operations
-(add / move / delete), and a derived view that shows what the World would
-look like with all pending ops applied.
+A Project owns a list of LevelEdits (one per loaded .DAT). Each LevelEdit has
+a current source-or-committed baseline, a list of pending Operations (add /
+move / delete), and a derived view that shows what the World would look like
+with all pending ops applied.
 
 This is what the GUI works with. Operations are reified so we can:
 - Undo/redo
@@ -847,7 +847,7 @@ class LevelEdit:
             raise ValueError(f"unknown source_kind {self.source_kind!r}")
 
     def source_bytes(self) -> bytes:
-        """Return the original level DAT bytes, reloading them if needed."""
+        """Return the current level baseline DAT bytes, reloading if needed."""
         data = getattr(self, "_raw_bytes", None)
         if data:
             return data
@@ -862,6 +862,30 @@ class LevelEdit:
             self._raw_bytes = data
             return data
         raise ValueError(f"unknown source_kind {self.source_kind!r}")
+
+    def accept_saved_baseline(
+        self,
+        materialized: patcher.World,
+        dat_bytes: bytes,
+        *,
+        bsp_changed: bool = False,
+    ) -> None:
+        """Promote one successfully written DAT to the in-memory baseline."""
+        if not dat_bytes:
+            raise ValueError("A saved level baseline cannot be empty")
+        self.world = copy.deepcopy(materialized)
+        self._raw_bytes = bytes(dat_bytes)
+        self.ops.clear()
+        self.redo_ops.clear()
+        # Every derived plan/view must now be rebuilt from the committed bytes
+        # and world.  The parsed BSP itself remains valid for object-only
+        # edits; discard it only when the committed operation changed BSP.
+        if bsp_changed:
+            self.bsp = None
+        self._editor_materialized_cache = None
+        self._door_plan_cache = None
+        self._prefab_plan_cache = None
+        self._preview_bsp_cache = None
 
     def get_bsp(self):
         """Lazily parse the level's BSP geometry; cached after the first call."""
@@ -1563,6 +1587,12 @@ class Project:
         npc_nbr = int(npc_nbr)
         existing = self.rude_assets.get(npc_nbr)
         if existing is not None:
+            # A project reopened after Install Output can still serialize this
+            # asset as "new" even though its exact bytes now live in RUDE.REZ.
+            # Establish that baseline before the editor lets the user change
+            # it, so the next save is a normal edit rather than a collision.
+            if existing.is_new:
+                self.reconcile_external_asset_baselines()
             return existing
         if not self.rude_rez_path or not os.path.isfile(self.rude_rez_path):
             raise FileNotFoundError("RUDE.REZ source archive was not found")
@@ -1736,6 +1766,87 @@ class Project:
             )
         del self.dialogue_script_assets[int(npc_nbr)]
 
+    def reconcile_external_asset_baselines(
+        self,
+        *,
+        rude_rez_path: Optional[str] = None,
+        scripts_rez_path: Optional[str] = None,
+    ) -> List[str]:
+        """Promote exact externally-installed assets to clean baselines.
+
+        Save writes to a reviewed output directory, while Install Output later
+        replaces the live archives.  A project asset created before that
+        install still has no original baseline, so without reconciliation it
+        mistakes its own installed resource for an unrelated ID collision.
+        Only byte-for-byte dialogue/script matches with identical RUDE metadata
+        are accepted; any real collision or external edit remains an error.
+        """
+        reconciled: List[str] = []
+        rude_source = rude_rez_path or self.rude_rez_path
+        if (
+            self.rude_assets
+            and rude_source
+            and os.path.isfile(rude_source)
+        ):
+            from core import rezmgr
+            with rezmgr.RezReader(rude_source) as reader:
+                npcname_vpath = self._find_rez_entry(
+                    reader, ("RUDE/NPCNAME", "RUDE/NPCNAME.RUDE"))
+                topblurb_vpath = self._find_rez_entry(
+                    reader, ("RUDE/TOPBLURB", "RUDE/TOPBLURB.RUDE"))
+                if npcname_vpath is not None and topblurb_vpath is not None:
+                    catalog = rude_model.RudeMetadataCatalog.from_bytes(
+                        reader.extract_to_bytes(npcname_vpath),
+                        reader.extract_to_bytes(topblurb_vpath),
+                    )
+                    existing_paths = set(reader.list_paths())
+                    for npc_nbr, asset in self.rude_assets.items():
+                        actual = self._find_existing_vpath(
+                            existing_paths, f"RUDE/NPC{npc_nbr}")
+                        if actual is None:
+                            continue
+                        try:
+                            source_metadata = catalog.metadata_for(npc_nbr)
+                        except KeyError:
+                            continue
+                        source_bytes = reader.extract_to_bytes(actual)
+                        if (
+                            source_bytes == asset.dialogue.to_bytes()
+                            and _rude_metadata_signature(source_metadata)
+                            == _rude_metadata_signature(asset.metadata)
+                        ):
+                            was_dirty = asset.is_dirty
+                            asset.source_virtual_path = actual
+                            asset.original_dialogue_bytes = source_bytes
+                            asset.original_metadata = copy.deepcopy(source_metadata)
+                            if was_dirty:
+                                reconciled.append(f"RUDE/NPC{npc_nbr}")
+
+        scripts_source = scripts_rez_path or self.scripts_rez_path
+        if (
+            self.dialogue_script_assets
+            and scripts_source
+            and os.path.isfile(scripts_source)
+        ):
+            from core import rezmgr
+            with rezmgr.RezReader(scripts_source) as reader:
+                by_key = {
+                    _script_rez_key(path): path for path in reader.list_paths()
+                }
+                for asset in self.dialogue_script_assets.values():
+                    actual = by_key.get(_script_rez_key(
+                        asset.integration.virtual_path))
+                    if actual is None:
+                        continue
+                    source_bytes = reader.extract_to_bytes(actual)
+                    desired_bytes = asset.integration.to_bytes()
+                    if source_bytes == desired_bytes:
+                        was_dirty = asset.is_dirty
+                        asset.original_script_bytes = source_bytes
+                        if was_dirty:
+                            reconciled.append(asset.integration.virtual_path)
+        return reconciled
+
     def _maybe_backup_archive(self, rez_path: str) -> Optional[str]:
         """Copy the source REZ to <backup_root>/<archive>.REZ.bak the first
         time we see it this session. Returns the backup path (or None if no
@@ -1841,6 +1952,7 @@ class Project:
 
     def build_runtime_overlay_entries(self, L: LevelEdit) -> Dict[str, bytes]:
         """Build non-DAT loose resources required by one level preview."""
+        self.reconcile_external_asset_baselines()
         entries = self.build_behavioral_script_overlay_entries([L])
         dialogue_scripts = self.build_dialogue_script_overlay_entries()
         folded_scripts = {
@@ -1881,6 +1993,7 @@ class Project:
         return entries
 
     def save_plan(self) -> "SavePlan":
+        self.reconcile_external_asset_baselines()
         batch_id = _timestamp()
         plan = SavePlan(batch_id=batch_id)
         for L in self.levels:
@@ -1994,6 +2107,10 @@ class Project:
             key = _script_rez_key(path)
             archived = archived_bytes.get(key)
             if archived is not None:
+                if archived == data:
+                    # The exact generated asset was installed after this
+                    # project created it.  Nothing needs to be overlaid.
+                    continue
                 if asset.original_script_bytes is None:
                     raise ValueError(
                         f"Generated dialogue script {path} already exists in "
@@ -2134,6 +2251,9 @@ class Project:
         """Write the output files in the plan. Edited levels are grouped by
         source archive and written through RezWriter.
         RUDE writes are separate (execute_rude)."""
+        plan.executed_successfully = False
+        for write in plan.dats:
+            write.committed_dat_bytes = None
         log: List[str] = []
         rez_groups: Dict[str, List[DatWrite]] = {}
         for d in plan.dats:
@@ -2164,7 +2284,39 @@ class Project:
         manifest = self._write_manifest(plan)
         if manifest:
             log.append(f"wrote {manifest}")
+        plan.executed_successfully = True
         return log
+
+    def accept_save_plan(self, plan: "SavePlan") -> None:
+        """Promote every successfully written DAT in *plan* atomically.
+
+        Archive execution and in-memory promotion are deliberately separate:
+        a failed write must leave pending editor operations intact.  Validate
+        the complete plan before mutating any open level for the same reason.
+        """
+        if not plan.executed_successfully:
+            raise ValueError("Save plan did not complete successfully")
+        committed = []
+        for write in plan.dats:
+            level = write.level_edit
+            if level is None or not any(level is item for item in self.levels):
+                raise ValueError("Save plan contains a level that is not open")
+            if write.committed_dat_bytes is None:
+                raise ValueError(
+                    f"Save plan has no committed DAT bytes for {write.source_path}"
+                )
+            committed.append((
+                level,
+                write.materialized,
+                write.committed_dat_bytes,
+                write.has_geometry_bsp_write(),
+            ))
+        for level, materialized, dat_bytes, bsp_changed in committed:
+            level.accept_saved_baseline(
+                materialized,
+                dat_bytes,
+                bsp_changed=bsp_changed,
+            )
 
     def execute_scripts_rez(self, patch: "ArchivePatch") -> List[str]:
         """Write reviewed generated script assets into a complete SCRIPTS.REZ."""
@@ -2221,6 +2373,7 @@ class Project:
         from core import rezmgr
 
         log: List[str] = []
+        committed: List[Tuple["DatWrite", bytes]] = []
         with rezmgr.RezWriter(source_rez, output) as writer:
             for d in writes:
                 L = d.level_edit
@@ -2230,9 +2383,12 @@ class Project:
                 data = self._dat_write_to_bytes(d)
                 writer.replace(L.rez_vpath, data)
                 self._write_changed_entry_copy(output, L.rez_vpath, data)
+                committed.append((d, data))
                 log.append(
                     f"  patched {L.rez_vpath} ({len(d.materialized.objects)} objects)")
             writer.commit()
+        for write, data in committed:
+            write.committed_dat_bytes = data
         return [f"wrote {output}"] + log
 
     def _world_to_bytes(self, world: patcher.World) -> bytes:
@@ -2534,6 +2690,22 @@ class Project:
                     f"RUDE/NPC{n} is staged both as an asset and a placement registration")
             source_dialogue = source_dialogues.get(n)
             if asset.is_new:
+                already_installed = False
+                if source_dialogue is not None:
+                    try:
+                        installed_metadata = catalog.metadata_for(n)
+                    except KeyError:
+                        installed_metadata = None
+                    already_installed = (
+                        source_dialogue[1] == asset.dialogue.to_bytes()
+                        and _rude_metadata_signature(installed_metadata)
+                        == _rude_metadata_signature(asset.metadata)
+                    )
+                if already_installed:
+                    # Install Output may have copied this exact new asset into
+                    # the live RUDE.REZ while the project remained open.  It is
+                    # an idempotent match, not an NPC-number collision.
+                    continue
                 conflicts = []
                 if source_dialogue is not None:
                     conflicts.append(f"NPC{n} already exists")
@@ -2684,6 +2856,11 @@ class DatWrite:
     blocking_issues: List[Dict[str, Any]] = field(default_factory=list)
     bsp_record_diff_report: Optional[Dict[str, Any]] = None
     dat_section_diff_report: Optional[Dict[str, Any]] = None
+    committed_dat_bytes: Optional[bytes] = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def stats(self) -> Dict[str, int]:
         return {
@@ -3151,6 +3328,7 @@ class SavePlan:
     rude_assets: List[RudeAssetEdit] = field(default_factory=list)
     dialogue_script_assets: List[rude_script.DialogueScriptAssetEdit] = field(
         default_factory=list)
+    executed_successfully: bool = field(default=False, repr=False, compare=False)
 
     def has_rude_changes(self) -> bool:
         return bool(self.rude_entries or self.rude_assets)

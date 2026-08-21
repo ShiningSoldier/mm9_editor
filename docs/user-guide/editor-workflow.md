@@ -48,6 +48,11 @@ isolated preview under `output/run-preview/` containing unsaved DAT changes and
 staged RUDE/script resources. It launches the game from that workspace; the
 installed archives are read but not modified.
 
+Archive entries such as `RUDE/NPC437` carry their resource type separately
+inside a REZ. In the loose preview they are materialized with typed filenames
+such as `RUDE/NPC437.RUDE`, so fresh dialogue is available before Save or
+Install.
+
 Close the running preview before launching another one. A preview is a smoke
 test, not a replacement for validating an installable output batch.
 
@@ -65,11 +70,22 @@ output/<timestamp>/
 
 Other patched archives appear only when the project changes their resources.
 
+After the batch is written successfully, the exact serialized DAT bytes become
+the open level's new in-memory baseline. Saved objects therefore remain in
+**Run Current Level** immediately, including before installation. A failed
+write does not clear or promote pending level operations.
+
 ## Install and restore
 
 Choose **File → Install Output to Game…** and select a completed output batch.
 The editor reads its manifest, displays the affected files, and creates an
 install backup before replacing live files.
+
+After a successful install, exact matching RUDE and generated-script project
+assets are refreshed as clean baselines. This keeps the open project usable
+for **Run Current Level** and later edits without mistaking its own newly
+installed resources for name or NPC-number collisions. Nonmatching live
+resources are never adopted automatically.
 
 Choose **File → Restore Installed Backup…** to restore such a backup. The
 restore operation first backs up the current live files. Do not manually copy
@@ -94,4 +110,3 @@ installed correctly yet remain hidden when an old save restores that previous
 state. Validate object changes with a new game or a fresh load path that has not
 already persisted the affected level. This is not a claim that every edit
 always requires starting the entire campaign again.
-

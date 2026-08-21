@@ -147,7 +147,10 @@ class FreshNpcDialog(tk.Toplevel):
         # Dialogue lines
         tk.Label(
             self.fresh_frame,
-            text="Dialogue lines  (one per row,  format:  player text :: npc response)",
+            text=(
+                "Dialogue lines  (player text :: npc response; Goodbye closes "
+                "the dialogue)"
+            ),
             bg="#1a1d22", fg="#555", font=("Segoe UI", 8),
         ).pack(anchor="w", padx=8, pady=(8, 2))
 

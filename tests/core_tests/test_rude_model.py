@@ -184,6 +184,27 @@ class RudeModelTests(unittest.TestCase):
         self.assertEqual(state.choices[0].action.target_state, 12)
         self.assertEqual(state.choices[1].action.kind, rude.RudeActionKind.CLOSE)
 
+    def test_simple_dialogue_uses_an_authored_goodbye_as_the_only_close(self):
+        metadata = rude.RudeDialogueMetadata(
+            npc_nbr=437,
+            name="Fresh NPC",
+            initial_state=437,
+            opening_blurb="Hail, traveler!",
+        )
+        dialogue = rude.make_simple_dialogue(metadata, [
+            ("Hello.", "Well met!"),
+            ("Goodbye.", "Safe travels."),
+        ])
+
+        choices = dialogue.state(437).choices
+        self.assertEqual(len(choices), 2)
+        self.assertEqual([choice.player_text for choice in choices], [
+            "Hello.", "Goodbye.",
+        ])
+        self.assertEqual(choices[0].action.target_state, 437)
+        self.assertEqual(choices[1].action.kind, rude.RudeActionKind.CLOSE)
+        self.assertEqual(choices[1].npc_response, "Safe travels.")
+
     def test_simulator_filters_choices_and_updates_mock_party_keys(self):
         gated = [0] * 24
         gated[0] = 1       # required key 1 (column 6)

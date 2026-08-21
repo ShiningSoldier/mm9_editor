@@ -22,6 +22,23 @@ Fresh dialogue stages these resources:
 They are independent project assets and are written only to a saved output
 batch.
 
+**Run Current Level** can preview these assets before they are saved. The
+preview keeps the logical archive names internally and writes typed loose files
+(`NPC<N>.RUDE`, `NPCNAME.RUDE`, and `TOPBLURB.RUDE`) for the game runtime.
+
+The fresh-NPC form's default rows produce two choices: `Hello.` loops back to
+the menu and `Goodbye.` closes it. A row whose player text is plainly
+`Goodbye`, `Bye`, or `Farewell` is used as the closing choice; the editor adds
+its fallback `Goodbye. / Farewell.` row only when no such row was authored.
+This avoids a second, non-closing Goodbye option.
+
+After **Install Output to Game**, an exact installed copy of a new RUDE asset
+is promoted to that asset's clean source baseline. Running the current level
+therefore treats the project's own installed `NPC<N>`, `NPCNAME`, and
+`TOPBLURB` rows as an idempotent match, while a different resource using the
+same NPC number remains a blocking collision. Later dialogue edits continue
+from the installed baseline normally.
+
 ## Dialogue and Quest Editor
 
 Open **Dialogues → Dialogue and Quest Editor…** without opening a level. Enter
@@ -73,4 +90,3 @@ overwrite an untracked same-named script.
 
 See [RUDE format](../reference/rude-format.md) for the 30-column schema and
 native action values.
-

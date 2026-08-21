@@ -1,5 +1,7 @@
 import json
 import os
+import copy
+import shutil
 import tempfile
 import unittest
 
@@ -167,6 +169,47 @@ class IndependentRudeAssetTests(unittest.TestCase):
                 )
             self.assertEqual(dialogue.metadata.initial_state, 50)
             self.assertEqual(dialogue.state(50).choices[0].npc_response, "Answer")
+
+    def test_exact_installed_new_asset_is_reconciled_instead_of_conflicting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_rez = os.path.join(tmp, "game", "data", "RUDE.REZ")
+            work_dir = os.path.join(tmp, "output")
+            write_rude_archive(source_rez)
+            project = P.Project(rude_rez_path=source_rez, work_dir=work_dir)
+            metadata = rude.RudeDialogueMetadata(
+                npc_nbr=437,
+                name="Installed NPC",
+                initial_state=437,
+                opening_blurb="Hello",
+            )
+            asset = project.create_rude_asset(rude.make_simple_dialogue(
+                metadata,
+                [("Hello.", "Well met!"), ("Goodbye.", "Safe travels.")],
+            ))
+            first_plan = project.save_plan()
+            project.execute(first_plan)
+            output_rez = first_plan.rude_archive_patch().output_archive
+            shutil.copy2(output_rez, source_rez)
+
+            # Even a detached copy of the old "new" asset sees its exact
+            # installed output as idempotent, not as an ID collision.
+            overlay = project.build_rude_overlay_entries(
+                asset_edits=[copy.deepcopy(asset)],
+            )
+            self.assertEqual(overlay, {})
+
+            self.assertIs(project.open_rude_asset(437), asset)
+            self.assertFalse(asset.is_new)
+            self.assertFalse(asset.is_dirty)
+
+            # Subsequent edits now use the installed resource as their normal
+            # optimistic-concurrency baseline.
+            asset.dialogue.choices_in_file_order[0].npc_response = "Changed"
+            second_plan = project.save_plan()
+            self.assertEqual(
+                second_plan.rude_archive_patch().entries,
+                ["RUDE/NPC437"],
+            )
 
     def test_independent_asset_round_trips_through_project_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -252,6 +252,7 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                 patcher.Property("Name", 0, 0, "Template"),
                 patcher.Property("Pos", 1, 0, (0.0, 0.0, 0.0)),
                 patcher.Property("NPCNbr", 6, 0, 0),
+                patcher.Property("MoveToFloor", 5, 0, 1),
             ])
             app = object.__new__(mm9_editor_app.EditorApp)
             app.active = level
@@ -267,6 +268,16 @@ class EditorResourceWorkflowTests(unittest.TestCase):
                 "lines": [("Question", "Answer")],
                 "force": False,
             }
+            placement_inputs = {}
+
+            class FakeView:
+                @staticmethod
+                def surface_placement_position(obj, position):
+                    placement_inputs["move_to_floor"] = obj.get("MoveToFloor")
+                    placement_inputs["position"] = list(position)
+                    return [position[0], position[1] + 34.1, position[2]]
+
+            app.view3d = FakeView()
             app._refresh_after_edit = lambda _index: None
 
             mm9_editor_app.EditorApp._place_pending_at_pos(
@@ -277,6 +288,9 @@ class EditorResourceWorkflowTests(unittest.TestCase):
             self.assertIn(437, app.project.rude_assets)
             self.assertTrue(app.project.rude_assets[437].is_new)
             self.assertEqual(app.project.next_npc_nbr, 438)
+            self.assertEqual(placement_inputs["position"], [1.0, 2.0, 3.0])
+            self.assertEqual(placement_inputs["move_to_floor"], 1)
+            self.assertEqual(level.ops[0].overrides["Pos"], [1.0, 36.1, 3.0])
 
     def test_lomm_conversion_command_opens_dialog_with_detected_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

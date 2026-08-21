@@ -81,6 +81,28 @@ def normalize_world_path(virtual_path: str) -> Tuple[str, str]:
     return overlay_path, world_name
 
 
+def runtime_loose_resource_path(virtual_path: str) -> str:
+    """Return the typed loose-file path for one logical archive resource.
+
+    REZ entries store their four-character resource type separately from the
+    extensionless resource name.  A loose preview directory has no such type
+    field, so RUDE resources must carry ``.RUDE`` in their filenames for the
+    runtime's typed lookup to find them.
+    """
+    parts = list(_safe_resource_parts(virtual_path))
+    if parts[0].casefold() == "rude":
+        stem, ext = os.path.splitext(parts[-1])
+        if not ext:
+            parts[-1] = stem + ".RUDE"
+        elif ext.casefold() == ".rude":
+            parts[-1] = stem + ".RUDE"
+        else:
+            raise RunWorldError(
+                f"RUDE preview resource has an invalid type: {virtual_path!r}"
+            )
+    return "\\".join(parts)
+
+
 def game_resource_paths(game_root: str) -> Tuple[str, ...]:
     """Resolve the installed game's REZ.TXT entries to absolute paths."""
     root = os.path.abspath(str(game_root or ""))
@@ -189,6 +211,24 @@ def stage_current_level(
             f"previewed safely:\n\n{details}"
         )
     extra_entries = project.build_runtime_overlay_entries(level)
+    prepared_overlay_entries = []
+    overlay_resources = []
+    physical_resource_paths = {}
+    for virtual_resource, data in extra_entries.items():
+        loose_resource = runtime_loose_resource_path(virtual_resource)
+        physical_key = loose_resource.replace("/", "\\").casefold()
+        previous = physical_resource_paths.get(physical_key)
+        if previous is not None:
+            raise RunWorldError(
+                "Preview resources map to the same loose file: "
+                f"{previous!r} and {virtual_resource!r}"
+            )
+        physical_resource_paths[physical_key] = virtual_resource
+        prepared_overlay_entries.append((loose_resource, data))
+        overlay_resources.append({
+            "logical_path": str(virtual_resource),
+            "loose_path": loose_resource,
+        })
     installed_resources = game_resource_paths(root)
 
     preview_root = os.path.abspath(os.path.join(staging_root, "run-preview"))
@@ -210,8 +250,8 @@ def stage_current_level(
     os.makedirs(os.path.dirname(staged_dat), exist_ok=True)
     with open(staged_dat, "wb") as handle:
         handle.write(dat_bytes)
-    for virtual_resource, data in extra_entries.items():
-        target = _overlay_file_path(overlay_dir, virtual_resource)
+    for loose_resource, data in prepared_overlay_entries:
+        target = _overlay_file_path(overlay_dir, loose_resource)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "wb") as handle:
             handle.write(data)
@@ -242,6 +282,7 @@ def stage_current_level(
                 "world": world_name,
                 "source_virtual_path": virtual_path,
                 "staged_dat": staged_dat,
+                "overlay_resources": overlay_resources,
                 "resources": list(resources),
                 "command": command,
                 "validation_warnings": list(

@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -186,6 +187,38 @@ class RudeScriptProjectTests(unittest.TestCase):
             project.upsert_dialogue_script_asset(_integration())
             with self.assertRaisesRegex(ValueError, "refusing to overwrite"):
                 project.save_plan()
+
+    def test_exact_installed_script_is_promoted_to_an_editable_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts_rez = os.path.join(tmp, "game", "data", "SCRIPTS.REZ")
+            work_dir = os.path.join(tmp, "output")
+            write_minimal_rez(
+                scripts_rez,
+                {"SCRIPTS/EXISTING.SCR": b"existing"},
+            )
+            project = P.Project(
+                scripts_rez_path=scripts_rez,
+                work_dir=work_dir,
+            )
+            asset = project.upsert_dialogue_script_asset(_integration())
+            first_plan = project.save_plan()
+            project.execute(first_plan)
+            shutil.copy2(
+                first_plan.scripts_archive_patch().output_archive,
+                scripts_rez,
+            )
+
+            reconciled = project.reconcile_external_asset_baselines()
+            self.assertEqual(
+                reconciled,
+                [r"SCRIPTS\MM9EDITOR\NPC437_RUDE.SCR"],
+            )
+            self.assertFalse(asset.is_new)
+            self.assertFalse(asset.is_dirty)
+
+            asset.integration.hooks[0].reward.gold = 999
+            second_plan = project.save_plan()
+            self.assertIsNotNone(second_plan.scripts_archive_patch())
 
     def test_runtime_overlay_includes_applied_dialogue_script_without_dat_edits(self):
         world = patcher.World(

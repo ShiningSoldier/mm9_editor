@@ -886,29 +886,40 @@ def make_simple_dialogue(
     """Build the one-state looping dialogue used by the current fresh-NPC UI."""
     zero_conditions = RudeKeyConditions()
     zero_effects = RudeKeyEffects()
-    choices = [
-        RudeChoice(
+    choices: List[RudeChoice] = []
+    has_explicit_close = False
+    for index, (player_text, npc_response) in enumerate(lines, 1):
+        # The fresh-NPC form has historically included ``Goodbye.`` as one
+        # of its sample rows.  Treat a plainly authored farewell as the close
+        # action; otherwise adding the automatic close below produces two
+        # identical menu choices and the first one only loops the state.
+        normalized_prompt = str(player_text).strip().rstrip(".!?").casefold()
+        is_close = normalized_prompt in {"goodbye", "bye", "farewell"}
+        has_explicit_close = has_explicit_close or is_close
+        choices.append(RudeChoice(
             npc_nbr=metadata.npc_nbr,
             state_id=metadata.initial_state,
             branch_id=index,
             player_text=player_text,
             npc_response=npc_response,
-            action=RudeAction.state(metadata.initial_state),
+            action=(
+                RudeAction.close()
+                if is_close else RudeAction.state(metadata.initial_state)
+            ),
             conditions=zero_conditions,
             effects=zero_effects,
-        )
-        for index, (player_text, npc_response) in enumerate(lines, 1)
-    ]
-    choices.append(RudeChoice(
-        npc_nbr=metadata.npc_nbr,
-        state_id=metadata.initial_state,
-        branch_id=len(choices) + 1,
-        player_text="Goodbye.",
-        npc_response="Farewell.",
-        action=RudeAction.close(),
-        conditions=zero_conditions,
-        effects=zero_effects,
-    ))
+        ))
+    if not has_explicit_close:
+        choices.append(RudeChoice(
+            npc_nbr=metadata.npc_nbr,
+            state_id=metadata.initial_state,
+            branch_id=len(choices) + 1,
+            player_text="Goodbye.",
+            npc_response="Farewell.",
+            action=RudeAction.close(),
+            conditions=zero_conditions,
+            effects=zero_effects,
+        ))
     return RudeDialogue(metadata, choices)
 
 
