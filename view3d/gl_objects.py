@@ -210,10 +210,12 @@ def _build_arrays(
     object_helper_indices = set(object_helper_indices or ())
 
     for world_idx, obj in enumerate(objects):
-        # Invisible modeled/controller objects must not fall through to a
-        # billboard merely because the mesh pass intentionally omitted them.
-        # Keep a selected invisible object addressable in the viewport.
-        if world_idx != selected_index and not _object_is_visible(obj):
+        # Visible=0 still suppresses the object's rendered model, but the
+        # world-helper toggle exposes its editor gizmo.  Keep a selected
+        # invisible object addressable even while helpers are hidden.
+        if (world_idx != selected_index
+                and not include_world_helpers
+                and not _object_is_visible(obj)):
             continue
         if (not include_world_helpers
                 and world_idx != selected_index

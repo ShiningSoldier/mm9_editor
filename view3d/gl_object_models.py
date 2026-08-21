@@ -911,6 +911,15 @@ def _mesh_min_y(mesh: GpuMesh) -> Optional[float]:
         return None
 
 
+def _mesh_bottom_pivot_offset_y(mesh: Optional[GpuMesh]) -> float:
+    if mesh is None:
+        return 0.0
+    try:
+        return max(0.0, float(getattr(mesh, "model_bottom_pivot_offset_y", 0.0)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def surface_placement_y(obj, mesh: Optional[GpuMesh], support_y: float) -> float:
     """Return a safe object-origin Y for a clicked support surface.
 
@@ -922,12 +931,20 @@ def surface_placement_y(obj, mesh: Optional[GpuMesh], support_y: float) -> float
     above the support instead, matching the dimensions and clearance used by
     the runtime floor-placement code.
 
-    Objects without ``MoveToFloor`` keep the exact clicked Y.  If model
-    metadata is unavailable, the small clearance still prevents a coincident
-    ray origin without inventing a class-specific height.
+    Rigid bottom-pivot models instead save the origin that makes their scaled
+    mesh bottom meet the clicked support while retaining the ABC node's
+    unscaled pivot translation. Other objects without ``MoveToFloor`` keep the
+    exact clicked Y. If model metadata is unavailable, the small clearance
+    still prevents a coincident ray origin without inventing a class-specific
+    height.
     """
     y = float(support_y)
     if not _truthy_object_flag(obj, "MoveToFloor"):
+        bottom_pivot_offset_y = _mesh_bottom_pivot_offset_y(mesh)
+        local_min_y = _mesh_min_y(mesh) if mesh is not None else None
+        if bottom_pivot_offset_y > 0.0 and local_min_y is not None:
+            scale = _scale_value(obj.get("Scale") or 1.0)
+            return y - bottom_pivot_offset_y - local_min_y * scale
         return y
 
     half_height = 0.0
@@ -962,14 +979,13 @@ def _floor_y_override(obj, mesh: GpuMesh, bsp_world=None) -> Optional[float]:
         # the saved positions is correct for the model, but the DAT position
         # still refers to that source pivot.  Restore the exact ABC-authored
         # translation instead of special-casing object classes or filenames.
-        try:
-            bottom_pivot_offset_y = float(
-                getattr(mesh, "model_bottom_pivot_offset_y", 0.0)
-            )
-        except (TypeError, ValueError):
-            bottom_pivot_offset_y = 0.0
+        bottom_pivot_offset_y = _mesh_bottom_pivot_offset_y(mesh)
         if bottom_pivot_offset_y > 0.0:
-            return y + bottom_pivot_offset_y * scale
+            # LithTech scales the saved mesh positions but retains this rigid
+            # ABC node/bind translation as authored. Scaling both made stock
+            # 1.4x BOOTCAMP trees float about 112 units above their runtime
+            # placement while 1.0x instances happened to look correct.
+            return y + bottom_pivot_offset_y
 
         if bsp_world is None:
             return None

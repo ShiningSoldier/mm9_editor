@@ -110,21 +110,48 @@ class HelperBillboardTests(unittest.TestCase):
 
         self.assertEqual(indices, [0, 1, 2, 3, 4])
 
-    def test_invisible_modeled_object_does_not_fall_back_to_billboard(self):
+    def test_invisible_modeled_object_gizmo_follows_world_helper_toggle(self):
         candle = obj("CandleProp")
         candle.props.update({
             "Filename": r"models\Props\Candle.ABC",
             "Visible": 0,
         })
 
-        _verts, indices = _build_arrays(
+        _verts, hidden_indices = _build_arrays(
+            [candle],
+            categorize,
+            include_world_helpers=False,
+            selected_index=-1,
+        )
+        _verts, shown_indices = _build_arrays(
             [candle],
             categorize,
             include_world_helpers=True,
             selected_index=-1,
         )
 
-        self.assertEqual(indices, [])
+        self.assertEqual(hidden_indices, [])
+        self.assertEqual(shown_indices, [0])
+
+    def test_invisible_unmodeled_object_gizmo_follows_world_helper_toggle(self):
+        prop = obj("InvisibleProp")
+        prop.props["Visible"] = "0"
+
+        _verts, hidden_indices = _build_arrays(
+            [prop],
+            categorize,
+            include_world_helpers=False,
+            selected_index=-1,
+        )
+        _verts, shown_indices = _build_arrays(
+            [prop],
+            categorize,
+            include_world_helpers=True,
+            selected_index=-1,
+        )
+
+        self.assertEqual(hidden_indices, [])
+        self.assertEqual(shown_indices, [0])
 
     def test_selected_invisible_object_keeps_selection_billboard(self):
         candle = obj("CandleProp")

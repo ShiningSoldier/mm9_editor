@@ -300,7 +300,7 @@ class ObjectTextureBindingTests(unittest.TestCase):
 
         self.assertEqual(_floor_y_override(prop, FakeMesh(), world), 2.0)
 
-    def test_bottom_pivot_prop_preserves_dat_ground_reference_without_bsp(self):
+    def test_bottom_pivot_translation_is_not_scaled_with_mesh(self):
         class FakeMesh:
             model_bottom_pivot_offset_y = 279.630981
 
@@ -313,9 +313,33 @@ class ObjectTextureBindingTests(unittest.TestCase):
 
         self.assertAlmostEqual(
             _floor_y_override(prop, FakeMesh(), bsp_world=None),
-            965.4833734,
+            853.630981,
             places=5,
         )
+
+    def test_surface_placement_compensates_scaled_bottom_pivot(self):
+        class FakeMesh:
+            model_bottom_pivot_offset_y = 279.630981
+            tri_positions = np.array([[[-1.0, -273.090912, -1.0],
+                                       [1.0, -273.090912, -1.0],
+                                       [0.0, 394.044922, 1.0]]], dtype=np.float32)
+
+        prop = FakeObject("Prop", MoveToFloor=0, Scale=1.4)
+        support_y = 493.2
+        placed_y = surface_placement_y(prop, FakeMesh(), support_y)
+        preview_y = _floor_y_override(
+            FakeObject(
+                "Prop",
+                Pos=(0.0, placed_y, 0.0),
+                MoveToFloor=0,
+                Scale=1.4,
+            ),
+            FakeMesh(),
+            bsp_world=None,
+        )
+
+        visual_bottom_y = preview_y + FakeMesh.tri_positions[:, :, 1].min() * 1.4
+        self.assertAlmostEqual(visual_bottom_y, support_y, places=4)
 
     def test_move_to_floor_takes_precedence_over_source_pivot(self):
         from core.bsp import BspWorld, Polygon, Surface, WorldModelMesh
