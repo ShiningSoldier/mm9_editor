@@ -1,5 +1,11 @@
 # MM9 DAT to ED Reconstruction
 
+> **Historical investigation — non-normative.** This file preserves the
+> reconstruction experiments and measured baselines that led to the current
+> experimental DAT-to-ED workflow. It is not a user guide or a current feature
+> roadmap. See `docs/user-guide/conversions/dat-to-ed.md` for supported usage
+> and `docs/reference/conversion-contracts/dat-to-ed.md` for maintained rules.
+
 Last updated: 2026-07-14
 
 This document describes the current technical contract for reconstructing
@@ -7,7 +13,7 @@ Might and Magic IX compiled DAT worlds into old LithTech/DEDit-compatible ED
 source worlds.
 
 The separate contract and CLI for static glTF/GLB -> ED conversion are in
-`docs/gltf_to_ed.md`. That flow starts from authored mesh geometry and must not
+`docs/reference/conversion-contracts/gltf-to-ed.md`. That flow starts from authored mesh geometry and must not
 be confused with reconstruction of compiled DAT BSP fragments.
 
 ## Goal
@@ -43,18 +49,13 @@ that contain `CloneDoorOp` records remain loadable, editable, and saveable.
 Special validation profiles still exist as internal/test hooks, but they should
 not be added back to the menu unless they become stable user workflows.
 
-## Local Resources
+## Historical Test Resources
 
-- `C:\lithtech\mm9_editor`: editor and reconstruction code.
-- `C:\lithtech\mm9_editor\mm9_data`: extracted MM9 data used by tests and
-  diagnostics.
-- `C:\Program Files (x86)\GOG Galaxy\Games\Might and Magic 9\data`: installed
-  game data, including `MM9.dep`, `object.lto`, `WORLDS`, and `PreFabs`.
-- `C:\lithtech\Lith21tools`: old LithTech 2.1 DEDit and `Processor.exe`; this
-  is the MM9-native compile path.
-- `C:\lithtech\Lith22tools`: newer DEDit toolchain, useful only for comparison.
-- `C:\lithtech\LTWorldConverter` and `C:\lithtech\EDUnpacker`: external
-  reference code. Do not make them runtime dependencies.
+The experiments used a local MM9 installation, a separate LithTech 2.1 DEDit
+toolchain, and external converter reference projects. These are not part of the
+repository and must not become runtime dependencies. A fresh clone reads game
+resources from the detected install's `data/*.REZ` archives; it does not require
+an extracted `mm9_data` tree.
 
 ## Test Tiers
 
@@ -220,7 +221,7 @@ Important rules:
 Known validated BOOTCAMP terrain candidate:
 
 ```text
-C:\lithtech\mm9_editor\output\full_world_skeleton_source\
+<output-root>\full_world_skeleton_source\
 bootcamp_connected_terrain_patch_twin_clusters_v30_diagnostics.ed
 ```
 

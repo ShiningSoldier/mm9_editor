@@ -1,5 +1,11 @@
 # LoMM Creature Modding Plan
 
+> **Experimental reverse engineering — unsupported.** This document discusses
+> patching native MM9 runtime inputs, including `object.lto`. The normal editor
+> does not provide this workflow. Findings are retained for research and must
+> not be treated as a safe modding recipe without independent runtime testing
+> and reversible backups.
+
 ## Scope
 
 This document captures the technical findings and implementation plan for the

@@ -1,10 +1,16 @@
 # Complete Prefab Import Implementation Plan
 
+> **Historical implementation plan — non-normative.** This plan records the
+> phased behavioral-prefab work completed in August 2026. Its early generated-
+> BSP assumptions were superseded by the runtime-safety boundary documented in
+> the companion archived plan. See `docs/user-guide/prefab-import.md` for the
+> current supported workflow and capability matrix.
+
 > Runtime safety update (2026-08-14): the behavioral graph/object work in this
 > document remains applicable, but direct ED brush compilation is now
 > editor-preview-only. Installable geometry must resolve to a catalog game
 > model or validated DEdit-compiled v66 BSP. See
-> [Runtime-Backed Prefab Import Implementation Plan](resource_backed_prefab_import_plan.md).
+> [Runtime-Backed Prefab Import Implementation Plan](resource-backed-prefab-import-plan.md).
 
 ## Goal
 
@@ -30,7 +36,7 @@ and BSP associations are unambiguous.
 
 ## Corpus baseline
 
-The inventory of `C:\lithtech\PreFabs` found 175 `.ed` files. Four files under
+The inventory of `<dedit-project>\PreFabs` found 175 `.ed` files. Four files under
 `MM9SurrogatesDiagnostics` are generated diagnostics and are excluded from the
 product acceptance corpus. The remaining 171 authored prefabs divide into:
 
@@ -503,7 +509,7 @@ invalidating projects written by project format v3 and later.
 Run the maintained closure gate with:
 
 ```powershell
-python tools/audit_prefab_corpus.py --game-root "C:\path\to\MM9"
+python tools/audit_prefab_corpus.py --game-root "<mm9-root>"
 ```
 
 Use `--include-all-bsp` for the slower investigation pass that compiles every

@@ -1,329 +1,185 @@
 # MM9 Mod Editor
 
-A visual three-dimensional placement editor for Might and Magic IX compiled
-world files. Open levels directly from the game's `WORLDS.REZ`, place and
-adjust objects in the level view, configure NPC dialogue, and save patched
-`.REZ` archives without hex editing or manually unpacking game data.
+A three-dimensional editor for Might and Magic IX compiled worlds. It opens
+levels directly from the game's REZ archives, edits object placement and
+properties, authors NPC dialogue/quest resources, previews a pending level, and
+writes installable replacement archives without hex editing or a required
+full-game extraction.
 
 ## Requirements
 
 - Python 3.9 or later
-- A Might and Magic IX install with the required archives in its `data` folder:
-  - `WORLDS.REZ` (Level geometry and placements)
-  - `RUDE.REZ` (NPC dialogues)
-  - `SCRIPTS.REZ` (Scripts)
-  - `TEXTURES.REZ` (BSP textures)
-  - `SKINS.REZ` (Object and character skins)
-  - `MODELS.REZ` (Object and character models)
-  - `DATA.REZ` (Game databases and global configuration)
-- PyOpenGL dependencies:
+- A Might and Magic IX installation containing:
+  - `data/WORLDS.REZ`
+  - `data/RUDE.REZ`
+  - `data/SCRIPTS.REZ`
+  - `data/TEXTURES.REZ`
+  - `data/SKINS.REZ`
+  - `data/MODELS.REZ`
+  - `data/DATA.REZ`
+- Viewport dependencies:
 
-```sh
-pip install PyOpenGL PyOpenGL_accelerate pyopengltk numpy
+```powershell
+python -m pip install PyOpenGL PyOpenGL_accelerate pyopengltk numpy
 ```
 
-Optional archives such as `SOUNDS.REZ` are used when present to load sound effects. The editor materializes only the needed files from these archives into its internal cache.
+`SOUNDS.REZ` is optional and is used when available.
 
-## Installation
+## Start
 
-1. Put the `mm9_editor` folder inside the Might and Magic IX install folder,
-   next to the game's `data` directory, or launch with `--game-root`.
-2. Run:
+Clone the repository anywhere writable and run from its root:
 
-```sh
-python mm9_editor.py
-# or
-python mm9_editor.py --game-root "C:\Path\To\Might and Magic 9"
-# with LoMM conversion support
-python mm9_editor.py --game-root "C:\Path\To\Might and Magic 9" \
-  --lomm-root "C:\Path\To\Legends of Might and Magic"
+```powershell
+python mm9_editor.py --game-root "<mm9-root>"
 ```
 
-On first launch the editor builds `catalog/data/catalog.json` from `data/WORLDS.REZ`.
-When `--lomm-root` is supplied, it also builds a missing
-`catalog/data/catalog_lomm.json` from the LoMM install. Use `--lomm-catalog` to
-select another output path. Existing catalogs are not overwritten automatically.
-Output files are written under `mm9_editor/output/`, and source archives are
-backed up under `mm9_editor/backups/`. If those folders are not writable, the
-editor falls back to `%LOCALAPPDATA%\mm9_editor\`.
+`<mm9-root>` is the folder containing the game's `data` directory. If the
+repository is inside the game folder, `--game-root` can be omitted.
 
-## Enabling the console and error logs in the game
+For Legends of Might and Magic conversion support:
 
-Add the following lines to the autoexec.cfg:
-
-- "ConsoleKey" "192"
-- "ErrorLog" "1"
-- "errorlogfile" "mm9_load.log"
-- "DebugLevel" "3"
-
-## Workflow
-
-### Opening A Level
-
-Click **Open from WORLDS.REZ...** or press `Ctrl+O`, then choose a level from
-the archive picker. You can load multiple levels in one session and switch
-between them with the **Level** dropdown. The editor starts maximized and shows
-one centered **Loading...** indicator while a selected level is prepared.
-
-### Running The Current Level
-
-Click **Run Current Level** or press `Ctrl+Alt+R` to start Might and Magic IX
-directly in the active level with the game's default four-character preview
-party. The command includes unsaved in-memory DAT edits, generated behavioral
-and dialogue-integration scripts, and newly staged RUDE dialogue resources.
-
-Each launch is materialized under `output/run-preview/` and uses that folder as
-the game's working directory. The installed REZ archives are only read; preview
-DATs, configuration updates, mini-saves, autosaves, and logs remain isolated
-from the game installation. Close the running preview before launching another.
-
-### Placing Objects
-
-You can enable ```View``` -> ```Toggle Object helpers``` for better understanding what is considered an object.
-
-1. Click **Add Object** in the left panel or press `A`.
-2. Choose a shipped class or one of your saved presets.
-3. Click **Place in View**.
-4. Click the target surface in the three-dimensional level view.
-
-The editor uses the exact BSP hit point, so placement preserves X, Y, and Z.
-After placement, the object can be moved, elevated, rotated, or edited in the
-Properties panel.
-
-If the chosen class is an NPC, the editor asks whether to inherit the cloned
-NPC's dialogue or create a fresh NPCNbr and staged RUDE dialogue entries.
-
-Use **Dialogues → Dialogue and Quest Editor** to edit an `NPC<N>` state graph,
-simulate it with mock party keys, index quest-key use, and author journal or
-award rows without opening a level. Use **Dialogues → Dialogue Script Integration**
-separately for key-gated `OnRudeExit` rewards, the quest-completion sound, and
-named-object world changes. Generated scripts are staged below
-`SCRIPTS\MM9EDITOR\`; they can be attached to a selected matching NPC or kept
-as an independent project asset until placement is ready.
-
-### Selecting And Editing
-
-Click an object handle or rendered object in the level view to select it.
-The right-side **Properties** panel shows editable fields, including a
-dedicated transform block:
-
-- `X`, `Y`, `Z`
-- yaw in degrees
-- `Move to floor`
-
-Press Enter or move focus away from a field to commit a property edit. Click
-**Delete** to remove the selected object.
-
-Viewport transforms preview immediately. Dragging commits once on mouse
-release, while keyboard nudges, height changes, and yaw rotation commit after a
-short debounce so repeated input stays responsive.
-
-### View Controls
-
-The viewport has **Orbit** and **Fly** modes.
-
-Orbit mode:
-
-| Action | Effect |
-|---|---|
-| Left-drag empty space | Orbit camera |
-| Alt + left-drag | Pan camera |
-| Middle-drag | Pan camera |
-| Scroll | Zoom |
-| `F` | Fit level bounds |
-| Click object | Select |
-| Drag object | Move on X/Z while preserving current Y |
-| Arrow keys | Nudge selected object on X/Z relative to camera |
-| `PageUp` / `PageDown` | Nudge selected object vertically |
-| `Q` / `E` | Nudge selected object down / up |
-| `[` / `]` | Rotate selected object yaw |
-| Hold `Shift` | Larger nudge / rotation steps |
-
-Fly mode:
-
-| Action | Effect |
-|---|---|
-| Left-drag | Look |
-| `W` / `S` | Move forward / back |
-| `A` / `D` | Strafe left / right |
-| `Q` / `E` | Move down / up |
-| Scroll | Dolly forward / back |
-| Hold `Shift` | Faster camera movement |
-| `F` | Fit level bounds |
-
-### Performance Notes
-
-The 3D viewport keeps the two most recently used BSP uploads resident and
-caches ABC object render items per materialized object set. While dragging an
-object, the editor draws only the dragged ABC mesh plus object handles, then
-restores full detail after release.
-
-Launch with `MM9_EDITOR_PROFILE=1` to print averaged render timings for frame,
-BSP, ABC, and sprite passes to stderr. This is a developer diagnostic rather
-than an interactive viewport control.
-
-Launch with `MM9_EDITOR_PROFILE_LOAD=1` to print one-time level-opening stages,
-including asset selection, BSP preview, materialization, object-model setup,
-BSP upload, sky setup, camera fitting, and object-panel population.
-
-### User Presets
-
-Presets save reusable object configurations. For example, you can save a prop
-with a specific `Filename`, `Skin`, `Solid`, `MoveToFloor`, script, and name.
-
-To create a preset from a selected object, click **Save as Preset...** in the
-Properties panel. To create or manage presets manually, use **Tools → New
-Preset...** or **Tools → Manage Presets...**. Presets are stored in
-`mm9_editor/user_presets.json`.
-
-### DAT Geometry Inspection
-
-Open a level from `WORLDS.REZ`, then choose **Conversion -> DAT to glTF...**
-to export its BSP geometry for inspection in Blender or another glTF viewer.
-The selected output folder receives:
-
-```text
-<level>_geometry.gltf
-<level>_geometry.bin
-<level>_geometry.gltf.datmeta.json
+```powershell
+python mm9_editor.py `
+  --game-root "<mm9-root>" `
+  --lomm-root "<lomm-root>"
 ```
 
-The exporter embeds MM9 metadata in glTF `extras` and writes the JSON sidecar
-as a fallback. This is an inspection-only export: edited mesh files cannot be
-imported back into DAT. See `docs/dat_editing.md` for the current DAT editing
-contract and implementation details.
+The editor reads the installed REZ archives directly. A copied/extracted
+`mm9_data` or `lomm_data` folder is not required for normal operation.
 
-### Static glTF/GLB to DEDit ED
+On first launch, a missing MM9 catalog is generated at
+`catalog/data/catalog.json`. A missing LoMM catalog is generated when a valid
+`--lomm-root` is supplied. Existing catalogs are not overwritten automatically.
 
-Choose **Conversion -> glTF/GLB to DEDit ED...** to convert a static glTF 2.0
-mesh into either an insertable DEDit prefab or a minimal full-world ED. The
-workspace exposes the conservative geometry, coordinate, material, texture
-dimension, and overwrite policies, then runs automatic ED identity and reader
-validation. It never launches DEDit, Processor, or the game.
+## Safety model
 
-Start with a small, closed, convex mesh and **Strict convex solids**. Open a
-full-world result directly in LithTech 2.1 DEDit; insert a prefab result into a
-disposable DEDit world. The complete conversion contract, report details,
-manual DEDit checks, and optional Processor/game acceptance procedure are in
-`docs/gltf_to_ed.md`.
+Ordinary Save never modifies the installed game. It writes a timestamped batch
+under `output/`, including complete patched archives, review copies, and a
+manifest. Use **File → Install Output to Game…** to perform an explicit,
+manifested installation with a backup. Use **File → Restore Installed Backup…**
+to reverse one.
 
-### Saving
+If the repository's output or backup directories are not writable, the editor
+uses the user's local application-data directory and reports the selected path
+at startup.
 
-Click **Save...** or press `Ctrl+S`. The save dialog shows pending DAT writes,
-geometry validation/risk summaries, and optional RUDE registrations. Committing
-writes timestamped output such as:
+## Basic workflow
 
-```text
-mm9_editor/output/20260510_144200/data/WORLDS.REZ
-mm9_editor/output/20260510_144200/changed_entries/WORLDS/BOOTCAMP.DAT
-mm9_editor/output/20260510_144200/manifest.json
+1. Choose **File → Open Level from WORLDS.REZ…** (`Ctrl+O`).
+2. Select an object or press `A` to add one from the catalog.
+3. Place or transform it in the viewport and edit fields in Properties.
+4. Use **Edit → Undo** (`Ctrl+Z`) or **Edit → Redo** (`Ctrl+Y` or
+   `Ctrl+Shift+Z`) while changes remain pending.
+5. Optionally choose **File → Run Current Level** (`Ctrl+Alt+R`) for an isolated
+   preview containing unsaved DAT, dialogue, and script changes.
+6. Choose **File → Save…** (`Ctrl+S`), review the plan, and create an output
+   batch.
+7. Install the completed batch explicitly when it is ready for game testing.
+
+Multiple levels can be open in one session. `.mm9mod` project files persist
+pending operations through **File → Save Project…** and **File → Open Project…**.
+They do not embed the original game archives, which must remain accessible.
+
+## Viewport
+
+Orbit mode supports surface placement, selection, drag movement, camera-relative
+arrow-key nudging, vertical movement with `PageUp`/`PageDown` or `E`/`Q`, yaw
+rotation with `[`/`]`, and larger steps while holding `Shift`. `F` fits the
+normal visible level geometry.
+
+Fly mode uses `W/A/S/D`, `Q/E`, left-drag look, wheel dolly, and `Shift` for
+faster movement.
+
+Object and service/control helpers are hidden by default. Use the **View** menu
+to show object helpers, world helpers, or translucent helper BSP roles.
+
+The viewport renders BSP with DTX textures and supported ABC objects as static
+meshes. Weighted NPC/creature meshes have conservative static LOD0 previews.
+Animation playback and runtime-created attachments are not simulated.
+
+See [Viewport](docs/user-guide/viewport.md).
+
+## Dialogues and quests
+
+When placing an NPC, create fresh dialogue or inherit the cloned object's
+dialogue. Open **Dialogues → Dialogue and Quest Editor…** to edit RUDE state
+graphs, simulate key-gated choices, index quest-key use, and author Quest Notes
+or Awards without opening a level.
+
+Use **Dialogues → Dialogue Script Integration…** for reviewed `OnRudeExit`
+rewards, completion sound, and named-object world changes. Generated scripts are
+staged below `SCRIPTS\MM9EDITOR\` in a replacement `SCRIPTS.REZ`.
+
+See [Dialogue and quests](docs/user-guide/dialogue-and-quests.md).
+
+## Prefabs
+
+Open **Tools → Import Prefab…** for DEdit `.ed` or compiled v66 `.dat` sources.
+The workspace reports object graphs, brush ownership, links, dependencies,
+runtime representations, and blockers before placement.
+
+Authored ED brushes are not runtime-compiled BSP. Installable prefab geometry
+must resolve to a catalog-backed game model or validated compiled v66 BSP;
+generated brush BSP remains preview-only and is blocked from game-bound Save.
+Unsupported behavior never silently falls back to static geometry.
+
+See [Prefab import](docs/user-guide/prefab-import.md).
+
+## Conversion workflows
+
+The **Conversion** menu contains:
+
+- **LoMM to MM9** — creates a separate preservation-first staging batch and
+  reports unsupported runtime actors.
+- **glTF/GLB to DEDit ED…** — converts static mesh geometry into an ED prefab
+  or minimal world using explicit topology, material, coordinate, and safety
+  policies.
+- **DAT to ED (Experimental)…** — reconstructs a compiled world as DEDit source;
+  DEDit, Processor, and fresh in-game validation remain required.
+- **DAT to glTF…** — exports BSP geometry for inspection. Edited glTF is not an
+  import sidecar for patching an existing DAT.
+
+See the [documentation index](docs/README.md) for conversion guides and
+contracts.
+
+## Existing save games
+
+MM9 save files persist runtime state for many objects in the active level. An
+installed object change may therefore be hidden when an old save restores its
+previous state. Validate with a new game or a fresh load path that has not
+already persisted the affected level. This does not mean every edit always
+requires restarting the campaign.
+
+## CLI tools
+
+Discover current options with `--help`:
+
+```powershell
+python mm9_rezmgr.py --help
+python catalog.py --help
+python lomm_to_mm9.py --help
+python -m features.model_conversion.abc_gltf_export --help
+python -m features.dat_editing.gltf_to_ed_cli --help
+python -m features.dat_editing.gltf_to_ed_validation_cli --help
 ```
 
-The editor never modifies the live game archives on save. Use
-**File -> Install Output to Game...** when you are ready to back up and replace
-the patched archives in the game `data` folder.
+Examples and resource-extraction prerequisites are in
+[Model and texture export](docs/user-guide/model-export.md). The LoMM
+compatibility CLI performs live insertion unless `--dry-run` is supplied; the
+editor staging workflow is preferred for normal use.
 
-### Saving And Resuming A Session
+## Documentation
 
-**File -> Save Project...** (`Ctrl+Shift+S`) writes a `.mm9mod` project file
-containing pending operations. **File -> Open Project...** (`Ctrl+Shift+O`)
-reloads the source REZ entries and reapplies those operations.
+Start with [docs/README.md](docs/README.md). It separates supported user guides,
+format/reference contracts, contributor documentation, and non-normative
+research.
 
-## Changes in the game
-Start a new game to see the changes - currently they're not displayed in previously saved games.
+Contributors can validate documentation with:
 
-## Object Rendering
-
-The view renders BSP geometry with DTX textures loaded from `TEXTURES.REZ`.
-WorldObjects with supported ABC models render as static meshes using
-`MODELS.REZ` and `SKINS.REZ`; unsupported objects remain selectable coloured
-handles.
-
-NPC and creature ABCs have partial static-pose support. Geometry can render
-correctly for the supported subset, but full character material binding,
-attachments, weighted complex meshes, and animation playback are still future
-work.
-
-## Known Caveats
-
-- No undo UI yet. Close without saving to discard pending edits.
-- `.mm9mod` project files store operations, not full level bytes. The source
-  game archives must remain accessible.
-
-## CLI Tools
-
-The bundled `mm9_patcher/` folder contains standalone tools:
-
-```sh
-python mm9_rezmgr.py list "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
-python catalog.py build-from-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ"
-python catalog.py build-lomm "C:\Path\To\Legends of Might and Magic"
+```powershell
+python tools/check_docs.py
 ```
 
-The catalog builder can also attach a generated `object.lto` class dump for
-object-schema work and include valid classes that do not appear in shipped
-levels:
+## License
 
-```sh
-python catalog.py build-from-rez "C:\Path\To\Might and Magic 9\data\WORLDS.REZ" ^
-  --object-lto "C:\Path\To\Might and Magic 9\data\object.lto"
-```
-
-If the native dump helper is unavailable or cannot load `object.lto`, the
-builder logs a warning and still produces the current DAT-scanned catalog.
-Classes found only in `object.lto` are added with `0` instances and use
-inherited `PropDef` defaults for their first-placement template.
-
-Some lower-level patcher utilities still accept ordinary DAT/RUDE file paths
-for reverse-engineering work, but the GUI editor workflow is REZ-only.
-
-### Converting Legends of Might and Magic Levels
-
-In the editor, select **LoMM to MM9** from the **Conversion** dropdown menu, choose the
-LoMM install folder, pick a LoMM level from its `WORLDS.REZ`, and enter the
-new MM9 level name. Choose whether LoMM actors are preserved (the recommended
-default), converted using the historical MM9 substitutions, or explicitly
-removed when unsupported. The editor creates a separate installable staging
-batch and opens its `WORLDS.REZ` for inspection without changing the live game.
-The last successful LoMM install
-folder is remembered in `editor_settings.json` and offered automatically the
-next time you open the conversion dialog. The selected LoMM install must have
-`data/WORLDS.REZ`, `data/RUDE.REZ`, and `data/SCRIPTS.REZ`.
-
-The converter reads each game's `object.lto` runtime registry (with generated
-catalog fallbacks), records per-object actor compatibility, writes patched
-archives under `output/lomm_to_mm9_<timestamp>/data/`, and verifies that the
-new level can be read back. Unsupported actors remain visible and selectable
-in the editor and mark the batch unsafe for installation until removed or
-replaced; installation has an explicit advanced override. PyYAML
-is a soft dependency; if it is not installed the loader falls back to JSON
-parsing for the config file.
-
-#### Editing the YAML config
-
-The default rules live in `conversion/lomm_to_mm9.yaml`:
-
-```yaml
-remove_unknown_classes: true       # drop classes not in MM9 catalog
-extra_remove_classes: []           # additional classes to drop
-keep_classes: []                   # exempt classes (e.g. custom-registered)
-actor_policy: preserve             # preserve, legacy, or remove
-
-patch_class:
-  StartPoint:
-    add_props:
-      MovePlayerToFloor: { code: 5, value: 1 }
-  WorldProperties:
-    add_props:
-      CanSaveGame:     { code: 5, value: 1 }
-      CanMiniSaveGame: { code: 5, value: 1 }
-
-convert_class:
-  TreasureChest:
-    template: "WORLDS/1000TERRORS.DAT::TreasureChest4"
-    preserve: [Name, Pos, Rotation, Filename, Skin, ...]
-  Fire:
-    template: "WORLDS/1000TERRORS.DAT::Brazier46"
-    new_type: Brazier
-    preserve: [Name, Pos, Rotation, Filename, Skin, ...]
-```
+See [LICENSE](LICENSE).

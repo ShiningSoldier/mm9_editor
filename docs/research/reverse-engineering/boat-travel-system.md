@@ -1,5 +1,11 @@
 # Might and Magic IX: Boat Travel System Analysis
 
+> **Reverse-engineering note — non-normative.** Native calendar-routing claims
+> below are observations from the shipped resources and binaries, not an editor
+> feature contract. For supported cross-level editing, use the transition
+> guidance in `docs/reference/world-data.md` and the dialogue/script workflows
+> in `docs/user-guide/dialogue-and-quests.md`.
+
 This document details the mechanics of the "travel by boat" system in Might and Magic IX, mapping the dock NPCs, scheduling, and engine-level behavior, and outlines how a developer can bypass or customize this travel behavior.
 
 ---
@@ -52,7 +58,7 @@ Cross-level travel is driven by `ExitTrigger` objects in the source level and `S
 3. Configure the following properties on the `ExitTrigger`:
    * **Name**: A unique descriptor (e.g., `BoatExitToGuberland`, `BoatExitToSturmford`).
    * **DestinationWorld**: The filename of the destination world, sans extension (e.g., `Guberland` or `Sturmford`).
-   * **DestinationStartPoint**: The name of the `StartPoint` object in the destination map where the player will spawn (e.g., `DockArrivalPoint`).
+   * **StartPointName**: The name of the `StartPoint` object in the destination map where the player will spawn (e.g., `DockArrivalPoint`).
 4. Ensure the destination world `.DAT` has a matching `StartPoint` object with that exact name.
 
 ### Step 2: Configure Dialog Options in the `.RUDE` File
@@ -70,7 +76,8 @@ Instead of routing dialogue to nextState `-5` (which opens the hardcoded calenda
 * Each destination option uses one of the effect/condition columns to grant a **temporary Key/Flag ID** to the player party (e.g., Key `1031` for Sturmford, Key `1032` for Guberland).
 
 ### Step 3: Trigger Transitions via Scripts (`.SCR`)
-Each NPC has an associated JSL Script file in `SCRIPTS.REZ` (named e.g. `NPC103.SCR`).
+The NPC must have an appropriate JSL resource selected through its `ScriptName`
+property. Script resource names are not derived automatically from `NPCNbr`.
 1. Set the script to handle RUDE dialogue exits via the `OnRudeExit` callback:
    ```js
    OnRudeExit OnRude

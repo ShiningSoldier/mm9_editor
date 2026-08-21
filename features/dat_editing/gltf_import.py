@@ -96,7 +96,8 @@ def load_gltf_geometry_scene(path: str) -> geometry_scene.GeometryScene:
 
     Coordinates are returned in baked glTF world space.  The later conversion
     service is responsible for applying the explicit glTF-world -> DEDit
-    coordinate matrix and unit scale from ``docs/gltf_to_ed.md``.
+    coordinate matrix and unit scale from
+    ``docs/reference/conversion-contracts/gltf-to-ed.md``.
     """
     absolute = os.path.abspath(os.fspath(path))
     if not os.path.isfile(absolute):

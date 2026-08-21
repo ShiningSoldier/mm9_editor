@@ -1,5 +1,11 @@
 # Runtime-Backed Prefab Import Implementation Plan
 
+> **Archived design — non-normative.** This document explains the safety
+> boundary introduced after behavioral prefab import was implemented. The
+> catalog-backed `Prop` route exists; compiled-assembly archetype indexing and
+> broader runtime acceptance described below are design work, not promises of
+> current editor behavior. See `docs/user-guide/prefab-import.md`.
+
 Status: hybrid safety boundary and initial resource-backed `Prop` route
 implemented on 2026-08-14; compiled-assembly archetype indexing and in-game
 door acceptance remain planned.

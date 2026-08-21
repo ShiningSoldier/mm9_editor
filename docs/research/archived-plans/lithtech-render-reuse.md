@@ -1,7 +1,11 @@
 # Reusing LithTech MM9 Runtime Work In The Editor
 
-This note compares the current Python editor viewport with the faster
-`C:\lithtech\lithtech` MM9 compatibility runtime and identifies which pieces
+> **Archived proposal — non-normative.** None of the proposed cache stages in
+> this document should be read as an implemented editor feature. It is retained
+> as design context for future performance work.
+
+This note compares the current Python editor viewport with a separate
+`<lithtech-runtime-repo>` MM9 compatibility runtime and identifies which pieces
 are realistic to bring back into `mm9_editor`.
 
 ## Short Answer
