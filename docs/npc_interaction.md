@@ -175,7 +175,7 @@ operations:
 
 ## Dialogue and quest editor
 
-`Tools -> Dialogue & Quest Editor...` (also available from the toolbar) opens
+`Dialogues -> Dialogue and Quest Editor...` opens
 an `NPC<N>` resource without requiring a level or placed NPC. Enter `997`,
 `998`, or `999` to edit the shipped Quest Notes, Auto Notes, or Awards tables.
 If a normal id does not exist, the editor can create it as a standalone
@@ -271,7 +271,7 @@ or removals.
 
 ## Dialogue script integration
 
-`Tools -> Dialogue Script Integration...` authors runtime effects as a
+`Dialogues -> Dialogue Script Integration...` authors runtime effects as a
 separate project asset. It does not put script text into a RUDE row and does
 not require an NPC placement to be open. Each generated resource is written
 under `SCRIPTS\MM9EDITOR\` and is shown in the Save review as a patch to the

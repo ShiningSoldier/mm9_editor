@@ -34,7 +34,6 @@ class RetiredMeshWorkflowTests(unittest.TestCase):
             "features.dat_editing.bsp_edit_plan",
             "features.dat_editing.bsp_record_patch",
             "features.dat_editing.export_roundtrip",
-            "features.dat_editing.gltf_import",
             "features.dat_editing.mesh_import",
             "features.dat_editing.obj_workflow",
             "features.dat_editing.replace_submodel",

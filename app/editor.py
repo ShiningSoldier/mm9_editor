@@ -78,6 +78,7 @@ from features.presets.manager import PresetStore
 
 # These imports pull in tkinter; they're deferred to _import_gui() below.
 CatalogPanel = PropertiesPanel = SaveDialog = LommConversionDialog = None  # type: ignore
+GltfToEdDialog = None  # type: ignore
 PrefabImportWorkspace = None  # type: ignore
 View3D = None          # type: ignore
 OPENGL_AVAILABLE = False
@@ -210,6 +211,7 @@ def _import_gui():
     """Import all the GUI-dependent modules. Called only after config
     validation passes, so console errors don't get masked by missing-Tk."""
     global tk, CatalogPanel, PropertiesPanel, SaveDialog, LommConversionDialog
+    global GltfToEdDialog
     global filedialog, messagebox, simpledialog, ttk
     global EditPresetDialog, ManagePresetsDialog, PrefabImportWorkspace
     global View3D, OPENGL_AVAILABLE, _view3d_missing
@@ -220,11 +222,13 @@ def _import_gui():
     from ui.diff_panel import SaveDialog as _SD
     from ui.preset_dialog import EditPresetDialog as _EPD, ManagePresetsDialog as _MPD
     from ui.lomm_conversion_dialog import LommConversionDialog as _LCD
+    from ui.gltf_to_ed_dialog import GltfToEdDialog as _GED
     from ui.prefab_import_workspace import PrefabImportWorkspace as _PIW
     tk = _tk
     filedialog = _fd; messagebox = _mb; simpledialog = _sd; ttk = _ttk
     CatalogPanel = _CP; PropertiesPanel = _PP; SaveDialog = _SD
     LommConversionDialog = _LCD
+    GltfToEdDialog = _GED
     PrefabImportWorkspace = _PIW
     EditPresetDialog = _EPD; ManagePresetsDialog = _MPD
     try:
@@ -308,8 +312,14 @@ class EditorApp:
         m_file.add_separator()
         m_file.add_command(label="Save…",                 accelerator="Ctrl+S",
                            command=self.cmd_save)
-        m_file.add_command(label="Run Current Level",     accelerator="Ctrl+Alt+R",
-                           command=self.cmd_run_current_level)
+        m_file.add_command(
+            label="Run Current Level",
+            accelerator="Ctrl+Alt+R",
+            command=self.cmd_run_current_level,
+            state="disabled",
+        )
+        self._run_current_level_menu = m_file
+        self._run_current_level_menu_index = m_file.index("end")
         m_file.add_command(label="Install Output to Game…",
                            command=self.cmd_install_output)
         m_file.add_command(label="Restore Installed Backup…",
@@ -386,30 +396,36 @@ class EditorApp:
         menubar.add_cascade(label="Conversion", menu=m_conversion)
         m_conversion.add_command(label="LoMM to MM9",
                                  command=self.cmd_lomm_to_mm9_conversion)
+        m_conversion.add_separator()
+        m_conversion.add_command(
+            label="glTF/GLB to DEDit ED...",
+            command=self.cmd_gltf_to_dedit_ed_conversion,
+        )
+        m_conversion.add_command(
+            label="DAT to ED (Experimental)...",
+            command=self.cmd_generate_dedit_ed_from_dat,
+        )
+        m_conversion.add_command(
+            label="DAT to glTF...",
+            command=self.cmd_export_dat_geometry_gltf,
+        )
 
         m_tools = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=m_tools)
-        m_tools.add_command(label="Dialogue & Quest Editor...",
-                            command=self.cmd_rude_dialogue_editor)
-        m_tools.add_command(label="Dialogue Script Integration...",
-                            command=self.cmd_rude_script_editor)
-        m_tools.add_separator()
         m_tools.add_command(label="Import Prefab...",
                             command=self.cmd_import_static_prefab_bsp)
         m_tools.add_separator()
-        m_tools.add_command(label="Generate DEDit ED from DAT...",
-                            command=self.cmd_generate_dedit_ed_from_dat)
-        m_tools.add_command(label="Generate DEDit ED with Reserved Stairs...",
-                            command=self.cmd_generate_dedit_ed_from_dat_with_stair_assemblies)
-        m_tools.add_command(label="Export DAT Geometry as glTF for Inspection...",
-                            command=self.cmd_export_dat_geometry_gltf)
+        m_tools.add_command(label="New Preset...",
+                            command=self.cmd_new_preset)
+        m_tools.add_command(label="Manage Presets...",
+                            command=self.cmd_manage_presets)
 
-        m_presets = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Presets", menu=m_presets)
-        m_presets.add_command(label="New Preset…",
-                              command=self.cmd_new_preset)
-        m_presets.add_command(label="Manage Presets…",
-                              command=self.cmd_manage_presets)
+        m_dialogues = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Dialogues", menu=m_dialogues)
+        m_dialogues.add_command(label="Dialogue and Quest Editor...",
+                                command=self.cmd_rude_dialogue_editor)
+        m_dialogues.add_command(label="Dialogue Script Integration...",
+                                command=self.cmd_rude_script_editor)
 
         m_help = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=m_help)
@@ -424,14 +440,18 @@ class EditorApp:
         tk.Button(bar, text="Save…", bg="#2c5e8a", fg="white",
                   activebackground="#3a78ad",
                   relief="flat", command=self.cmd_save).pack(side="left", padx=4, pady=4)
-        tk.Button(bar, text="Run Current Level", bg="#356a45", fg="white",
-                  activebackground="#47895b",
-                  relief="flat", command=self.cmd_run_current_level).pack(
-                      side="left", padx=4, pady=4)
-        tk.Button(bar, text="Dialogues & Quests...", bg="#5b426f", fg="white",
-                  activebackground="#75568d",
-                  relief="flat", command=self.cmd_rude_dialogue_editor).pack(
-                      side="left", padx=4, pady=4)
+        self.run_current_level_button = tk.Button(
+            bar,
+            text="Run Current Level",
+            bg="#356a45",
+            fg="white",
+            activebackground="#47895b",
+            disabledforeground="#8b9690",
+            relief="flat",
+            command=self.cmd_run_current_level,
+            state="disabled",
+        )
+        self.run_current_level_button.pack(side="left", padx=4, pady=4)
 
         tk.Label(bar, text="Level:", bg="#1a1d22", fg="#cccccc",
                  font=("Segoe UI", 9)).pack(side="left", padx=(16, 4))
@@ -621,6 +641,17 @@ class EditorApp:
         can_redo = bool(L and getattr(L, "redo_ops", None))
         menu.entryconfig(0, state="normal" if can_undo else "disabled")
         menu.entryconfig(1, state="normal" if can_redo else "disabled")
+
+    def _update_level_command_states(self) -> None:
+        """Enable level-only commands exactly while a level is active."""
+        state = "normal" if getattr(self, "active", None) is not None else "disabled"
+        button = getattr(self, "run_current_level_button", None)
+        if button is not None:
+            button.configure(state=state)
+        menu = getattr(self, "_run_current_level_menu", None)
+        menu_index = getattr(self, "_run_current_level_menu_index", None)
+        if menu is not None and menu_index is not None:
+            menu.entryconfig(menu_index, state=state)
 
     def _show_selected_materialized(self, world_index: Optional[int] = None) -> None:
         L = getattr(self, "active", None)
@@ -1198,6 +1229,15 @@ class EditorApp:
             on_success=self._on_lomm_conversion_success,
         )
 
+    def cmd_gltf_to_dedit_ed_conversion(self) -> None:
+        """Open the maintained static glTF/GLB-to-ED workflow."""
+        initial_dir = (
+            getattr(self.cfg, "work_dir", None)
+            or getattr(self.cfg, "editor_dir", None)
+            or getattr(self, "editor_dir", EDITOR_ROOT)
+        )
+        GltfToEdDialog.open(self.root, initial_dir=initial_dir)
+
     def _on_lomm_conversion_success(self, result: Any, lomm_root: str = "") -> None:
         """Open the staged MM9 level after a LoMM conversion."""
         self._remember_lomm_root(lomm_root)
@@ -1312,6 +1352,7 @@ class EditorApp:
                 loading.pulse()
             self.props_panel.show(None)
             self._update_history_menu()
+            self._update_level_command_states()
             if self.view3d:
                 self.root.after_idle(self.view3d.focus_for_input)
         finally:
@@ -2608,7 +2649,7 @@ class EditorApp:
             messagebox.showerror("Save preset failed", str(e))
 
     def cmd_new_preset(self) -> None:
-        """Open the New Preset dialog from the Presets menu."""
+        """Open the New Preset dialog from the Tools menu."""
         obj = self.props_panel.current_obj
         overrides = self.props_panel.current_overrides_snapshot() if obj else {}
         base_class = obj.type_str if obj else "Prop"
@@ -3603,10 +3644,9 @@ class EditorApp:
         messagebox.showinfo(
             "About",
             "MM9 Mod Editor\n\n"
-            "3-D placement editor for Might and Magic IX.\n"
+            "3-D editor for Might and Magic IX.\n"
             "Catalog-driven, multi-level, explicit RUDE workflow.\n"
-            "User presets for quick re-placement of custom objects.\n\n"
-            "Built atop mm9_patch.py and rude_add_npc.py.")
+            "User presets for quick re-placement of custom objects.")
 
 
 # --------------------------------------------------------------------------

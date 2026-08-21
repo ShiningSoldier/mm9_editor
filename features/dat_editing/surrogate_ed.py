@@ -15,7 +15,6 @@ import math
 import os
 import struct
 import time
-import zlib
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -30,10 +29,8 @@ from features.dat_editing import (
 
 Vec3 = Tuple[float, float, float]
 
-_FULL_LEVEL_ZLIB_BLOCK_SIZE = 50000
-_DEFAULT_FULL_LEVEL_INFOSTRING = (
-    "AmbientLight 80 80 80 ; PBlockSize 2048 ; LMGridSize 64; MaxLMSize 32"
-)
+_FULL_LEVEL_ZLIB_BLOCK_SIZE = legacy_ed_writer.DEFAULT_FULL_LEVEL_ZLIB_BLOCK_SIZE
+_DEFAULT_FULL_LEVEL_INFOSTRING = legacy_ed_writer.DEFAULT_FULL_LEVEL_INFOSTRING
 
 _LEGACY_BRUSH_OBJECT_PROPERTIES = legacy_ed_writer.MM9_BRUSH_OBJECT_PROPERTIES
 
@@ -2014,57 +2011,13 @@ def wrap_raw_surrogate_legacy_ed_bytes(
     inner_suffix: bytes = b"",
 ) -> Tuple[bytes, Dict[str, int]]:
     """Wrap a raw surrogate brush stream in the observed full-level ED shell."""
-    if len(raw_ed_bytes) < 4:
-        raise ValueError("raw surrogate ED stream is too short to wrap")
-    version = struct.unpack_from("<I", raw_ed_bytes, 0)[0]
-    if version != legacy_ed.LEGACY_ED_VERSION:
-        raise ValueError(
-            f"raw surrogate ED version {version} does not match {legacy_ed.LEGACY_ED_VERSION}"
-        )
-    if brush_count <= 0:
-        raise ValueError("full-level surrogate wrapper requires at least one brush")
-    if block_size <= 0:
-        raise ValueError("full-level surrogate wrapper block size must be positive")
-
-    inner_payload = struct.pack("<I", int(brush_count)) + raw_ed_bytes[4:] + bytes(inner_suffix)
-    chunks = [
-        inner_payload[offset:offset + block_size]
-        for offset in range(0, len(inner_payload), block_size)
-    ]
-    if not chunks:
-        chunks = [b""]
-    compressed_chunks = [zlib.compress(chunk) for chunk in chunks]
-    uncompressed_sizes = [len(chunk) for chunk in chunks]
-    compressed_sizes = [len(chunk) for chunk in compressed_chunks]
-    encoded_info = (
-        _DEFAULT_FULL_LEVEL_INFOSTRING if infostring is None else str(infostring)
-    ).encode(
-        "latin1",
-        errors="replace",
+    return legacy_ed_writer.wrap_zlib_blocked_full_level(
+        raw_ed_bytes,
+        brush_count=brush_count,
+        infostring=infostring,
+        block_size=block_size,
+        inner_suffix=inner_suffix,
     )
-    if len(encoded_info) > 4096:
-        raise ValueError("full-level surrogate ED infostring is too long")
-
-    out = bytearray()
-    out.extend(struct.pack("<I", legacy_ed.LEGACY_ED_VERSION))
-    out.append(1)
-    out.extend(struct.pack("<I", len(encoded_info)))
-    out.extend(encoded_info)
-    out.extend(b"\x00" * 32)
-    out.extend(struct.pack("<I", len(chunks)))
-    out.extend(struct.pack("<I", int(block_size)))
-    for value in compressed_sizes:
-        out.extend(struct.pack("<I", value))
-    for value in uncompressed_sizes:
-        out.extend(struct.pack("<I", value))
-    for chunk in compressed_chunks:
-        out.extend(chunk)
-
-    return bytes(out), {
-        "block_count": len(chunks),
-        "decompressed_byte_count": len(inner_payload),
-        "compressed_byte_count": sum(compressed_sizes),
-    }
 
 
 def format_surrogate_ed_build_report(report: SurrogateEdBuildReport) -> str:

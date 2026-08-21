@@ -1,27 +1,4 @@
 {
   "version": 1,
-  "presets": [
-    {
-      "name": "LoMM Orc",
-      "base_class": "LizardOrc",
-      "category": "monster",
-      "description": "Legends of Might and Magic Orc using MM9 LizardOrc behavior.",
-      "overrides": {
-        "__name_prefix": "LoMMOrc",
-        "Filename": "models\\OrcMM9.abc",
-        "ScriptName": "baserange.scr"
-      }
-    },
-    {
-      "name": "LoMM Orc (Mage Slot)",
-      "base_class": "LizardOrcMage",
-      "category": "monster",
-      "description": "Legends of Might and Magic Orc using the unused Lizard-Orc Mage actor slot.",
-      "overrides": {
-        "__name_prefix": "LoMMOrc",
-        "Filename": "models\\OrcMM9.abc",
-        "ScriptName": "baserange.scr"
-      }
-    }
-  ]
+  "presets": []
 }

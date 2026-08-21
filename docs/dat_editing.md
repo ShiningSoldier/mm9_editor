@@ -6,6 +6,10 @@ This document describes the current technical contract for reconstructing
 Might and Magic IX compiled DAT worlds into old LithTech/DEDit-compatible ED
 source worlds.
 
+The separate contract and CLI for static glTF/GLB -> ED conversion are in
+`docs/gltf_to_ed.md`. That flow starts from authored mesh geometry and must not
+be confused with reconstruction of compiled DAT BSP fragments.
+
 ## Goal
 
 The target workflow is:
@@ -21,11 +25,15 @@ opens in DEDit, or compiles is not enough.
 
 ## User-Facing Commands
 
-The Tools menu is intentionally small:
+Conversion workflows are grouped in the `Conversion` menu:
 
-- `Import Prefab...`
-- `Generate DEDit ED from DAT...`
-- `Export DAT Geometry as glTF for Inspection...`
+- `LoMM to MM9`
+- `glTF/GLB to DEDit ED...`
+- `DAT to ED (Experimental)...`
+- `DAT to glTF...`
+
+The `Tools` menu contains `Import Prefab...`, `New Preset...`, and `Manage
+Presets...`. Dialogue authoring is grouped separately under `Dialogues`.
 
 New physical doors are imported from authored prefabs through `Import Prefab`.
 The former same-level `Clone Physical Door` command was retired after the
@@ -133,6 +141,23 @@ ED v1249 details that matter for writing DEDit-compatible output:
 - `features/dat_editing/geometry_export_common.py`: read-only geometry export
   helpers.
 - `features/dat_editing/gltf_export.py`: DAT geometry glTF inspection export.
+- `features/dat_editing/gltf_import.py`: fail-closed static glTF/GLB reader for
+  the separate glTF -> ED flow; it does not patch DAT geometry.
+- `features/dat_editing/mesh_topology.py`: side-effect-free welded component,
+  manifold, winding, volume, and convexity analysis for the glTF -> ED
+  flow.
+- `features/dat_editing/gltf_brushes.py`: fail-closed conversion of accepted
+  glTF topology components into writer-validated legacy ED Brushes; it does not
+  assemble or write an ED document.
+- `features/dat_editing/gltf_materials.py`: DTX resolution/dimension lookup,
+  source-UV to DEDit-OPQ conversion, explicit fallback projection, and
+  per-material diagnostics for the glTF -> ED flow.
+- `features/dat_editing/gltf_ed_assembly.py`: generic prefab/full-world ED
+  assembly and immediate maintained-reader round-trip.
+- `features/dat_editing/gltf_to_ed_service.py`: Phase 7 conversion service,
+  transactional ED/report writer, and schema-v1 conversion report.
+- `features/dat_editing/gltf_to_ed_validation.py`: Phase 8 resumable ED,
+  DEDit, Processor, DAT, and in-game validation manifest pipeline.
 - `features/dat_editing/terrain_semantics.py`: shared Terrain*/PhysicsBSP/VisBSP
   identity and helper-role classification.
 - `features/dat_editing/terrain_reconstruction.py`: Terrain* boundary cleanup,
@@ -145,7 +170,7 @@ ED v1249 details that matter for writing DEDit-compatible output:
 
 ## Generated Artifacts
 
-`Generate DEDit ED from DAT...` writes:
+`DAT to ED (Experimental)...` writes:
 
 - `full_world_skeleton_source\<LEVEL>_reconstructed.ed`
 - `<LEVEL>_dat_to_ed_report.txt`
@@ -616,10 +641,11 @@ Polygon coverage alone is not enough for stairs and collision-critical paths.
   class, preventing isolated-step leakage. Acceptance text/JSON records
   requested, selected, and rejected IDs. Real ANSKRAMKEEP assembly 3 is selected
   atomically by both policies with a 128-source budget; at a 32-source budget it
-  is rejected and none of its polygons are emitted. The editor exposes the
-  detector through **Tools > Generate DEDit ED with Reserved Stairs...**. It
-  lists every candidate with confidence, step count, source-polygon/face cost,
-  and bounds, but permits only high-confidence IDs. Nothing is preselected.
+  is rejected and none of its polygons are emitted. The reserved-stairs
+  generator remains an internal/test hook and is not exposed in the editor
+  menus. Its selector lists every candidate with confidence, step count,
+  source-polygon/face cost, and bounds, but permits only high-confidence IDs.
+  Nothing is preselected.
   Reserved runs use a distinct suffix such as
   `ANSKRAMKEEP_reconstructed_stairs_3.ed`, and the completion dialog reports
   requested, selected, and rejected IDs. This remains opt-in and should

@@ -1,17 +1,17 @@
-"""Structured writer for MM9-compatible legacy DEdit ED v1249 fragments.
+"""Structured writer for MM9-compatible legacy DEdit ED v1249 data.
 
-The writer deliberately covers the pieces we have validated so far: raw brush
-polyhedrons and direct-root prefab brush objects.  Full-world ED authoring will
-build on these primitives instead of hand-assembling byte strings in each
-surrogate path.
+The writer covers the validated raw-brush, prefab, recursive node hierarchy,
+and zlib-blocked full-world layouts.  Feature converters build on these
+primitives instead of hand-assembling byte strings in each import path.
 """
 
 from __future__ import annotations
 
 import math
 import struct
+import zlib
 from dataclasses import dataclass, field, replace
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from features.dat_editing import legacy_ed
 
@@ -20,6 +20,10 @@ Vec3 = Tuple[float, float, float]
 Quat = Tuple[float, float, float, float]
 
 DEFAULT_BRUSH_POINT_WELD_TOLERANCE = 0.01
+DEFAULT_FULL_LEVEL_ZLIB_BLOCK_SIZE = 50000
+DEFAULT_FULL_LEVEL_INFOSTRING = (
+    "AmbientLight 80 80 80 ; PBlockSize 2048 ; LMGridSize 64; MaxLMSize 32"
+)
 
 NODE_NODE = 0
 NODE_BRUSH = 1
@@ -282,6 +286,91 @@ def build_node_hierarchy(root: LegacyEdNode) -> bytes:
     the v1249 header/wrapper and brush polyhedron stream before this hierarchy.
     """
     return write_node_container(root, include_entry=False)
+
+
+def wrap_zlib_blocked_full_level(
+    raw_ed_bytes: bytes,
+    *,
+    brush_count: int,
+    infostring: Optional[str] = None,
+    block_size: int = DEFAULT_FULL_LEVEL_ZLIB_BLOCK_SIZE,
+    inner_suffix: bytes = b"",
+) -> Tuple[bytes, Dict[str, int]]:
+    """Wrap an ED v1249 raw brush stream in the observed full-level shell.
+
+    ``raw_ed_bytes`` starts with the four-byte ED version and then contains
+    brush records.  The decompressed full-level payload replaces that version
+    with the declared brush count and may append a node hierarchy.  Metadata is
+    returned so callers can report the exact wrapper they assembled.
+    """
+    if len(raw_ed_bytes) < 4:
+        raise ValueError("raw legacy ED stream is too short to wrap")
+    version = struct.unpack_from("<I", raw_ed_bytes, 0)[0]
+    if version != legacy_ed.LEGACY_ED_VERSION:
+        raise ValueError(
+            f"raw legacy ED version {version} does not match {legacy_ed.LEGACY_ED_VERSION}"
+        )
+    if brush_count <= 0:
+        raise ValueError("full-level ED wrapper requires at least one brush")
+    if block_size <= 0:
+        raise ValueError("full-level ED wrapper block size must be positive")
+
+    inner_payload = struct.pack("<I", int(brush_count)) + raw_ed_bytes[4:] + bytes(inner_suffix)
+    chunks = [
+        inner_payload[offset:offset + block_size]
+        for offset in range(0, len(inner_payload), block_size)
+    ]
+    compressed_chunks = [zlib.compress(chunk) for chunk in chunks]
+    uncompressed_sizes = [len(chunk) for chunk in chunks]
+    compressed_sizes = [len(chunk) for chunk in compressed_chunks]
+    encoded_info = (
+        DEFAULT_FULL_LEVEL_INFOSTRING if infostring is None else str(infostring)
+    ).encode("latin1", errors="replace")
+    if len(encoded_info) > 4096:
+        raise ValueError("full-level ED infostring is too long")
+
+    out = bytearray()
+    out.extend(struct.pack("<I", legacy_ed.LEGACY_ED_VERSION))
+    out.append(1)
+    out.extend(struct.pack("<I", len(encoded_info)))
+    out.extend(encoded_info)
+    out.extend(b"\x00" * 32)
+    out.extend(struct.pack("<I", len(chunks)))
+    out.extend(struct.pack("<I", int(block_size)))
+    for value in compressed_sizes:
+        out.extend(struct.pack("<I", value))
+    for value in uncompressed_sizes:
+        out.extend(struct.pack("<I", value))
+    for chunk in compressed_chunks:
+        out.extend(chunk)
+
+    return bytes(out), {
+        "block_count": len(chunks),
+        "block_size": int(block_size),
+        "decompressed_byte_count": len(inner_payload),
+        "compressed_byte_count": sum(compressed_sizes),
+    }
+
+
+def build_zlib_blocked_full_world(
+    brushes: Sequence[LegacyEdBrush],
+    root: LegacyEdNode,
+    *,
+    infostring: Optional[str] = None,
+    block_size: int = DEFAULT_FULL_LEVEL_ZLIB_BLOCK_SIZE,
+) -> Tuple[bytes, Dict[str, int]]:
+    """Build a complete zlib-blocked ED v1249 world in memory."""
+    if not brushes:
+        raise ValueError("full-world ED requires at least one brush")
+    raw = build_raw_brush_stream(brushes)
+    hierarchy = build_node_hierarchy(root) + b"\x00" * 4
+    return wrap_zlib_blocked_full_level(
+        raw,
+        brush_count=len(brushes),
+        infostring=infostring,
+        block_size=block_size,
+        inner_suffix=hierarchy,
+    )
 
 
 def world_root_node(

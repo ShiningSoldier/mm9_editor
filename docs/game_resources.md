@@ -54,7 +54,7 @@
   journal assets independently of loaded levels. RUDE-only save plans and
   manifests are supported, and archive patches include only the metadata or
   dialogue resources whose bytes changed.
-- `Tools -> Dialogue & Quest Editor...` opens those assets without a level.
+- `Dialogues -> Dialogue and Quest Editor...` opens those assets without a level.
   Its graph/state surface keeps choice order and every RUDE slot editable, and
   its simulator evaluates required/forbidden keys and grant/remove effects
   against a user-provided mock party key set. Native actions are identified

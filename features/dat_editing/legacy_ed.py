@@ -252,9 +252,9 @@ def parse_legacy_ed_node_tree(
         raise LegacyEdParseError(
             f"unsupported legacy ED version {version}; expected {LEGACY_ED_VERSION}"
         )
-    _wrapper, scan_data = _legacy_ed_analysis_scan_data(data, _analysis_cache)
+    wrapper, scan_data = _legacy_ed_analysis_scan_data(data, _analysis_cache)
     header_end = _uncompressed_ed_header_end(scan_data)
-    payload_start = header_end if header_end is not None else 4
+    payload_start = 0 if wrapper is not None else (header_end if header_end is not None else 4)
     layout = _parse_polyhedron_layout(scan_data, payload_start)
     if layout is None:
         raise LegacyEdParseError("polyhedron stream did not match ED v1249 layout")

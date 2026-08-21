@@ -79,6 +79,8 @@ from the game installation. Close the running preview before launching another.
 
 ### Placing Objects
 
+You can enable ```View``` -> ```Toggle Object helpers``` for better understanding what is considered an object.
+
 1. Click **Add Object** in the left panel or press `A`.
 2. Choose a shipped class or one of your saved presets.
 3. Click **Place in View**.
@@ -91,9 +93,9 @@ Properties panel.
 If the chosen class is an NPC, the editor asks whether to inherit the cloned
 NPC's dialogue or create a fresh NPCNbr and staged RUDE dialogue entries.
 
-Use **Tools → Dialogue & Quest Editor** to edit an `NPC<N>` state graph,
+Use **Dialogues → Dialogue and Quest Editor** to edit an `NPC<N>` state graph,
 simulate it with mock party keys, index quest-key use, and author journal or
-award rows without opening a level. Use **Tools → Dialogue Script Integration**
+award rows without opening a level. Use **Dialogues → Dialogue Script Integration**
 separately for key-gated `OnRudeExit` rewards, the quest-completion sound, and
 named-object world changes. Generated scripts are staged below
 `SCRIPTS\MM9EDITOR\`; they can be attached to a selected matching NPC or kept
@@ -170,78 +172,40 @@ Presets save reusable object configurations. For example, you can save a prop
 with a specific `Filename`, `Skin`, `Solid`, `MoveToFloor`, script, and name.
 
 To create a preset from a selected object, click **Save as Preset...** in the
-Properties panel. To create or manage presets manually, use the **Presets**
-menu. Presets are stored in `mm9_editor/user_presets.json`.
+Properties panel. To create or manage presets manually, use **Tools → New
+Preset...** or **Tools → Manage Presets...**. Presets are stored in
+`mm9_editor/user_presets.json`.
 
-### Blender Geometry Round Trip
+### DAT Geometry Inspection
 
-The editor can export level BSP geometry to Blender-friendly OBJ or glTF files
-and import edited geometry back as pending DAT operations. This workflow is
-meant for additive static geometry, collision helpers, vertex edits to existing
-submodels, and small standalone submodel replacements. It is not a full
-Blender-to-DAT level compiler.
-
-1. Open a level from `WORLDS.REZ`.
-2. Choose **Tools -> Export DAT Geometry for Blender...**.
-3. Pick an output folder. The editor writes:
+Open a level from `WORLDS.REZ`, then choose **Conversion -> DAT to glTF...**
+to export its BSP geometry for inspection in Blender or another glTF viewer.
+The selected output folder receives:
 
 ```text
-<level>_geometry.obj
-<level>_geometry.mtl
-<level>_geometry.datmeta.json
+<level>_geometry.gltf
+<level>_geometry.bin
+<level>_geometry.gltf.datmeta.json
 ```
 
-The OBJ is the mesh Blender imports. The `.datmeta.json` sidecar is required
-for import; it records the source DAT checksum, coordinate transform, BSP model
-names, texture names, and record metadata that OBJ cannot preserve.
+The exporter embeds MM9 metadata in glTF `extras` and writes the JSON sidecar
+as a fallback. This is an inspection-only export: edited mesh files cannot be
+imported back into DAT. See `docs/dat_editing.md` for the current DAT editing
+contract and implementation details.
 
-**Tools -> Export DAT Geometry as glTF...** writes `.gltf` plus `.bin`, embeds
-the same MM9 metadata in glTF `extras`, and also writes a
-`.gltf.datmeta.json` fallback sidecar. The Blender geometry import path accepts
-exported `.gltf` and `.glb` files as well as OBJ.
+### Static glTF/GLB to DEDit ED
 
-When opening the OBJ in Blender, increase viewport clipping if the level seems
-empty. MM9 levels use large world coordinates, so Blender's default clipping can
-hide otherwise valid geometry. The default export omits skyboxes, `VisBSP`,
-and most helper/world-boundary surfaces so the level does not appear as a solid
-box. Debug/raw exports can still include helper geometry through the lower-level
-export options.
+Choose **Conversion -> glTF/GLB to DEDit ED...** to convert a static glTF 2.0
+mesh into either an insertable DEDit prefab or a minimal full-world ED. The
+workspace exposes the conservative geometry, coordinate, material, texture
+dimension, and overwrite policies, then runs automatic ED identity and reader
+validation. It never launches DEDit, Processor, or the game.
 
-After editing in Blender, export OBJ or glTF and keep the sidecar next to it
-when using exported MM9 geometry. Then use one of the editor import commands:
-
-- **Tools -> Import Blender OBJ/glTF Geometry...** adds mesh data as new static
-  BSP geometry. The import dialog can generate `InvisibleBrush` collision
-  helpers, including box approximation and per-face slab helpers. Mesh objects
-  named or tagged as collision-only become hidden collision helpers.
-- **Tools -> Import Blender Vertex Edits...** patches existing BSP vertices
-  while preserving the original topology. Added or removed faces are rejected.
-- **Tools -> Import Blender Submodel Replacement...** replaces the topology of
-  exported standalone BSP submodels. `PhysicsBSP`, `VisBSP`, and skyboxes are
-  blocked on this path.
-
-For the most reliable import, keep exported object names intact, export mesh
-objects rather than curves, and keep material assignments on faces. If the mesh
-file and sidecar do not match the currently open level, the importer rejects the
-operation with a checksum or missing-object error instead of guessing. Generic
-third-party glTF files can be imported as additive triangle geometry, but they
-do not carry original DAT polygon identity.
-
-Imported geometry appears in the editor preview and can be saved like other
-pending operations. The save preview shows a geometry risk report with visible
-model counts, collision/helper counts, UV methods, source formats, and targeted
-warnings for glTF or unsupported full-level semantics. On save, the editor
-rebuilds or patches the affected BSP records, updates DAT object/render
-offsets, validates the final DAT bytes, and writes the patched `WORLDS.REZ`
-under `mm9_editor/output/`. Reopen the changed level and test in game before
-relying on the result; the mesh-to-BSP compiler is intentionally conservative
-for arbitrary topology.
-
-For the deeper technical reference, source-world findings, PreProcessor
-findings, and future plan, see `docs/dat_editing.md`. Full DEdit
-source-world-to-DAT compilation is intentionally not the default path; the
-current supported approach is conservative DAT patching of additive or
-replacement standalone BSP submodels.
+Start with a small, closed, convex mesh and **Strict convex solids**. Open a
+full-world result directly in LithTech 2.1 DEDit; insert a prefab result into a
+disposable DEDit world. The complete conversion contract, report details,
+manual DEDit checks, and optional Processor/game acceptance procedure are in
+`docs/gltf_to_ed.md`.
 
 ### Saving
 
